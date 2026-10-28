@@ -1,0 +1,9 @@
+{
+  "name": "dnsmgr-serverless",
+  "entry": "./dist/esa/worker.mjs",
+  "installCommand": "npm ci --ignore-scripts",
+  "buildCommand": "npm run build:esa",
+  "assets": {
+    "directory": "./dist/esa/public"
+  }
+}

@@ -1,0 +1,16 @@
+name = "dnsmgr-serverless"
+main = "dist/cloudflare/worker.mjs"
+compatibility_date = "2026-10-28"
+
+[assets]
+directory = "./dist/cloudflare/public"
+binding = "ASSETS"
+not_found_handling = "none"
+run_worker_first = true
+
+[vars]
+DB_DRIVER = "d1"
+DB_FORMAT = "sql"
+
+# Configure a D1 binding named DB in the target environment before deployment.
+# Keep APP_KEY and SETUP_TOKEN in platform secrets, not in this file.

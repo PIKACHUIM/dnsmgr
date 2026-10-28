@@ -1,0 +1,93 @@
+import type { Context, MiddlewareHandler } from 'hono';
+import { getCookie } from 'hono/cookie';
+import { md5 } from 'js-md5';
+import type { AppEnv, Principal, UserRow } from '../core/types';
+import { AppError } from '../core/errors';
+import { assertSameOrigin, input } from '../core/request';
+import { constantTimeEqual, decrypt, sha256 } from './crypto';
+
+export function nowSeconds(): number { return Math.floor(Date.now() / 1000); }
+
+export function assertActive(user: UserRow): void {
+  if (user.status !== 1 || (user.expires_at !== null && user.expires_at <= nowSeconds())) {
+    throw new AppError(403, '账户已禁用或过期', 'USER_INACTIVE');
+  }
+}
+
+export async function csrfToken(token: string): Promise<string> { return sha256(`dnsmgr/csrf/${token}`); }
+
+export async function authenticateSession(c: Context<AppEnv>): Promise<Principal> {
+  const token = getCookie(c, 'user_token');
+  if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new AppError(401, '请先登录', 'NOT_AUTHENTICATED');
+  const tokenHash = await sha256(token);
+  const rows = await c.get('db').query<UserRow & { csrf_hash: string; session_version: number; session_expires: number }>(
+    `SELECT u.*, s.csrf_hash, s.permission_version AS session_version, s.expires_at AS session_expires
+     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`, [tokenHash],
+  );
+  const user = rows[0];
+  if (!user || user.session_expires <= nowSeconds() || user.session_version !== user.permission_version) {
+    throw new AppError(401, '会话已失效，请重新登录', 'SESSION_REVOKED');
+  }
+  assertActive(user);
+  return { user, sessionHash: tokenHash, csrfHash: user.csrf_hash, mode: 'session' };
+}
+
+export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+  c.set('principal', await authenticateSession(c));
+  await next();
+};
+
+export const requireCsrf: MiddlewareHandler<AppEnv> = async (c, next) => {
+  assertSameOrigin(c);
+  const supplied = c.req.header('X-CSRF-Token');
+  const expected = c.get('principal').csrfHash;
+  if (!supplied || !expected || !constantTimeEqual(await sha256(supplied), expected)) {
+    throw new AppError(403, '安全校验失败，请刷新页面重试', 'INVALID_CSRF');
+  }
+  await next();
+};
+
+export function requireAdmin(c: Context<AppEnv>): void {
+  if (c.get('principal').user.level !== 2) throw new AppError(403, '需要管理员权限', 'PERMISSION_DENIED');
+}
+
+export async function requireDomain(c: Context<AppEnv>, domainId: number, writable = false): Promise<void> {
+  const principal = c.get('principal');
+  if (!Number.isSafeInteger(domainId) || domainId < 1) throw new AppError(400, '域名编号无效', 'INVALID_DOMAIN');
+  if (principal.domainId !== undefined && principal.domainId !== domainId) throw new AppError(403, '域名权限不足', 'PERMISSION_DENIED');
+  if (principal.user.level === 2) return;
+  if (writable && principal.user.level < 1) throw new AppError(403, '只读用户无法修改解析', 'PERMISSION_DENIED');
+  const permission = await c.get('db').query('SELECT 1 AS allowed FROM permissions WHERE user_id = ? AND domain_id = ?', [principal.user.id, String(domainId)]);
+  if (!permission[0]) throw new AppError(403, '域名权限不足', 'PERMISSION_DENIED');
+}
+
+export const requireLegacyApi: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (c.req.method !== 'POST') throw new AppError(403, 'API 仅接受 POST', 'INVALID_API_METHOD');
+  const body = await input(c);
+  const uid = String(body.uid ?? '');
+  const timestamp = String(body.timestamp ?? '');
+  const signature = String(body.sign ?? '');
+  if (!/^\d{1,15}$/.test(uid) || !/^\d{10}$/.test(timestamp) || !/^[a-f0-9]{32}$/.test(signature) || Math.abs(Number(timestamp) - nowSeconds()) > 300) {
+    throw new AppError(403, 'API 参数、签名或时间戳无效', 'INVALID_API_SIGNATURE');
+  }
+  const users = await c.get('db').query<UserRow>('SELECT * FROM users WHERE id = ?', [Number(uid)]);
+  const user = users[0];
+  if (!user || user.is_api !== 1 || !user.apikey_cipher) throw new AppError(403, 'API 用户无效或未启用', 'INVALID_API_USER');
+  assertActive(user);
+  const apikey = await decrypt(user.apikey_cipher, c.env.APP_KEY, 'api-key');
+  if (!constantTimeEqual(md5(uid + timestamp + apikey), signature)) throw new AppError(403, 'API 签名错误', 'INVALID_API_SIGNATURE');
+  c.set('principal', { user, mode: 'api' });
+  await next();
+};
+
+export async function consumeRateLimit(c: Context<AppEnv>, key: string, limit: number, windowSeconds: number): Promise<void> {
+  const now = nowSeconds();
+  const rows = await c.get('db').query<{ count: number }>(
+    `INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
+     ON CONFLICT(key) DO UPDATE SET
+       count = CASE WHEN window_start <= ? THEN 1 ELSE count + 1 END,
+       window_start = CASE WHEN window_start <= ? THEN excluded.window_start ELSE window_start END
+     RETURNING count`, [key, now, now - windowSeconds, now - windowSeconds],
+  );
+  if (!rows[0] || rows[0].count > limit) throw new AppError(429, '请求过于频繁，请稍后重试', 'RATE_LIMITED');
+}

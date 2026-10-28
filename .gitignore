@@ -7,3 +7,16 @@
 /.codex-tmp/dns-panel-ref/
 /runtime
 !/runtime/.gitignore
+/node_modules
+/dist
+/.wrangler
+/coverage
+/test-results
+/playwright-report
+.env.local
+.env.*.local
+.dev.vars
+/cloud-functions/_worker.mjs
+/docs/.vitepress/cache
+/docs/.vitepress/dist
+/docs/.vitepress/temp

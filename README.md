@@ -22,7 +22,121 @@
 - SSL证书申请与自动部署功能，支持从Let's Encrypt等渠道申请SSL证书，并自动部署到各种面板、云服务商、服务器等；
 - 支持邮件、微信公众号、Telegram、钉钉、飞书、企业微信等多种通知渠道。
 
-## 部署方式
+## Serverless 改造（进行中）
+
+本仓库正在将旧 ThinkPHP 项目改造为 **TypeScript + Hono + React**。旧 PHP 源码保留原位置用于语义对照；**当前新应用仍处于基础阶段，不是完整业务替代品，不应上线接管生产 DNS**。
+
+### 当前进度与恢复点
+
+| 阶段 | 当前状态 |
+| --- | --- |
+| Wave 1：三平台工程与兼容基线 | 已完成本地构建和基础路由验证 |
+| Wave 2：存储与安全 | SQL、事务、租约 fencing、map/key 不可变版本、key 增量写删/分页、安装/会话/CSRF/TOTP、CF KV/R2、ESA EdgeKV、Makers Blob 已接入并通过本地假绑定测试；Makers KV bridge、恢复回收、格式切换、验证码与快捷登录仍待完成 |
+| Wave 3：DNS/Cloudflare | 22 个 DNS 驱动及账户、域名、解析、SaaS/Tunnel 业务尚待移植 |
+| Wave 4：任务/SSL/通知/执行器 | 尚待移植；9 个证书实现文件、51 个部署驱动不等于已实现 TS 驱动 |
+| Wave 5：前端 | 安装、登录和会话控制台可用；51 个旧模板的完整业务功能尚待移植 |
+| Wave 6：同步与最终交付 | 本地 PHP 差异扫描可用；定期上游同步 CI、完整部署与回滚验收尚待完成 |
+
+继续开发时先完成 Makers Edge Function 的受认证 KV bridge、恢复/格式切换工具及验证码/快捷登录等安装辅助流程，再推进 Wave 3。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
+
+新界面仅显示真实运行环境与迁移状态，不伪造域名、证书或任务数据。旧 API 的 POST 表单 `uid/timestamp/sign` 验签中间件已验证，但对应 DNS/证书业务 API 尚未开放。未知 API、`/quicklogin`、`/cron` 不会被 SPA HTML 兜底吞掉。
+
+### VitePress 文档站
+
+文档站源码位于 `docs/`，使用 VitePress 构建为独立静态站。项目根目录已提供 `/guide/` 配置与使用说明。构建基路径固定为 `/`：部署到 `https://docs.example.com/` 后页面资源会请求 `https://docs.example.com/assets/...`，不会添加 `/dnsmgr/` 仓库路径。发布时将 `docs/.vitepress/dist/` 的内容复制到站点 Web 根目录；如平台只提供 GitHub repository 子路径，则不满足该 URL 约束，应先配置独立自定义域名/根路径站点。文档站应部署到独立站点或域名，不能与 DNS Worker 一同写入同一个 `dist/public`。
+
+```bash
+npm run docs:dev
+npm run docs:build
+npm run docs:verify
+npm run docs:preview
+npm run docs:e2e
+```
+
+VitePress 配置使用 `vitepress/theme-without-fonts`，不请求默认 Google Fonts Inter；标题采用 Georgia / CJK serif 字族，正文优先本地 Aptos/中文字体，数据与代码使用等宽字族。静态产物生成在 `docs/.vitepress/dist/`。
+
+### 本地开发与验证
+
+开发、SQLite 测试和浏览器测试推荐 **Node.js 24**；Makers 构建配置使用其预装的 Node.js 22.11，构建工具版本已锁定并审计。先在项目根目录执行：
+
+```bash
+npm ci --ignore-scripts
+npm run build:frontend
+```
+
+首次本地运行生成独立密钥文件，存在文件时命令拒绝覆盖；不要将它提交到 Git：
+
+```bash
+node -e "const fs=require('node:fs'),c=require('node:crypto');fs.writeFileSync('.env.local','APP_KEY='+c.randomBytes(32).toString('base64')+'\nSETUP_TOKEN='+c.randomBytes(32).toString('hex')+'\n',{flag:'wx',mode:0o600});"
+npm run dev
+```
+
+访问 `http://127.0.0.1:8787`，使用 `.env.local` 中的 `SETUP_TOKEN` 完成首次初始化并自行设置管理员密码。本地 SQLite 独立保存在 `runtime/serverless.sqlite`，不读取旧 MySQL。后续启动必须复用原 `APP_KEY`；丢失密钥会导致已有加密凭据不可读。热更新前端可另开终端执行 `npm run dev:frontend`，访问 `http://127.0.0.1:5173`；代理只重写这个明确的本地 Origin，不放行任意跨站请求。
+
+```bash
+npm run typecheck
+npm test
+npm run test:compat
+npm run test:e2e
+npm run build:cloudflare
+npm run build:edgeone
+npm run build:esa
+npm run audit:dependencies
+```
+
+`test:e2e` 使用本机 Chrome 和独立内存测试库，验证安装、登录、刷新恢复、375/768/1440 响应式导航、深链与退出；截图在 `test-results/`。没有安装 Chrome 时需先配置 Playwright 可用的浏览器。测试不会访问生产 DNS 或云端数据库。
+
+### 三平台产物与配置边界
+
+| 平台 | 入口 / 配置 | 静态资源目录 |
+| --- | --- | --- |
+| Cloudflare Workers | `dist/cloudflare/worker.mjs` / `wrangler.toml` | `dist/cloudflare/public` |
+| EdgeOne Makers | `cloud-functions/index.js`、`cloud-functions/[[default]].js` 引用构建产物 `_worker.mjs` / `edgeone.json` | `dist/edgeone/public` |
+| 阿里云 ESA | `dist/esa/worker.mjs` / `esa.jsonc`；`fetch(request, context, env)` 第三个参数读取变量 | `dist/esa/public` |
+
+只托管新 `public` 产物，不上传旧 `public/`、PHP、SQL、配置或 Worker 文件作为静态资源。不配置全局 SPA fallback；页面 shell 由 Hono 在受控页面路径返回。当前只完成本地标准 Request/Response 测试和打包，**未验证三家真实云环境、套餐 CPU 配额或持久化绑定，也未部署**。
+
+应用支持 D1/Turso 协调 SQL。Cloudflare 需配置 `DB` D1 绑定并执行 `migrations/0001_core.sql`；Makers/ESA 配置 `TURSO_DATABASE_URL`、`TURSO_AUTH_TOKEN`，并在独立 SQLite/libSQL 库执行迁移。D1 必须提供稳定的 `COORDINATOR_ID`，初始化后用于识别库身份；不要随意复用同一标识指向不同数据库。Cloudflare 对象模式的绑定名分别为 `KV` 与 `BUCKET`（R2），并设置相应稳定的 `PAYLOAD_STORE_ID`；ESA 的 EdgeKV 使用 `ESA_KV_NAMESPACE`。Makers Blob 设置 `BLOB_NAMESPACE`，Node Function 暂无 KV bridge。平台 secrets 至少包括 32 字节 Base64 `APP_KEY` 和不少于 32 字符的 `SETUP_TOKEN`；可设置 `PUBLIC_ORIGIN` 固定站点来源。不要把 Token、密码或主密钥放入 `VITE_*` 或前端代码。
+
+存储契约为 `DB_DRIVER=d1|turso|kv|blob|auto` 与 `DB_FORMAT=sql|map|key`。`map` 整对象与 `key` 逐实体格式使用不可变快照/实体键，活动版本仅由 SQL 协调库 fencing + CAS 指针发布；所有数据读取均校验版本与 SHA-256 摘要。对象驱动还须提供稳定的 `PAYLOAD_STORE_ID`（ESA 默认使用 KV namespace 标识），Blob 命名空间可用 `BLOB_NAMESPACE` 指定。驱动、格式或任一存储标识变化都视为不同数据集；需要显式迁移工具，目前尚未提供。
+
+平台适配现状与限制：
+
+- Cloudflare：已接入 D1 协调、Workers KV 与 R2。R2 使用 `If-None-Match: *` 条件创建；KV 无 CAS 且跨 POP 最终一致，但每个对象使用随机版本 UUID + 内容哈希，并由 SQL pointer 决定可见版本。KV 短暂读不到已提交对象时会 fail closed，不返回空数据。
+- EdgeOne Makers：Hono Node Cloud Function 可使用 SQL/Turso 与 `BLOB_NAMESPACE` Blob。Blob SDK 已锁定 `@edgeone/pages-blob@0.0.18`，该版本类型声明标明 `onlyIfNew` 已废弃且不保证防覆盖；适配器不依赖该参数，而用强一致读回校验、随机版本/哈希键和 SQL 指针。Makers 原生 KV 仅在 Edge Functions 可用，目前 Node Function 的受认证 KV bridge 尚未实现，故缺少 KV binding 时会 fail closed。
+- 阿里云 ESA：已适配 EdgeKV `get/put` 到 `map/key`；SDK 返回未命中的 `undefined` 统一转换为缺失，单值超过文档的 1.8 MB 上限时在调用前拒绝。EdgeKV 最终一致，强一致性和上线后的全局传播尚未实测；可能短暂读到缺失对象时服务会报存储不可用，不会回退空数据。ESA 暂无 Blob adapter。
+
+对象存储读写必须与 SQL 协调库同时可用。数据缺失、损坏、写后读回不一致或协调库不可用时停止操作，不会在内存或 SQL 自动降级。密码使用 bcrypt，账户凭据通过用途分离的 HKDF/AES-GCM 加密；会话、权限版本、一次性 TOTP 挑战和防重放计数均存 SQL。Cloudflare 免费套餐 CPU 配额尚未真实验证能否承载 bcrypt；ESA 每请求最多 4 次外部 fetch，Turso 和 KV/Blob 的协调操作共享请求预算，超限时拒绝本次操作，后续业务流程应按任务分步。所有适配仅通过本地 fake binding/标准 API 验证，**未连接真实云资源、未部署**。
+
+### 上游契约差异检查
+
+```bash
+node scripts/compat/diff.mjs --php-root ../dnsmgr-upstream
+```
+
+参数必须指向已准备好的上游 PHP 源码；此命令只读比较，不拉取远程、不修改 TS 或基线。发现差异后先审核业务语义、移植并补测试，再显式运行 `npm run compat:generate` 更新基线。不得把未知 PHP 语法静默跳过或将自动差异检测当成自动跨语言合并。
+
+本次执行边界：不修改参考仓库、不改生产 DNS/数据库、不创建线上资源、不部署。代码变更按用户要求提交并推送；推送不会自动部署生产环境。原 PHP Docker 工作流仍只用于原 PHP 版本。
+
+### VitePress 文档站
+
+文档源文件位于 `docs/`，通过 VitePress 构建为独立静态站点。`docs/.vitepress/config.mts` 固定 `base: '/'`：若网站部署在 `https://example.com/`，资源 URL 是 `https://example.com/assets/...`，不会附加 `/dnsmgr/`。将 `docs/.vitepress/dist/` 中的**内容**发布到独立文档域名的站点根目录；若托管地址只能使用 GitHub 项目子路径，须先配置自定义域名/根站点才能满足该路径要求。
+
+构建和预览：
+
+```bash
+npm run docs:dev
+npm run docs:build
+npm run docs:verify
+npm run docs:preview
+npm run docs:e2e
+```
+
+生产产物位于 `docs/.vitepress/dist/`。站点配置固定 `base: '/'`，因此部署到域名根目录时页面静态资源 URL 为 `https://<域名>/assets/...`，页面路由为 `https://<域名>/guide/...`；不是仓库名子路径下的 `/dnsmgr/assets/...`。部署时将 `docs/.vitepress/dist/` **目录内容**发布到目标站点 Web 根目录。该构建目录不会并入 Cloudflare／Makers／ESA 的 DNS 管理应用产物；若共享一个域名，须由部署层将文档站指定为根站点，DNS 管理应用另行放在独立域名/路由，不能假设两者会自动共存。
+
+根路径部署约束来自 [VitePress 官方 `base` 配置说明](https://vitepress.dev/reference/site-config#base)：仅当站点部署在子路径时才添加 base 前缀，本项目要求根路径，故保持 `/`。
+
+## 原 PHP 版本部署方式
 
 ### 自部署
 

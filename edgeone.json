@@ -1,0 +1,19 @@
+{
+  "name": "dnsmgr-serverless",
+  "installCommand": "npm ci --ignore-scripts",
+  "buildCommand": "npm run build:edgeone",
+  "outputDirectory": "dist/edgeone/public",
+  "nodeVersion": "22.11.0",
+  "cloudFunctions": {
+    "nodejs": { "maxDuration": 30 }
+  },
+  "headers": [
+    {
+      "source": "/assets/*",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    }
+  ]
+}

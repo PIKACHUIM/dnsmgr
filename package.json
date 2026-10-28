@@ -1,0 +1,53 @@
+{
+  "name": "dnsmgr-serverless",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.11.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "vite --config frontend/vite.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:compat": "node scripts/compat/scan.mjs && vitest run tests/compat.test.ts",
+    "compat:generate": "node scripts/compat/scan.mjs --write",
+    "build:frontend": "vite build --config frontend/vite.config.ts",
+    "build:cloudflare": "npm run build:frontend && node scripts/build.mjs cloudflare",
+    "build:edgeone": "npm run build:frontend && node scripts/build.mjs edgeone",
+    "build:esa": "npm run build:frontend && node scripts/build.mjs esa",
+    "audit:dependencies": "npm audit --audit-level=high",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "docs:verify": "node scripts/docs/verify.mjs",
+    "docs:e2e": "playwright test --config playwright.docs.config.ts"
+  },
+  "overrides": {
+    "vite": "$vite",
+    "vitepress": {
+      "esbuild": "0.25.12"
+    }
+  },
+  "dependencies": {
+    "@edgeone/pages-blob": "0.0.18",
+    "bcryptjs": "3.0.3",
+    "hono": "4.13.14",
+    "js-md5": "0.9.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vite": "6.4.5",
+    "vitepress": "1.6.4",
+    "vitest": "5.0.5"
+  }
+}
