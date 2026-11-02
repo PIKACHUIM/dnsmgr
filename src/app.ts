@@ -15,6 +15,7 @@ import { authRoutes } from './routes/auth';
 import { dnsRoutes } from './routes/dns';
 import { cloudflareRoutes } from './routes/cloudflare';
 import { scheduleRoutes } from './routes/schedule';
+import { notifyRoutes } from './routes/notify';
 
 declare const __APP_SHELL__: string;
 const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
@@ -67,6 +68,7 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
   app.route('/', dnsRoutes());
   app.route('/', cloudflareRoutes());
   app.route('/', scheduleRoutes());
+  app.route('/', notifyRoutes());
   app.get('/api/v1/bootstrap', requireSession, (c) => {
     const storage = c.get('storage').config;
     return c.json({

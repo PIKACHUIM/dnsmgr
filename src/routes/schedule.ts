@@ -8,6 +8,7 @@ import { createProvider } from '../dns/registry';
 import { DnsError, type DnsDomain, type DnsRecordInput } from '../dns/types';
 import { type SqlDatabase } from '../storage/sql';
 import { nextRunAt, parseRunTime, type ScheduleMode, type ScheduleTaskRow } from '../schedule/tasks';
+import { parseConfig, sendCustomWebhook } from '../notify/custom';
 
 interface AccountRow extends Record<string, unknown> {
   id: number;
@@ -132,6 +133,17 @@ async function offsetMinutes(c: Context<AppEnv>): Promise<number> {
   return Number.isFinite(parsed) && Math.abs(parsed) <= 840 ? parsed : 480;
 }
 
+async function notifyFailure(c: Context<AppEnv>, domain: string, message: string): Promise<void> {
+  try {
+    const rows = await db(c).query<{ key: string; value: string }>(
+      "SELECT key, value FROM app_settings WHERE key LIKE 'custom_webhook_%'",
+    );
+    const config = parseConfig(Object.fromEntries(rows.map((row) => [row.key, row.value])));
+    if (!config) return;
+    await sendCustomWebhook(config, 'DNSMGR 定时任务失败', `域名 ${domain}：${message}`, c.env.BUDGET?.fetch ?? fetch);
+  } catch { /* 通知失败不影响任务结果 */ }
+}
+
 async function executeDue(c: Context<AppEnv>, limit = 20): Promise<{ ran: number; failed: number }> {
   const now = nowSeconds();
   const due = await db(c).query<TaskRow>(
@@ -189,6 +201,7 @@ async function executeDue(c: Context<AppEnv>, limit = 20): Promise<{ ran: number
       'UPDATE dns_schedule_tasks SET next_run_at = ?, active = ?, last_run_at = ?, last_error = ?, updated_at = ? WHERE id = ?',
       [errorMessage ? finalNow + 300 : next ?? 0, errorMessage ? 1 : next === null ? 0 : 1, finalNow, errorMessage, finalNow, task.id],
     );
+    if (errorMessage) await notifyFailure(c, task.domain_name, errorMessage);
     await db(c).execute(
       'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
       [0, errorMessage ? 'schedule.failed' : 'schedule.run', task.domain_name.slice(0, 255),

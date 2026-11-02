@@ -12,6 +12,7 @@ import { CfHostnames } from './CfHostnames';
 import { CfTunnels } from './CfTunnels';
 import { ScheduleTasks } from './ScheduleTasks';
 import { CronSettings } from './CronSettings';
+import { NotifySettings } from './NotifySettings';
 
 interface ConsoleProps {
   session: Session;
@@ -191,6 +192,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
               : path === '/log' ? <DnsLogs session={session} onExpired={onExpired} />
                 : path === '/schedule/stask' && level === 2 ? <ScheduleTasks session={session} onExpired={onExpired} />
                   : path === '/system/cronset' && level === 2 ? <CronSettings session={session} onExpired={onExpired} />
+                    : path === '/system/noticeset' && level === 2 ? <NotifySettings session={session} onExpired={onExpired} />
                     : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
                   : tunnelMatch && level === 2 ? <CfTunnels session={session} accountId={Number(tunnelMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : aliasMatch ? <DnsAliases session={session} domainId={Number(aliasMatch[1])} navigate={navigate} onExpired={onExpired} />

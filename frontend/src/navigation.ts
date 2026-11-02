@@ -43,7 +43,7 @@ export const navigation: NavigationGroup[] = [
   { label: '系统设置', adminOnly: true, items: [
     { path: '/system/cronset', label: '计划任务', scope: '计划任务与运行器设置', capability: 'tasks', implemented: true },
     { path: '/system/loginset', label: '登录设置', scope: '登录策略与动态口令配置' },
-    { path: '/system/noticeset', label: '通知设置', scope: '通知渠道与消息模板' },
+    { path: '/system/noticeset', label: '通知设置', scope: '通知渠道与消息模板', implemented: true },
     { path: '/system/proxyset', label: '代理设置', scope: '外部请求代理配置' },
     { path: '/system/update', label: '在线更新', scope: '版本更新与兼容性检查' },
     { path: '/user', label: '用户管理', scope: '用户、权限与账户维护' },
