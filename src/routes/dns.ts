@@ -31,6 +31,7 @@ interface DomainRow extends Record<string, unknown> {
   expires_at: number | null;
   checked_at: number | null;
   check_status: number;
+  category_name?: string | null;
 }
 
 const DOMAIN_NAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
@@ -91,10 +92,34 @@ async function account(c: Context<AppEnv>, accountId: number): Promise<AccountRo
 }
 
 async function domainRow(c: Context<AppEnv>, domainId: number): Promise<{ domain: DomainRow; account: AccountRow }> {
-  const rows = await db(c).query<DomainRow>('SELECT * FROM dns_domains WHERE id = ?', [domainId]);
+  const rows = await db(c).query<DomainRow>(
+    `SELECT d.*, cc.name AS category_name FROM dns_domains d
+     LEFT JOIN dns_domain_categories cc ON cc.id = d.category_id WHERE d.id = ?`, [domainId],
+  );
   const domain = rows[0];
   if (!domain) throw new AppError(404, '域名不存在', 'DOMAIN_NOT_FOUND');
   return { domain, account: await account(c, domain.account_id) };
+}
+
+function idsFrom(body: Record<string, unknown>, max: number): number[] {
+  const raw = Array.isArray(body.ids) ? body.ids : [];
+  const ids = [...new Set(raw.map((value) => Number(value)))];
+  if (ids.length === 0 || ids.length > max) throw new AppError(400, `一次需选择 1–${max} 项`, 'INVALID_IDS');
+  if (ids.some((value) => !Number.isSafeInteger(value) || value < 1)) throw new AppError(400, '编号无效', 'INVALID_ID');
+  return ids;
+}
+
+function categoryIdOf(value: unknown): number | null {
+  if (value === null || value === undefined || value === '' || value === 0 || value === '0') return null;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new AppError(400, '分类编号无效', 'INVALID_CATEGORY');
+  return parsed;
+}
+
+async function requireCategory(c: Context<AppEnv>, categoryId: number | null): Promise<void> {
+  if (categoryId === null) return;
+  const rows = await db(c).query<{ id: number }>('SELECT id FROM dns_domain_categories WHERE id = ?', [categoryId]);
+  if (!rows[0]) throw new AppError(404, '分类不存在', 'CATEGORY_NOT_FOUND');
 }
 
 function toDnsDomain(row: { third_id: string | null; name: string }): DnsDomain {
@@ -128,10 +153,134 @@ function recordInput(body: Record<string, unknown>): DnsRecordInput {
   return { name, type, value, line, ttl, mx: mxRaw, weight: weightRaw, remark: remarkRaw || null };
 }
 
+function recordIdsFrom(body: Record<string, unknown>): string[] {
+  const raw = Array.isArray(body.recordIds) ? body.recordIds : [];
+  const ids = [...new Set(raw.map((value) => String(value)))];
+  if (ids.length === 0 || ids.length > 100) throw new AppError(400, '一次需选择 1–100 条记录', 'INVALID_RECORD_IDS');
+  if (ids.some((value) => !/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(value))) {
+    throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+  }
+  return ids;
+}
+
+function guessRecordType(value: string): string {
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return 'A';
+  if (value.includes(':') && /^[0-9a-f:.]+$/i.test(value)) return 'AAAA';
+  return 'CNAME';
+}
+
 export function dnsRoutes() {
   const routes = new Hono<AppEnv>();
 
   routes.get('/api/v1/dns/providers', requireSession, (c) => c.json({ code: 0, ...providerCatalog() }));
+
+  routes.get('/api/v1/dns/categories', requireSession, async (c) => {
+    requireSql(c);
+    const rows = await db(c).query<{ id: number; name: string; sort: number; domain_count: number }>(
+      `SELECT cc.id, cc.name, cc.sort,
+        (SELECT COUNT(*) FROM dns_domains d WHERE d.category_id = cc.id) AS domain_count
+       FROM dns_domain_categories cc ORDER BY cc.sort ASC, cc.id DESC`,
+    );
+    return c.json({
+      code: 0,
+      items: rows.map((row) => ({ id: row.id, name: row.name, sort: row.sort, domainCount: Number(row.domain_count) })),
+    });
+  });
+
+  routes.post('/api/v1/dns/categories', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    const name = text(body, 'name', 50).trim();
+    if (!name) throw new AppError(400, '分类名称不能为空', 'INVALID_CATEGORY_NAME');
+    const sortRaw = body.sort === undefined || body.sort === null || body.sort === '' ? 0 : Number(body.sort);
+    if (!Number.isSafeInteger(sortRaw) || Math.abs(sortRaw) > 1_000_000) throw new AppError(400, '排序值无效', 'INVALID_SORT');
+    const result = await db(c).execute(
+      'INSERT INTO dns_domain_categories (name, sort, created_at) VALUES (?,?,?) ON CONFLICT(name) DO NOTHING RETURNING id',
+      [name, sortRaw, nowSeconds()],
+    );
+    if (result.changes !== 1) throw new AppError(409, '分类名称已存在', 'CATEGORY_EXISTS');
+    await audit(c, 'category.create', name, `sort=${sortRaw}`);
+    return c.json({ code: 0, id: Number(result.rows[0]?.id) });
+  });
+
+  routes.put('/api/v1/dns/categories/:id', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const categoryId = id(c.req.param('id'));
+    await requireCategory(c, categoryId);
+    const body = await input(c);
+    const fields: string[] = [];
+    const args: (string | number)[] = [];
+    if (body.name !== undefined) {
+      const name = text(body, 'name', 50).trim();
+      if (!name) throw new AppError(400, '分类名称不能为空', 'INVALID_CATEGORY_NAME');
+      const duplicate = await db(c).query<{ id: number }>(
+        'SELECT id FROM dns_domain_categories WHERE name = ? AND id <> ?', [name, categoryId],
+      );
+      if (duplicate[0]) throw new AppError(409, '分类名称已存在', 'CATEGORY_EXISTS');
+      fields.push('name=?'); args.push(name);
+    }
+    if (body.sort !== undefined) {
+      const sortRaw = Number(body.sort);
+      if (!Number.isSafeInteger(sortRaw) || Math.abs(sortRaw) > 1_000_000) throw new AppError(400, '排序值无效', 'INVALID_SORT');
+      fields.push('sort=?'); args.push(sortRaw);
+    }
+    if (fields.length === 0) throw new AppError(400, '没有需要修改的字段', 'EMPTY_UPDATE');
+    await db(c).execute(`UPDATE dns_domain_categories SET ${fields.join(',')} WHERE id=?`, [...args, categoryId]);
+    await audit(c, 'category.update', String(categoryId), fields.join(','));
+    return c.json({ code: 0 });
+  });
+
+  routes.delete('/api/v1/dns/categories/:id', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const categoryId = id(c.req.param('id'));
+    await requireCategory(c, categoryId);
+    const used = await db(c).query<{ n: number }>('SELECT COUNT(*) AS n FROM dns_domains WHERE category_id = ?', [categoryId]);
+    if (Number(used[0]?.n ?? 0) > 0) throw new AppError(409, '该分类下仍有域名，无法删除', 'CATEGORY_NOT_EMPTY');
+    await db(c).execute('DELETE FROM dns_domain_categories WHERE id = ?', [categoryId]);
+    await audit(c, 'category.delete', String(categoryId), '');
+    return c.json({ code: 0 });
+  });
+
+  routes.get('/api/v1/dns/logs', requireSession, async (c) => {
+    requireSql(c);
+    const { page, pageSize } = pageParams(c);
+    const principal = c.get('principal');
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (principal.user.level !== 2) {
+      where.push('user_id = ?'); args.push(principal.user.id);
+    } else {
+      const uid = c.req.query('uid');
+      if (uid !== undefined && uid !== '') {
+        if (!/^[1-9]\d{0,9}$/.test(uid)) throw new AppError(400, '用户编号无效', 'INVALID_ID');
+        where.push('user_id = ?'); args.push(Number(uid));
+      }
+    }
+    const domain = c.req.query('domain')?.trim().slice(0, 253);
+    if (domain) { where.push('target = ?'); args.push(domain); }
+    const keyword = c.req.query('keyword')?.trim().slice(0, 64);
+    if (keyword) {
+      where.push('(action LIKE ? OR target LIKE ? OR detail LIKE ?)');
+      args.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+    }
+    const clause = where.length ? where.join(' AND ') : '1=1';
+    const rows = await db(c).query<{ id: number; user_id: number; action: string; target: string | null; detail: string | null; created_at: number }>(
+      `SELECT id, user_id, action, target, detail, created_at FROM audit_logs
+       WHERE ${clause} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...args, pageSize, (page - 1) * pageSize],
+    );
+    const total = await db(c).query<{ n: number }>(`SELECT COUNT(*) AS n FROM audit_logs WHERE ${clause}`, args);
+    return c.json({
+      code: 0, page, pageSize, total: Number(total[0]?.n ?? 0),
+      items: rows.map((row) => ({
+        id: row.id, userId: row.user_id, action: row.action, target: row.target,
+        detail: row.detail, createdAt: row.created_at,
+      })),
+    });
+  });
 
   routes.get('/api/v1/dns/accounts', requireSession, async (c) => {
     requireSql(c);
@@ -268,14 +417,34 @@ export function dnsRoutes() {
     const where = ['1=1'];
     const args: (string | number)[] = [];
     if (keyword) { where.push('d.name LIKE ?'); args.push(`%${keyword}%`); }
+    const accountFilter = c.req.query('accountId');
+    if (accountFilter) {
+      if (!/^[1-9]\d{0,9}$/.test(accountFilter)) throw new AppError(400, '账户编号无效', 'INVALID_ID');
+      where.push('d.account_id = ?'); args.push(Number(accountFilter));
+    }
+    const categoryFilter = c.req.query('categoryId');
+    if (categoryFilter !== undefined) {
+      const categoryId = categoryIdOf(categoryFilter);
+      if (categoryId === null) where.push('d.category_id IS NULL');
+      else { where.push('d.category_id = ?'); args.push(categoryId); }
+    }
+    const hiddenFilter = c.req.query('hidden');
+    if (hiddenFilter !== undefined && hiddenFilter !== '0' && hiddenFilter !== '1') {
+      throw new AppError(400, '隐藏状态参数无效', 'INVALID_HIDDEN');
+    }
     if (principal.user.level !== 2) {
       where.push('EXISTS (SELECT 1 FROM permissions p WHERE p.user_id=? AND p.domain_id=CAST(d.id AS TEXT))');
       args.push(principal.user.id);
+      where.push('d.hidden = 0');
+    } else if (hiddenFilter !== undefined) {
+      where.push('d.hidden = ?'); args.push(Number(hiddenFilter));
     }
     const rows = await db(c).query<DomainRow & { account_name: string; account_type: string }>(
-      `SELECT d.*, a.name AS account_name, a.type AS account_type FROM dns_domains d
-       JOIN dns_accounts a ON a.id = d.account_id WHERE ${where.join(' AND ')}
-       ORDER BY d.id DESC LIMIT ? OFFSET ?`,
+      `SELECT d.*, a.name AS account_name, a.type AS account_type, cc.name AS category_name
+       FROM dns_domains d
+       JOIN dns_accounts a ON a.id = d.account_id
+       LEFT JOIN dns_domain_categories cc ON cc.id = d.category_id
+       WHERE ${where.join(' AND ')} ORDER BY d.id DESC LIMIT ? OFFSET ?`,
       [...args, pageSize, (page - 1) * pageSize],
     );
     const total = await db(c).query<{ n: number }>(
@@ -287,7 +456,8 @@ export function dnsRoutes() {
         id: row.id, name: row.name, accountId: row.account_id, accountName: row.account_name,
         accountType: row.account_type, remark: row.remark, recordCount: row.record_count,
         hidden: row.hidden === 1, notice: row.notice === 1, thirdId: row.third_id,
-        categoryId: row.category_id, expiresAt: row.expires_at, checkStatus: row.check_status,
+        categoryId: row.category_id, categoryName: row.category_name ?? null,
+        expiresAt: row.expires_at, checkStatus: row.check_status,
       })),
     });
   });
@@ -318,6 +488,7 @@ export function dnsRoutes() {
 
   routes.patch('/api/v1/dns/domains/:id', requireSession, requireCsrf, async (c) => {
     requireSql(c);
+    requireAdmin(c);
     const domainId = id(c.req.param('id'));
     await requireDomain(c, domainId);
     const body = await input(c);
@@ -327,6 +498,11 @@ export function dnsRoutes() {
       const remark = typeof body.remark === 'string' ? body.remark.trim().slice(0, 100) : '';
       fields.push('remark=?'); args.push(remark || null);
     }
+    if (body.categoryId !== undefined) {
+      const categoryId = categoryIdOf(body.categoryId);
+      await requireCategory(c, categoryId);
+      fields.push('category_id=?'); args.push(categoryId);
+    }
     if (body.hidden !== undefined) { fields.push('hidden=?'); args.push(body.hidden === true ? 1 : 0); }
     if (body.notice !== undefined) { fields.push('notice=?'); args.push(body.notice === true ? 1 : 0); }
     if (fields.length === 0) throw new AppError(400, '没有需要修改的字段', 'EMPTY_UPDATE');
@@ -334,6 +510,57 @@ export function dnsRoutes() {
     await db(c).execute(`UPDATE dns_domains SET ${fields.join(',')} WHERE id=?`, [...args, domainId]);
     await audit(c, 'domain.update', c.req.param('id'), fields.join(','));
     return c.json({ code: 0 });
+  });
+
+  routes.delete('/api/v1/dns/domains/:id', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const domainId = id(c.req.param('id'));
+    const { domain } = await domainRow(c, domainId);
+    await db(c).execute('DELETE FROM dns_domains WHERE id = ?', [domainId]);
+    await audit(c, 'domain.delete', domain.name, `id=${domainId}`);
+    return c.json({ code: 0 });
+  });
+
+  routes.post('/api/v1/dns/domains/batch', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    const ids = idsFrom(body, 200);
+    const action = text(body, 'action', 20);
+    const placeholders = ids.map(() => '?').join(',');
+    let affected = 0;
+    if (action === 'delete') {
+      const result = await db(c).execute(`DELETE FROM dns_domains WHERE id IN (${placeholders})`, ids);
+      affected = Number(result.changes) || 0;
+    } else if (action === 'remark') {
+      const remark = typeof body.remark === 'string' ? body.remark.trim().slice(0, 100) : '';
+      const result = await db(c).execute(
+        `UPDATE dns_domains SET remark=?, updated_at=? WHERE id IN (${placeholders})`,
+        [remark || null, nowSeconds(), ...ids],
+      );
+      affected = Number(result.changes) || 0;
+    } else if (action === 'notice' || action === 'hidden') {
+      if (typeof body.value !== 'boolean') throw new AppError(400, '状态参数无效', 'INVALID_STATUS');
+      const column = action === 'notice' ? 'notice' : 'hidden';
+      const result = await db(c).execute(
+        `UPDATE dns_domains SET ${column}=?, updated_at=? WHERE id IN (${placeholders})`,
+        [body.value ? 1 : 0, nowSeconds(), ...ids],
+      );
+      affected = Number(result.changes) || 0;
+    } else if (action === 'category') {
+      const categoryId = categoryIdOf(body.categoryId);
+      await requireCategory(c, categoryId);
+      const result = await db(c).execute(
+        `UPDATE dns_domains SET category_id=?, updated_at=? WHERE id IN (${placeholders})`,
+        [categoryId, nowSeconds(), ...ids],
+      );
+      affected = Number(result.changes) || 0;
+    } else {
+      throw new AppError(400, '不支持的批量操作', 'INVALID_BATCH_ACTION');
+    }
+    await audit(c, `domain.batch.${action}`, `${ids.length} ids`, `affected=${affected}`);
+    return c.json({ code: 0, affected, requested: ids.length });
   });
 
   routes.get('/api/v1/dns/domains/:id', requireSession, async (c) => {
@@ -346,6 +573,9 @@ export function dnsRoutes() {
       domain: {
         id: domain.id, name: domain.name, accountId: domain.account_id, accountName: owner.name,
         accountType: owner.type, thirdId: domain.third_id, remark: domain.remark, recordCount: domain.record_count,
+        hidden: domain.hidden === 1, notice: domain.notice === 1,
+        categoryId: domain.category_id, categoryName: domain.category_name ?? null,
+        expiresAt: domain.expires_at, checkStatus: domain.check_status,
       },
     });
   });
@@ -459,6 +689,104 @@ export function dnsRoutes() {
     try { await provider.setRecordRemark(toDnsDomain(domain), recordId, remark || null); } catch (error) { providerError(error); }
     await audit(c, 'record.remark', domain.name, `${recordId} ${remark}`.slice(0, 500));
     return c.json({ code: 0 });
+  });
+
+  routes.post('/api/v1/dns/domains/:id/records/batch', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 120, 60);
+    const body = await input(c);
+    const action = text(body, 'action', 20);
+    const recordIds = recordIdsFrom(body);
+    const remark = typeof body.remark === 'string' ? body.remark.trim().slice(0, 100) : '';
+    if (action === 'remark' && body.remark !== undefined && remark.length > 100) {
+      throw new AppError(400, '备注最多 100 字', 'INVALID_REMARK');
+    }
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    const target = toDnsDomain(domain);
+    let success = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (const recordId of recordIds) {
+      try {
+        if (action === 'enable' || action === 'disable') {
+          await provider.setRecordStatus(target, recordId, action === 'enable');
+        } else if (action === 'delete') {
+          await provider.deleteRecord(target, recordId);
+        } else if (action === 'remark') {
+          await provider.setRecordRemark(target, recordId, remark || null);
+        } else {
+          throw new AppError(400, '不支持的批量操作', 'INVALID_BATCH_ACTION');
+        }
+        success++;
+      } catch (error) {
+        failed++;
+        if (errors.length < 5) errors.push(error instanceof Error ? error.message : '未知错误');
+      }
+    }
+    if (success > 0 || action === 'remark') {
+      await audit(c, `record.batch.${action}`, domain.name, `${success} ok, ${failed} failed`.slice(0, 500));
+    }
+    return c.json({ code: 0, success, failed, errors });
+  });
+
+  routes.post('/api/v1/dns/domains/:id/records/batch-add', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 60, 60);
+    const body = await input(c);
+    const records = Array.isArray(body.records) ? body.records : [];
+    if (records.length === 0 || records.length > 100) throw new AppError(400, '一次需提交 1–100 条记录', 'INVALID_RECORDS');
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    const target = toDnsDomain(domain);
+    let added = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (const entry of records) {
+      let candidate: Record<string, unknown>;
+      if (typeof entry === 'string') {
+        const parts = entry.trim().split(/\s+/);
+        if (parts.length < 2) { failed++; if (errors.length < 5) errors.push(`无法解析：${entry.slice(0, 50)}`); continue; }
+        candidate = { name: parts[0], value: parts.slice(1).join(' ') };
+      } else if (entry && typeof entry === 'object') {
+        candidate = { ...(entry as Record<string, unknown>) };
+      } else {
+        failed++; continue;
+      }
+      if (candidate.type === undefined || candidate.type === '') {
+        candidate.type = body.type ?? guessRecordType(String(candidate.value ?? ''));
+      }
+      if (candidate.line === undefined) candidate.line = body.line ?? 'default';
+      if (candidate.ttl === undefined) candidate.ttl = body.ttl ?? 600;
+      try {
+        const data = recordInput(candidate);
+        await provider.addRecord(target, data);
+        added++;
+      } catch (error) {
+        failed++;
+        if (errors.length < 5) errors.push(error instanceof Error ? error.message : '未知错误');
+      }
+    }
+    if (added > 0) await audit(c, 'record.batch.add', domain.name, `${added} ok, ${failed} failed`);
+    return c.json({ code: 0, added, failed, errors });
+  });
+
+  routes.get('/api/v1/dns/domains/:id/record-logs', requireSession, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId);
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.recordLogs) return c.json({ code: 0, supported: false, total: 0, items: [] });
+    const { page, pageSize } = pageParams(c);
+    try {
+      const result = await provider.recordLogs(toDnsDomain(domain), { page, pageSize });
+      return c.json({ code: 0, supported: true, ...result });
+    } catch (error) { providerError(error); }
   });
 
   return routes;
