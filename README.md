@@ -35,7 +35,7 @@
 | Wave 3：DNS/Cloudflare | 22 个 DNS 驱动全部接入：Cloudflare、阿里云、DNSPod、腾讯云 EdgeOne、阿里云 ESA、AWS Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium；账户、域名、解析记录 CRUD/启停/备注可用，域名分类、批量操作、操作日志、记录批量添加与厂商日志（阿里云/DNSPod）、Cloudflare 自定义主机名/Fallback Origin/DCV 委派与 Tunnel（公网主机名自动 CNAME、CIDR/主机名路由）已接入，数据表见 `migrations/0002_dns.sql`。驱动与 Cloudflare 扩展仅通过本地构造请求单测，未使用真实服务商凭据冒烟；域名别名与 URL 转发记录类型仍待移植 |
 | Wave 4：任务/SSL/通知/执行器 | 尚待移植；9 个证书实现文件、51 个部署驱动不等于已实现 TS 驱动 |
 | Wave 5：前端 | 安装、登录、会话控制台、域名账户、域名列表、解析记录页面可用；其余 51 个旧模板对应模块仍显示迁移占位 |
-| Wave 6：同步与最终交付 | 本地 PHP 差异扫描可用；定期上游同步 CI、完整部署与回滚验收尚待完成 |
+| Wave 6：同步与最终交付 | 本地 PHP 差异扫描与 GitHub Actions `Verify` CI 可用；发布/回滚步骤已写入 `docs/guide/release.md`；定期上游同步与真实云回滚演练尚待完成 |
 
 继续开发时先补域名别名与 URL 转发记录类型，再推进 Wave 4；`src/dns/registry.ts` 的 `unportedProviders` 现为空数组，新增驱动时若有未实现项应登记到该列表并保持 `providerCatalog().unported` 与实际一致。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
 

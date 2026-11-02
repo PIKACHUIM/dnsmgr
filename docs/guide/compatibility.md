@@ -24,7 +24,7 @@
 - **Wave 3**：22 个 DNS 驱动全部迁移（Cloudflare、阿里云、DNSPod、EdgeOne、阿里云 ESA、Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium），账户、域名、解析记录 CRUD/启停/备注、域名分类、域名/记录批量操作、本地操作日志与厂商日志（阿里云/DNSPod）、Cloudflare 自定义主机名/Fallback Origin/DCV 委派与 Tunnel（公网主机名自动 CNAME、CIDR/主机名路由）可用。驱动与 Cloudflare 扩展仅通过本地构造请求单测，尚未用真实服务商凭据冒烟；域名别名与 URL 转发记录类型尚未迁移。
 - **Wave 4**：定时/容灾/优选IP、证书签发与部署、通知 webhook 和自托管执行器未完整迁移。
 - **Wave 5**：登录、基础状态控制台、域名账户、域名列表与解析记录页面可用；其余旧模板对应模块仍显示迁移占位。
-- **Wave 6**：显式上游 PHP 差异扫描可用；定期同步 CI、真实云验收和完整发布回滚指南尚待完善。
+- **Wave 6**：显式上游 PHP 差异扫描与 GitHub Actions `Verify` CI 可用，发布与回滚步骤见[发布与回滚](./release)；定期上游同步和真实云回滚演练尚待完善。
 
 旧 route 中 `/domain/dnscheck` 指向的方法在旧控制器中不存在，`huoshan` 证书 PHP 实现文件不在常规注册清单中。这些均为静态基线诊断，不应被当成新实现的需求完成项。
 

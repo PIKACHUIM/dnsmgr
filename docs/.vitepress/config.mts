@@ -36,6 +36,7 @@ export default defineConfig({
             { text: '本地开发', link: '/guide/local-development' },
             { text: '存储配置', link: '/guide/storage' },
             { text: '平台构建与根路径部署', link: '/guide/platforms' },
+            { text: '发布与回滚', link: '/guide/release' },
           ],
         },
       ],
