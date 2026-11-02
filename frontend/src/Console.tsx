@@ -10,6 +10,8 @@ import { DnsRecords } from './DnsRecords';
 import { DnsAliases } from './DnsAliases';
 import { CfHostnames } from './CfHostnames';
 import { CfTunnels } from './CfTunnels';
+import { ScheduleTasks } from './ScheduleTasks';
+import { CronSettings } from './CronSettings';
 
 interface ConsoleProps {
   session: Session;
@@ -187,7 +189,9 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
           : path === '/domain' ? <DnsDomains session={session} navigate={navigate} onExpired={onExpired} />
             : path === '/domain/category' && level === 2 ? <DnsCategories session={session} onExpired={onExpired} />
               : path === '/log' ? <DnsLogs session={session} onExpired={onExpired} />
-                : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
+                : path === '/schedule/stask' && level === 2 ? <ScheduleTasks session={session} onExpired={onExpired} />
+                  : path === '/system/cronset' && level === 2 ? <CronSettings session={session} onExpired={onExpired} />
+                    : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
                   : tunnelMatch && level === 2 ? <CfTunnels session={session} accountId={Number(tunnelMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : aliasMatch ? <DnsAliases session={session} domainId={Number(aliasMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />

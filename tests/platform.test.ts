@@ -106,11 +106,17 @@ describe('platform routing and isolation', () => {
     expect(await response.text()).toBe(shell);
     expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
-  it.each(['/api/unknown', '/quicklogin', '/cron', '/qqbot/webhook', '/unknown', '/app/sql/install.sql', '/.env', '/config/database.php', '/assets/unknown.js'])('never swallows %s with a SPA fallback', async (path) => {
+  it.each(['/api/unknown', '/quicklogin', '/qqbot/webhook', '/unknown', '/app/sql/install.sql', '/.env', '/config/database.php', '/assets/unknown.js'])('never swallows %s with a SPA fallback', async (path) => {
     const app = createApp({ shell });
     const response = await app.request(`https://panel.example${path}`, {}, environment({}, 'local'));
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toContain('application/json');
+    expect(await response.text()).not.toBe(shell);
+  });
+  it('never serves the SPA shell for /cron', async () => {
+    const app = createApp({ shell });
+    const response = await app.request('https://panel.example/cron?key=x', {}, environment({}, 'local'));
+    expect(response.headers.get('content-type')).not.toContain('text/html');
     expect(await response.text()).not.toBe(shell);
   });
   it('fails closed for missing persistence and never leaks a secret', async () => {

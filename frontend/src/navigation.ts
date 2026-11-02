@@ -26,7 +26,7 @@ export const navigation: NavigationGroup[] = [
   { label: '容灾与调度', adminOnly: true, items: [
     { path: '/dmonitor/overview', label: '运行概览', scope: '容灾探测与切换运行情况', capability: 'tasks' },
     { path: '/dmonitor/task', label: '切换策略', scope: '探测策略与故障切换规则', capability: 'tasks' },
-    { path: '/schedule/stask', label: '定时切换', scope: '定时 DNS 切换任务', capability: 'tasks' },
+    { path: '/schedule/stask', label: '定时切换', scope: '定时 DNS 切换任务', capability: 'tasks', implemented: true },
   ] },
   { label: 'SSL 证书', adminOnly: true, items: [
     { path: '/cert/certaccount', label: '证书账户', scope: 'ACME 账户与签发配置', capability: 'cert' },
@@ -41,7 +41,7 @@ export const navigation: NavigationGroup[] = [
     { path: '/optimizeip/opiplist', label: '任务管理', scope: 'IP 优选任务与执行情况', capability: 'executor' },
   ] },
   { label: '系统设置', adminOnly: true, items: [
-    { path: '/system/cronset', label: '计划任务', scope: '计划任务与运行器设置', capability: 'tasks' },
+    { path: '/system/cronset', label: '计划任务', scope: '计划任务与运行器设置', capability: 'tasks', implemented: true },
     { path: '/system/loginset', label: '登录设置', scope: '登录策略与动态口令配置' },
     { path: '/system/noticeset', label: '通知设置', scope: '通知渠道与消息模板' },
     { path: '/system/proxyset', label: '代理设置', scope: '外部请求代理配置' },
