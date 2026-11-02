@@ -15,6 +15,9 @@ function cloudflareFetch() {
     if (url.pathname === '/client/v4/zones' && url.searchParams.get('name')) {
       return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }], result_info: { total_count: 1 } });
     }
+    if (/\/dns_records\/r\d+$/.test(url.pathname)) {
+      return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
+    }
     if (url.pathname === '/client/v4/zones/zone-1/dns_records' && url.search.endsWith('') === false) {
       return json({ success: true, result: [], result_info: { total_count: 0 } });
     }
@@ -114,5 +117,89 @@ describe('DNS account, domain and record API', () => {
 
     const audit = await testDb.db.query('SELECT * FROM audit_logs');
     expect(audit).toHaveLength(0);
+  });
+
+  async function seedDomain(cookie: string, csrf: string, names: string[] = ['example.com']) {
+    const created = await (await post('/api/v1/dns/accounts', {
+      type: 'cloudflare', name: `acc-${names[0]}`, config: { apikey: 'token' },
+    }, { cookie, 'X-CSRF-Token': csrf })).json() as { id: number };
+    await post(`/api/v1/dns/accounts/${created.id}/sync`, {
+      domains: names.map((name, index) => ({ id: `zone-${index + 1}`, name, recordCount: 0 })),
+    }, { cookie, 'X-CSRF-Token': csrf });
+    const list = await (await request(`/api/v1/dns/domains?accountId=${created.id}&page=1&pageSize=20`, { headers: { cookie } })).json() as { items: { id: number; name: string }[] };
+    return list.items;
+  }
+
+  it('manages domain categories and filters domains by them', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const headers = { cookie, 'X-CSRF-Token': csrf };
+
+    const created = await post('/api/v1/dns/categories', { name: '生产', sort: 2 }, headers);
+    expect(created.status).toBe(200);
+    const category = await created.json() as { id: number };
+    expect((await post('/api/v1/dns/categories', { name: '生产' }, headers)).status).toBe(409);
+
+    expect((await request(`/api/v1/dns/domains/${domain!.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ categoryId: category.id }),
+    })).status).toBe(200);
+
+    const filtered = await (await request(`/api/v1/dns/domains?categoryId=${category.id}`, { headers: { cookie } })).json() as { total: number; items: { categoryName: string }[] };
+    expect(filtered.total).toBe(1);
+    expect(filtered.items[0]!.categoryName).toBe('生产');
+
+    expect((await request(`/api/v1/dns/categories/${category.id}`, {
+      method: 'DELETE', headers,
+    })).status).toBe(409);
+
+    await request(`/api/v1/dns/domains/${domain!.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ categoryId: 0 }),
+    });
+    expect((await request(`/api/v1/dns/categories/${category.id}`, { method: 'DELETE', headers })).status).toBe(200);
+  });
+
+  it('applies domain batch actions and deletes local rows only', async () => {
+    const { cookie, csrf } = await session();
+    const domains = await seedDomain(cookie, csrf, ['a.example.com', 'b.example.com']);
+    const ids = domains.map((domain) => domain.id);
+    const headers = { cookie, 'X-CSRF-Token': csrf };
+
+    const remarked = await post('/api/v1/dns/domains/batch', { ids, action: 'remark', remark: '批量' }, headers);
+    expect(await remarked.json()).toMatchObject({ code: 0, affected: 2, requested: 2 });
+    const hidden = await post('/api/v1/dns/domains/batch', { ids, action: 'hidden', value: true }, headers);
+    expect(await hidden.json()).toMatchObject({ affected: 2 });
+
+    const visible = await (await request('/api/v1/dns/domains?hidden=0', { headers: { cookie } })).json() as { total: number };
+    expect(visible.total).toBe(0);
+    const hiddenList = await (await request('/api/v1/dns/domains?hidden=1', { headers: { cookie } })).json() as { total: number };
+    expect(hiddenList.total).toBe(2);
+
+    expect((await post('/api/v1/dns/domains/batch', { ids: [999], action: 'delete' }, headers)).status).toBe(200);
+    const removed = await post('/api/v1/dns/domains/batch', { ids, action: 'delete' }, headers);
+    expect(await removed.json()).toMatchObject({ affected: 2 });
+    expect(await (await request('/api/v1/dns/domains', { headers: { cookie } })).json()).toMatchObject({ total: 0 });
+  });
+
+  it('batch edits, adds and logs records through the provider', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const headers = { cookie, 'X-CSRF-Token': csrf };
+
+    const status = await post(`/api/v1/dns/domains/${domain!.id}/records/batch`, {
+      action: 'enable', recordIds: ['r1', 'r2'],
+    }, headers);
+    expect(await status.json()).toMatchObject({ code: 0, success: 2, failed: 0 });
+
+    const added = await post(`/api/v1/dns/domains/${domain!.id}/records/batch-add`, {
+      records: ['www 1.1.1.1', '@ 2001:db8::1', 'bad-line'],
+    }, headers);
+    expect(await added.json()).toMatchObject({ code: 0, added: 2, failed: 1 });
+
+    const remoteLog = await (await request(`/api/v1/dns/domains/${domain!.id}/record-logs`, { headers: { cookie } })).json();
+    expect(remoteLog).toMatchObject({ code: 0, supported: false, total: 0 });
+
+    const logs = await (await request(`/api/v1/dns/logs?domain=${domain!.name}`, { headers: { cookie } })).json() as { total: number; items: { action: string }[] };
+    expect(logs.total).toBeGreaterThanOrEqual(2);
+    expect(logs.items.map((item) => item.action)).toContain('record.batch.add');
   });
 });

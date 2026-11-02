@@ -24,6 +24,11 @@ export interface DnsRecord extends DnsRecordInput {
   updatedAt: string | null;
 }
 
+export interface DnsRecordLog {
+  time: string | null;
+  action: string;
+}
+
 export interface DnsDomain {
   id: string;
   name: string;
@@ -63,6 +68,8 @@ export interface DnsProvider {
   recordLines(domain: DnsDomain): Promise<DnsLine[] | null>;
   /** 返回 null 表示平台不限制/不公开最小 TTL */
   minTtl(domain: DnsDomain): Promise<number | null>;
+  /** 可选：厂商侧解析操作日志；未实现表示平台不提供 */
+  recordLogs?(domain: DnsDomain, page: { page: number; pageSize: number }): Promise<PageResult<DnsRecordLog>>;
 }
 
 export class DnsError extends Error {

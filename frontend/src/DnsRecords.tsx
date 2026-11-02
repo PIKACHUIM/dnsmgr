@@ -10,6 +10,7 @@ interface Record {
 interface FormState {
   name: string; type: string; value: string; line: string; ttl: string; mx: string; remark: string;
 }
+interface VendorLog { time: string | null; action: string }
 
 const TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'URL'];
 const PAGE_SIZE = 20;
@@ -34,6 +35,14 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editing, setEditing] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [batchAction, setBatchAction] = useState('enable');
+  const [batchRemark, setBatchRemark] = useState('');
+  const [batchText, setBatchText] = useState('');
+  const [batchType, setBatchType] = useState('');
+  const [logs, setLogs] = useState<VendorLog[] | null>(null);
+  const [logsSupported, setLogsSupported] = useState(true);
+  const [logsLoading, setLogsLoading] = useState(false);
   const controller = useRef<AbortController | null>(null);
 
   const handle = useCallback((failure: unknown) => {
@@ -121,6 +130,67 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     finally { setBusy(false); }
   }
 
+  function toggleSelected(recordId: string) {
+    setSelected((current) => current.includes(recordId) ? current.filter((id) => id !== recordId) : [...current, recordId]);
+  }
+
+  async function applyBatch() {
+    if (busy || selected.length === 0) return;
+    if (batchAction === 'delete' && !window.confirm(`确认删除选中的 ${selected.length} 条解析记录？`)) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    const signal = new AbortController();
+    try {
+      const result = await send<{ code: 0; success: number; failed: number; errors: string[] }>(
+        `/api/v1/dns/domains/${domainId}/records/batch`, 'POST',
+        { action: batchAction, recordIds: selected, remark: batchRemark },
+        signal.signal, { 'X-CSRF-Token': session.csrfToken },
+      );
+      setNotice(`批量操作完成：成功 ${result.success} 条${result.failed ? `，失败 ${result.failed} 条（${result.errors.join('；')}）` : ''}`);
+      setSelected([]);
+      await load(signal.signal, page);
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
+  async function batchAdd(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    const records = batchText.split('\n').map((line) => line.trim()).filter(Boolean);
+    if (records.length === 0) { setError('请填写至少一行「主机记录 记录值」'); return; }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    const signal = new AbortController();
+    try {
+      const result = await send<{ code: 0; added: number; failed: number; errors: string[] }>(
+        `/api/v1/dns/domains/${domainId}/records/batch-add`, 'POST',
+        { records, type: batchType || undefined },
+        signal.signal, { 'X-CSRF-Token': session.csrfToken },
+      );
+      setNotice(`批量添加完成：成功 ${result.added} 条${result.failed ? `，失败 ${result.failed} 条（${result.errors.join('；')}）` : ''}`);
+      setBatchText('');
+      await load(signal.signal, page);
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
+  async function loadLogs() {
+    if (logsLoading) return;
+    setLogsLoading(true);
+    setError('');
+    const signal = new AbortController();
+    try {
+      const result = await request<{ code: 0; supported: boolean; items: VendorLog[] }>(
+        `/api/v1/dns/domains/${domainId}/record-logs?page=1&pageSize=50`, { signal: signal.signal },
+      );
+      setLogsSupported(result.supported);
+      setLogs(result.items);
+    } catch (failure) { handle(failure); }
+    finally { setLogsLoading(false); }
+  }
+
   function edit(record: Record) {
     setEditing(record.id);
     setForm({
@@ -134,6 +204,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   return <>
     <div className="page-tools">
       <a className="button button-secondary" href="/domain" onClick={(event) => { event.preventDefault(); navigate('/domain'); }}>返回域名列表</a>
+      <button className="button button-secondary" type="button" disabled={logsLoading} onClick={() => void loadLogs()}>{logsLoading ? '读取日志…' : '服务商操作日志'}</button>
       {domain && <span className="mono">{domain.name} · {domain.accountName}（{domain.accountType}）</span>}
     </div>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
@@ -160,11 +231,29 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     </section>
     <section className="panel" aria-labelledby="record-list-title">
       <div className="panel-heading"><div><h2 id="record-list-title">解析记录</h2></div><span className="panel-meta">共 {total} 条</span></div>
+      {selected.length > 0 && <div className="dns-batch">
+        <span className="mono">已选 {selected.length} 条</span>
+        <select value={batchAction} onChange={(event) => setBatchAction(event.target.value)} aria-label="批量操作">
+          <option value="enable">启用</option>
+          <option value="disable">停用</option>
+          <option value="delete">删除</option>
+          <option value="remark">设置备注</option>
+        </select>
+        {batchAction === 'remark' && <input value={batchRemark} onChange={(event) => setBatchRemark(event.target.value)} maxLength={100} placeholder="备注" aria-label="批量备注" />}
+        <button className="button button-primary" type="button" disabled={busy} onClick={() => void applyBatch()}>应用</button>
+        <button className="button button-quiet" type="button" disabled={busy} onClick={() => setSelected([])}>取消</button>
+      </div>}
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取解析记录…</div>
         : records.length === 0 ? <div className="panel-empty">该域名暂无解析记录。</div>
           : <div className="table-wrap"><table className="data-table">
-            <thead><tr><th>主机</th><th>类型</th><th>记录值</th><th>线路</th><th>TTL</th><th>状态</th><th>备注</th><th>操作</th></tr></thead>
+            <thead><tr>
+              <th><input type="checkbox" aria-label="全选"
+                checked={records.length > 0 && records.every((record) => selected.includes(record.id))}
+                onChange={(event) => setSelected(event.target.checked ? records.map((record) => record.id) : [])} /></th>
+              <th>主机</th><th>类型</th><th>记录值</th><th>线路</th><th>TTL</th><th>状态</th><th>备注</th><th>操作</th>
+            </tr></thead>
             <tbody>{records.map((record) => <tr key={record.id}>
+              <td><input type="checkbox" checked={selected.includes(record.id)} aria-label={`选择 ${record.name}`} onChange={() => toggleSelected(record.id)} /></td>
               <td className="mono">{record.name}</td>
               <td>{record.type}</td>
               <td className="record-value">{record.value}</td>
@@ -185,5 +274,33 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
         <button className="button button-secondary" disabled={page * PAGE_SIZE >= total || loading} onClick={() => setPage((value) => value + 1)}>下一页</button>
       </div>
     </section>
+    <section className="panel" aria-labelledby="record-batch-title">
+      <div className="panel-heading"><div><h2 id="record-batch-title">文本批量添加</h2></div><span className="panel-meta">每行「主机记录 记录值」</span></div>
+      <form className="dns-form" onSubmit={batchAdd}>
+        <label className="form-field"><span>默认类型（留空自动判断）</span>
+          <select value={batchType} onChange={(event) => setBatchType(event.target.value)}>
+            <option value="">自动判断</option>
+            {TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </label>
+        <label className="form-field" style={{ gridColumn: '1 / -1' }}><span>记录行</span>
+          <textarea value={batchText} onChange={(event) => setBatchText(event.target.value)} rows={5} maxLength={20000}
+            placeholder={'www 1.1.1.1\n@ 2001:db8::1\nmail mail.example.com'} />
+        </label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>批量添加</button></div>
+      </form>
+    </section>
+    {logs !== null && <section className="panel" aria-labelledby="record-log-title">
+      <div className="panel-heading"><div><h2 id="record-log-title">服务商操作日志</h2></div><span className="panel-meta">最近 50 条</span></div>
+      {!logsSupported ? <div className="panel-empty">当前服务商不提供解析操作日志。</div>
+        : logs.length === 0 ? <div className="panel-empty">服务商没有返回日志。</div>
+          : <div className="table-wrap"><table className="data-table">
+            <thead><tr><th>时间</th><th>操作</th></tr></thead>
+            <tbody>{logs.map((log, index) => <tr key={`${log.time ?? 't'}-${index}`}>
+              <td className="mono">{log.time ?? '—'}</td>
+              <td>{log.action}</td>
+            </tr>)}</tbody>
+          </table></div>}
+    </section>}
   </>;
 }

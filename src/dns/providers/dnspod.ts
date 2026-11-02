@@ -1,7 +1,7 @@
 import { asArray, asRecord, num, sendJson } from '../http';
 import { tencentAuthorization } from '../sign';
 import {
-  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord,
+  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordLog,
   type DnsRecordInput, type PageResult, type RecordQuery,
 } from '../types';
 
@@ -172,6 +172,18 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
 
     async minTtl(): Promise<number | null> {
       return 600;
+    },
+
+    async recordLogs(domain, page): Promise<PageResult<DnsRecordLog>> {
+      const data = await request('DescribeDomainLogList', {
+        Domain: domainName(domain), Offset: (page.page - 1) * page.pageSize, Limit: page.pageSize,
+      });
+      const items = asArray(data.LogList).map((raw) => {
+        const text = String(raw);
+        const time = text.slice(0, text.indexOf('(') >= 0 ? text.indexOf('(') : text.length).trim();
+        return { time: time || null, action: text };
+      });
+      return { total: num(data.TotalCount, items.length), items };
     },
   };
 }

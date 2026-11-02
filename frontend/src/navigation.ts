@@ -21,7 +21,7 @@ export const navigation: NavigationGroup[] = [
   ] },
   { label: '域名配置', adminOnly: true, items: [
     { path: '/account', label: '域名账户', scope: 'DNS 服务商账户与访问凭证', capability: 'dns', implemented: true },
-    { path: '/domain/category', label: '域名分类', scope: '域名分类与分组管理', capability: 'dns' },
+    { path: '/domain/category', label: '域名分类', scope: '域名分类与分组管理', capability: 'dns', implemented: true },
   ] },
   { label: '容灾与调度', adminOnly: true, items: [
     { path: '/dmonitor/overview', label: '运行概览', scope: '容灾探测与切换运行情况', capability: 'tasks' },
@@ -49,7 +49,7 @@ export const navigation: NavigationGroup[] = [
     { path: '/user', label: '用户管理', scope: '用户、权限与账户维护' },
   ] },
   { label: '审计与账户', items: [
-    { path: '/log', label: '操作日志', scope: '用户操作与变更审计' },
+    { path: '/log', label: '操作日志', scope: '用户操作与变更审计', implemented: true },
     { path: '/setpwd', label: '修改密码', scope: '当前用户的密码修改' },
   ] },
 ];

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
 
 interface Domain {
   id: number; name: string; accountId: number; accountName: string; accountType: string;
-  remark: string | null; recordCount: number; hidden: boolean;
+  remark: string | null; recordCount: number; hidden: boolean; notice: boolean;
+  categoryId: number | null; categoryName: string | null;
 }
 interface Account { id: number; name: string; type: string }
+interface Category { id: number; name: string; sort: number; domainCount: number }
 
 interface Props {
   session: Session;
@@ -18,54 +20,69 @@ const PAGE_SIZE = 20;
 export function DnsDomains({ session, navigate, onExpired }: Props) {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [keyword, setKeyword] = useState('');
+  const [applied, setApplied] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [hiddenFilter, setHiddenFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [accountId, setAccountId] = useState('');
   const [name, setName] = useState('');
+  const [selected, setSelected] = useState<number[]>([]);
+  const [batchAction, setBatchAction] = useState('category');
+  const [batchCategory, setBatchCategory] = useState('');
+  const [batchFlag, setBatchFlag] = useState('1');
+  const [batchRemark, setBatchRemark] = useState('');
+  const [refresh, setRefresh] = useState(0);
+  const admin = session.user.level === 2;
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
     else setError(errorMessage(failure));
   }, [onExpired]);
 
-  const load = useCallback(async (signal: AbortSignal, currentPage: number, filter: string) => {
+  const load = useCallback(async (signal: AbortSignal, currentPage: number) => {
     setLoading(true);
     setError('');
+    const query = new URLSearchParams({ page: String(currentPage), pageSize: String(PAGE_SIZE) });
+    if (applied) query.set('keyword', applied);
+    if (categoryFilter) query.set('categoryId', categoryFilter);
+    if (hiddenFilter) query.set('hidden', hiddenFilter);
     try {
-      const [list, accountList] = await Promise.all([
-        request<{ code: 0; total: number; items: Domain[] }>(
-          `/api/v1/dns/domains?page=${currentPage}&pageSize=${PAGE_SIZE}${filter ? `&keyword=${encodeURIComponent(filter)}` : ''}`, { signal },
-        ),
-        request<{ code: 0; items: Account[] }>('/api/v1/dns/accounts', { signal }),
+      const [list, categoryList, accountList] = await Promise.all([
+        request<{ code: 0; total: number; items: Domain[] }>(`/api/v1/dns/domains?${query}`, { signal }),
+        request<{ code: 0; items: Category[] }>('/api/v1/dns/categories', { signal }),
+        admin ? request<{ code: 0; items: Account[] }>('/api/v1/dns/accounts', { signal }) : Promise.resolve({ code: 0 as const, items: [] as Account[] }),
       ]);
       if (signal.aborted) return;
       setDomains(list.items);
       setTotal(list.total);
+      setCategories(categoryList.items);
       setAccounts(accountList.items);
       setAccountId((value) => value || String(accountList.items[0]?.id ?? ''));
+      setSelected((current) => current.filter((id) => list.items.some((domain) => domain.id === id)));
     } catch (failure) {
       if (!signal.aborted) handle(failure);
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [handle]);
+  }, [admin, applied, categoryFilter, hiddenFilter, handle]);
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal, page, '');
+    void load(controller.signal, page);
     return () => controller.abort();
-  }, [load, page]);
+  }, [load, page, refresh]);
 
-  async function search(event: React.FormEvent) {
+  function search(event: React.FormEvent) {
     event.preventDefault();
-    const controller = new AbortController();
-    await load(controller.signal, 1, keyword.trim());
     setPage(1);
+    setApplied(keyword.trim());
   }
 
   async function submit(event: React.FormEvent) {
@@ -79,9 +96,31 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
       const result = await send<{ code: 0; name: string }>('/api/v1/dns/domains', 'POST', { accountId: Number(accountId), name }, signal.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(`域名「${result.name}」已添加`);
       setName('');
-      await load(signal.signal, page, '');
+      setRefresh((value) => value + 1);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
+  }
+
+  async function patch(domain: Domain, body: Record<string, unknown>): Promise<boolean> {
+    if (busy) return false;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    const signal = new AbortController();
+    try {
+      await send(`/api/v1/dns/domains/${domain.id}`, 'PATCH', body, signal.signal, { 'X-CSRF-Token': session.csrfToken });
+      setRefresh((value) => value + 1);
+      return true;
+    } catch (failure) { handle(failure); return false; }
+    finally { setBusy(false); }
+  }
+
+  async function setCategory(domain: Domain, value: string) {
+    if (await patch(domain, { categoryId: value ? Number(value) : 0 })) setNotice('分类已更新');
+  }
+
+  async function toggleHidden(domain: Domain) {
+    if (await patch(domain, { hidden: !domain.hidden })) setNotice(domain.hidden ? '域名已显示' : '域名已隐藏');
   }
 
   async function remove(domain: Domain) {
@@ -90,17 +129,43 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
     setError('');
     const signal = new AbortController();
     try {
-      await send(`/api/v1/dns/domains/${domain.id}`, 'PATCH', { hidden: true }, signal.signal, { 'X-CSRF-Token': session.csrfToken });
-      setNotice(`已隐藏「${domain.name}」`);
-      await load(signal.signal, page, '');
+      await send(`/api/v1/dns/domains/${domain.id}`, 'DELETE', undefined, signal.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`已移除「${domain.name}」`);
+      setRefresh((value) => value + 1);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
   }
 
+  function toggleSelected(domainId: number) {
+    setSelected((current) => current.includes(domainId) ? current.filter((id) => id !== domainId) : [...current, domainId]);
+  }
+
+  async function applyBatch() {
+    if (busy || selected.length === 0) return;
+    if (batchAction === 'delete' && !window.confirm(`确认移除选中的 ${selected.length} 个域名？平台上的域名不会被删除。`)) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    const signal = new AbortController();
+    const body: Record<string, unknown> = { ids: selected, action: batchAction };
+    if (batchAction === 'category') body.categoryId = batchCategory ? Number(batchCategory) : 0;
+    if (batchAction === 'hidden' || batchAction === 'notice') body.value = batchFlag === '1';
+    if (batchAction === 'remark') body.remark = batchRemark;
+    try {
+      const result = await send<{ code: 0; affected: number }>('/api/v1/dns/domains/batch', 'POST', body, signal.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`已处理 ${result.affected} 个域名`);
+      setSelected([]);
+      setRefresh((value) => value + 1);
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
+  const allSelected = domains.length > 0 && domains.every((domain) => selected.includes(domain.id));
+
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="domain-form-title">
+    {admin && <section className="panel" aria-labelledby="domain-form-title">
       <div className="panel-heading"><div><h2 id="domain-form-title">添加域名</h2></div><span className="panel-meta">调用服务商接口</span></div>
       {accounts.length === 0
         ? <div className="panel-empty">请先在「域名账户」添加 DNS 账户。</div>
@@ -113,20 +178,69 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
           <label className="form-field"><span>域名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="example.com" required maxLength={253} /></label>
           <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在提交…' : '添加域名'}</button></div>
         </form>}
-    </section>
+    </section>}
     <section className="panel" aria-labelledby="domain-list-title">
       <div className="panel-heading"><div><h2 id="domain-list-title">域名列表</h2></div><span className="panel-meta">共 {total} 个</span></div>
-      <form className="dns-search" onSubmit={search}><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="按域名搜索" maxLength={64} aria-label="按域名搜索" /><button className="button button-secondary" type="submit">搜索</button></form>
+      <form className="dns-search" onSubmit={search}>
+        <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="按域名搜索" maxLength={64} aria-label="按域名搜索" />
+        <select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setPage(1); }} aria-label="按分类筛选">
+          <option value="">全部分类</option>
+          <option value="0">未分类</option>
+          {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+        </select>
+        {admin && <select value={hiddenFilter} onChange={(event) => { setHiddenFilter(event.target.value); setPage(1); }} aria-label="按隐藏状态筛选">
+          <option value="">全部状态</option>
+          <option value="0">正常</option>
+          <option value="1">已隐藏</option>
+        </select>}
+        <button className="button button-secondary" type="submit">搜索</button>
+      </form>
+      {selected.length > 0 && <div className="dns-batch">
+        <span className="mono">已选 {selected.length} 项</span>
+        <select value={batchAction} onChange={(event) => setBatchAction(event.target.value)} aria-label="批量操作">
+          <option value="category">设置分类</option>
+          <option value="hidden">隐藏/显示</option>
+          <option value="notice">到期提醒</option>
+          <option value="remark">设置备注</option>
+          <option value="delete">移除域名</option>
+        </select>
+        {batchAction === 'category' && <select value={batchCategory} onChange={(event) => setBatchCategory(event.target.value)} aria-label="目标分类">
+          <option value="">未分类</option>
+          {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+        </select>}
+        {(batchAction === 'hidden' || batchAction === 'notice') && <select value={batchFlag} onChange={(event) => setBatchFlag(event.target.value)} aria-label="目标状态">
+          <option value="1">开启</option>
+          <option value="0">关闭</option>
+        </select>}
+        {batchAction === 'remark' && <input value={batchRemark} onChange={(event) => setBatchRemark(event.target.value)} maxLength={100} placeholder="备注" aria-label="批量备注" />}
+        <button className="button button-primary" type="button" disabled={busy} onClick={() => void applyBatch()}>应用</button>
+        <button className="button button-quiet" type="button" disabled={busy} onClick={() => setSelected([])}>取消</button>
+      </div>}
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取域名…</div>
         : domains.length === 0 ? <div className="panel-empty">没有匹配的域名。</div>
           : <div className="table-wrap"><table className="data-table">
-            <thead><tr><th>域名</th><th>账户</th><th>记录数</th><th>状态</th><th>操作</th></tr></thead>
+            <thead><tr>
+              <th><input type="checkbox" checked={allSelected} aria-label="全选" onChange={() => setSelected(allSelected ? [] : domains.map((domain) => domain.id))} /></th>
+              <th>域名</th><th>账户</th><th>分类</th><th>记录数</th><th>状态</th><th>操作</th>
+            </tr></thead>
             <tbody>{domains.map((domain) => <tr key={domain.id}>
+              <td><input type="checkbox" checked={selected.includes(domain.id)} aria-label={`选择 ${domain.name}`} onChange={() => toggleSelected(domain.id)} /></td>
               <td><a href={`/record/${domain.id}`} onClick={(event) => { event.preventDefault(); navigate(`/record/${domain.id}`); }}>{domain.name}</a></td>
               <td>{domain.accountName}<span className="value-detail mono">{domain.accountType}</span></td>
+              <td>{admin
+                ? <select value={domain.categoryId ?? ''} disabled={busy} aria-label={`${domain.name} 分类`}
+                  onChange={(event) => void setCategory(domain, event.target.value)}>
+                  <option value="">未分类</option>
+                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+                : domain.categoryName || '未分类'}</td>
               <td>{domain.recordCount}</td>
-              <td>{domain.hidden ? '已隐藏' : '正常'}</td>
-              <td className="row-actions"><a className="button button-secondary" href={`/record/${domain.id}`} onClick={(event) => { event.preventDefault(); navigate(`/record/${domain.id}`); }}>解析记录</a><button className="button button-quiet" disabled={busy} onClick={() => void remove(domain)}>隐藏</button></td>
+              <td>{domain.hidden ? '已隐藏' : '正常'}{domain.notice ? <span className="value-detail">到期提醒</span> : null}</td>
+              <td className="row-actions">
+                <a className="button button-secondary" href={`/record/${domain.id}`} onClick={(event) => { event.preventDefault(); navigate(`/record/${domain.id}`); }}>解析记录</a>
+                {admin && <button className="button button-quiet" disabled={busy} onClick={() => void toggleHidden(domain)}>{domain.hidden ? '显示' : '隐藏'}</button>}
+                {admin && <button className="button button-quiet" disabled={busy} onClick={() => void remove(domain)}>移除</button>}
+              </td>
             </tr>)}</tbody>
           </table></div>}
       <div className="pagination">

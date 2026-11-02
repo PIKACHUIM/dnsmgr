@@ -3,7 +3,9 @@ import { ApiError, errorMessage, request, type Bootstrap, type Session } from '.
 import { Brand, Icon } from './icons';
 import { navigation, resolvePage, type Capability } from './navigation';
 import { DnsAccounts } from './DnsAccounts';
+import { DnsCategories } from './DnsCategories';
 import { DnsDomains } from './DnsDomains';
+import { DnsLogs } from './DnsLogs';
 import { DnsRecords } from './DnsRecords';
 
 interface ConsoleProps {
@@ -177,7 +179,9 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
           <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">功能迁移状态</h2></div><span className="panel-meta">不是业务统计</span></div><div className="capability-table" role="table" aria-label="后端能力状态"><div className="capability-row capability-header" role="row"><span role="columnheader">模块</span><span role="columnheader">后端能力</span><span role="columnheader">当前前端</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{capabilityNames[key]}</strong><span role="cell">{loading ? '读取中…' : bootstrap ? bootstrap.capabilities[key] ? '已声明可用' : '未开放' : '未知'}</span><span role="cell"><span className="status-label"><span className="status-dot" />{key === 'dns' ? '已上线' : '待移植'}</span></span></div>)}</div><div className="panel-footnote">后端能力不等于页面已完成。左侧保留旧路径，仅提供对应模块的移植说明。</div></section>
         </> : path === '/account' && level === 2 ? <DnsAccounts session={session} onExpired={onExpired} />
           : path === '/domain' ? <DnsDomains session={session} navigate={navigate} onExpired={onExpired} />
-            : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />
+            : path === '/domain/category' && level === 2 ? <DnsCategories session={session} onExpired={onExpired} />
+              : path === '/log' ? <DnsLogs session={session} onExpired={onExpired} />
+                : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />
               : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">模块状态 / NOT MIGRATED</span><h2 id="module-state-title">此模块尚未移植</h2><p>已保留「{page.item.label}」的导航入口与访问路径。当前页面只说明迁移边界，不提供业务查询、配置或执行操作。</p><dl className="module-details"><div><dt>当前路径</dt><dd><code>{path}</code></dd></div><div><dt>功能范围</dt><dd>{page.item.scope}</dd></div><div><dt>后端能力</dt><dd>{loading ? '正在读取…' : !bootstrap ? '读取失败，状态未知' : page.item.capability ? `${capabilityNames[page.item.capability]}：${bootstrap.capabilities[page.item.capability] ? '已声明可用，页面仍待移植' : '未开放'}` : '基础阶段未提供此功能的业务接口'}</dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>返回后台首页<Icon name="arrow" /></a><span>不会调用旧接口或产生业务变更。</span></div></section>}
         <footer className="workspace-footer"><span>聚合 DNS 管理系统</span><span>安装 · 认证 · 会话基础 <span className="mono">/ FOUNDATION</span></span></footer>
       </main>

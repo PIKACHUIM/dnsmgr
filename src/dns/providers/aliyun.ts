@@ -1,7 +1,7 @@
 import { asArray, asRecord, num, sendJson } from '../http';
 import { aliyunSignature } from '../sign';
 import {
-  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord,
+  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordLog,
   type DnsRecordInput, type PageResult, type RecordQuery,
 } from '../types';
 
@@ -157,6 +157,21 @@ export function createAliyunProvider(config: AliyunConfig, fetchImpl: typeof fet
     async minTtl(domain): Promise<number | null> {
       const data = await request('DescribeDomainInfo', { DomainName: domainOf(domain) });
       return data.MinTtl === undefined ? null : num(data.MinTtl);
+    },
+
+    async recordLogs(domain, page): Promise<PageResult<DnsRecordLog>> {
+      const data = await request('DescribeRecordLogs', {
+        DomainName: domainOf(domain), PageNumber: page.page, PageSize: page.pageSize, Lang: 'zh',
+      });
+      const items = asArray(asRecord(data.RecordLogs ?? {}).RecordLog).map((raw) => {
+        const row = asRecord(raw);
+        const stamp = num(row.ActionTimestamp, 0);
+        return {
+          time: stamp > 0 ? new Date(stamp).toISOString() : null,
+          action: String(row.Message ?? ''),
+        };
+      });
+      return { total: num(data.TotalCount, items.length), items };
     },
   };
 }
