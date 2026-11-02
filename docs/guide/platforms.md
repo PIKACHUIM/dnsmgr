@@ -11,9 +11,21 @@ https://docs.example.com/assets/<hash>.js
 https://docs.example.com/assets/<hash>.css
 ```
 
-不要把站点部署在 `/dnsmgr/` 并把 `base` 改成 `/dnsmgr/`。将 `docs/.vitepress/dist/` **里面的内容**发布到目标域名的站点根目录。若托管平台只能提供 `https://<account>.github.io/<repository>/` 这样的项目子路径，就不符合本项目的 URL 约束；应配置自定义域名/根路径静态站点，不能靠 HTML rewrite 来伪装成根路径。
+不要把站点部署在 `/dnsmgr/` 并把 `base` 改成 `/dnsmgr/`。将 `docs/.vitepress/dist/` **里面的内容**发布到目标域名的站点根目录。GitHub Pages 项目站点默认地址是 `https://<owner>.github.io/<repo>/`，不满足本项目的 URL 约束；必须在仓库 Settings → Pages 绑定自定义域名，`.github/workflows/docs.yml` 检测不到自定义域名时会直接失败，而不是发布坏链接。
 
-DNS 管理应用本身也服务于根路径。文档站应发布到独立站点/域名根，或由部署层明确选择文档站作为该域名根站点；两套产物不可同时覆盖同一个根目录。仓库没有擅自创建托管账号配置或上线工作流。
+DNS 管理应用本身也服务于根路径。文档站应发布到独立站点/域名根，或由部署层明确选择文档站作为该域名根站点；两套产物不可同时覆盖同一个根目录。
+
+## 文档站发布（GitHub Actions）
+
+| 项 | 值 |
+| --- | --- |
+| 工作流 | `.github/workflows/docs.yml` |
+| 触发 | push 到 `main` 且改动 `docs/`、`scripts/docs/`、依赖清单；或手动 dispatch |
+| 构建 | `npm ci --ignore-scripts` → `npm run docs:build` → `npm run docs:verify` |
+| 发布 | `actions/upload-pages-artifact` + `actions/deploy-pages` |
+| 权限 | `contents: read`、`pages: write`、`id-token: write` |
+
+首次启用需在仓库设置里把 Pages 来源设为 **GitHub Actions**，并填写自定义域名。文档站不使用 Cloudflare Pages/Workers。
 
 ## Cloudflare Workers
 
@@ -29,7 +41,7 @@ npm run build:cloudflare
 | 静态资源目录 | `dist/cloudflare/public/` |
 | 平台配置 | `wrangler.toml` |
 
-部署前需要自行创建 D1 数据库，配置 `DB` binding 并执行 `migrations/0001_core.sql`。D1 SQL 模式的 `COORDINATOR_ID` 必须固定。若使用对象格式，还需绑定 `KV` 或 `BUCKET`（R2），并固定 `PAYLOAD_STORE_ID`。敏感的 `APP_KEY` 与 `SETUP_TOKEN` 使用 Wrangler secrets，不写入 vars 或客户端 bundle。
+部署前需要自行创建 D1 数据库，配置 `DB` binding 并依次执行 `migrations/0001_core.sql`、`migrations/0002_dns.sql`。D1 SQL 模式的 `COORDINATOR_ID` 必须固定。DNS 账户/域名/审计表仅在 `DB_FORMAT=sql` 下可用。若使用对象格式，还需绑定 `KV` 或 `BUCKET`（R2），并固定 `PAYLOAD_STORE_ID`。敏感的 `APP_KEY` 与 `SETUP_TOKEN` 使用 Wrangler secrets，不写入 vars 或客户端 bundle。
 
 例如（命令只设置当前 Cloudflare 项目的 Secret，不会由本地构建执行）：
 

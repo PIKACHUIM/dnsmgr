@@ -22,9 +22,12 @@ Hono 公共核心负责请求路由、认证和业务服务。DNS 驱动、证�
 - D1 和 Turso SQL 适配、版本迁移、协调租约和 fencing。
 - `map` 快照与 `key` 不可变实体、单键 CAS 写/删与分页索引；活动版本由 SQL 指针发布。
 - Cloudflare KV/R2、EdgeOne Blob、ESA EdgeKV 适配。平台适配测试使用本地替身，尚未连接真实云资源。
+- DNS 账户、域名同步与解析记录 CRUD（Cloudflare / 阿里云 / 腾讯云 DNSPod），凭据 AES-GCM 加密，写操作审计入库。
 - 旧 PHP 路由、控制器分派、提供方注册与模板调用清单。
 
-尚未完成：Makers Node Function 的 KV bridge、格式/驱动导出导入和故障恢复/回收工具、验证码与快捷登录、所有 DNS/Cloudflare 业务接口、证书与任务、执行器、完整业务界面及上游定期同步 CI。
+尚未完成：Makers Node Function 的 KV bridge、格式/驱动导出导入和故障恢复/回收工具、验证码与快捷登录、其余 19 个 DNS 驱动与批量/分类/日志功能、Cloudflare SaaS 与 Tunnel、证书与任务、执行器、完整业务界面及上游定期同步 CI。
+
+> Cloudflare Workers 已部署用于验证基础链路，但 DNS 业务尚未在真实服务商凭据下做线上冒烟；Makers 与 ESA 未部署。
 
 ## 项目结构
 

@@ -47,7 +47,7 @@ function budgetedBlob(adapter: BlobAdapter | undefined, budget: RequestBudget): 
 
 export function environment(bindings: Bindings, platform: Platform) {
   const policy = runtime(platform);
-  const budget = createRequestBudget(policy);
+  const budget = bindings.BUDGET ?? createRequestBudget(policy);
   return {
     DB: bindings.DB,
     KV: budgetedKv(bindings.KV, budget),

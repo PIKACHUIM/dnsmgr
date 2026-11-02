@@ -338,3 +338,27 @@ a.button:hover { text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* DNS 业务页面 */
+.dns-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 8px; }
+.dns-form .form-field { display: flex; flex-direction: column; gap: 7px; margin: 0; }
+.dns-form .form-field > span { font-size: var(--font-sm); font-weight: 500; }
+.dns-form input,
+.dns-form select { width: 100%; min-height: 44px; padding: 9px 12px; font-size: 15px; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-control-border); border-radius: var(--radius-sm); }
+.dns-form input:focus,
+.dns-form select:focus { border-color: var(--color-accent); }
+.form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.form-actions span { color: var(--color-muted); font-size: var(--font-xs); }
+.dns-search { display: flex; gap: 10px; margin-bottom: 14px; max-width: 420px; }
+.dns-search input { flex: 1; min-height: 40px; padding: 7px 11px; border: 1px solid var(--color-control-border); border-radius: var(--radius-sm); background: var(--color-surface); font-size: var(--font-sm); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--font-sm); min-width: 640px; }
+.data-table th,
+.data-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+.data-table th { background: var(--color-subtle); font-size: var(--font-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--color-muted); font-weight: 600; white-space: nowrap; }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover { background: var(--color-accent-soft); }
+.record-value { max-width: 320px; word-break: break-all; font-family: var(--font-mono); font-size: var(--font-xs); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; white-space: nowrap; }
+.pagination { display: flex; align-items: center; gap: 12px; margin-top: 14px; color: var(--color-muted); font-size: var(--font-xs); }
+.page-tools { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; color: var(--color-muted); font-size: var(--font-sm); }

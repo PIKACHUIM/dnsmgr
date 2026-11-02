@@ -5,6 +5,7 @@ export interface NavigationItem {
   label: string;
   scope: string;
   capability?: Capability;
+  implemented?: boolean;
 }
 
 export interface NavigationGroup {
@@ -15,11 +16,11 @@ export interface NavigationGroup {
 
 export const navigation: NavigationGroup[] = [
   { label: '工作空间', items: [
-    { path: '/', label: '后台首页', scope: '运行环境、会话与迁移状态' },
-    { path: '/domain', label: '域名管理', scope: '域名、解析记录、批量操作与记录日志', capability: 'dns' },
+    { path: '/', label: '后台首页', scope: '运行环境、会话与迁移状态', implemented: true },
+    { path: '/domain', label: '域名管理', scope: '域名、解析记录与平台同步', capability: 'dns', implemented: true },
   ] },
   { label: '域名配置', adminOnly: true, items: [
-    { path: '/account', label: '域名账户', scope: 'DNS 服务商账户与访问凭证', capability: 'dns' },
+    { path: '/account', label: '域名账户', scope: 'DNS 服务商账户与访问凭证', capability: 'dns', implemented: true },
     { path: '/domain/category', label: '域名分类', scope: '域名分类与分组管理', capability: 'dns' },
   ] },
   { label: '容灾与调度', adminOnly: true, items: [
@@ -58,6 +59,11 @@ export function resolvePage(path: string, level: number) {
   const visibleItems = visibleGroups.flatMap((group) => group.items);
   const exact = visibleItems.find((item) => item.path === path);
   if (exact) return { item: exact, group: visibleGroups.find((group) => group.items.includes(exact))!.label };
+  if (/^\/record\/\d+$/.test(path)) {
+    const domainItem = visibleItems.find((item) => item.path === '/domain')!;
+    const item: NavigationItem = { path, label: '解析记录', scope: '域名解析记录的查询与变更', capability: 'dns', implemented: true };
+    return { item, group: visibleGroups.find((group) => group.items.includes(domainItem))!.label };
+  }
   const parent = visibleItems
     .filter((item) => item.path !== '/' && path.startsWith(`${item.path}/`))
     .sort((first, second) => second.path.length - first.path.length)[0];

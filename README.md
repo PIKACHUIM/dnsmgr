@@ -32,18 +32,20 @@
 | --- | --- |
 | Wave 1：三平台工程与兼容基线 | 已完成本地构建和基础路由验证 |
 | Wave 2：存储与安全 | SQL、事务、租约 fencing、map/key 不可变版本、key 增量写删/分页、安装/会话/CSRF/TOTP、CF KV/R2、ESA EdgeKV、Makers Blob 已接入并通过本地假绑定测试；Makers KV bridge、恢复回收、格式切换、验证码与快捷登录仍待完成 |
-| Wave 3：DNS/Cloudflare | 22 个 DNS 驱动及账户、域名、解析、SaaS/Tunnel 业务尚待移植 |
+| Wave 3：DNS/Cloudflare | 已接入 Cloudflare、阿里云、腾讯云 DNSPod 三个驱动，以及账户、域名、解析记录的新增/修改/删除/启停/备注；数据表见 `migrations/0002_dns.sql`。其余 19 个 DNS 驱动、域名分类/批量操作/记录日志、Cloudflare SaaS 与 Tunnel 业务仍待移植 |
 | Wave 4：任务/SSL/通知/执行器 | 尚待移植；9 个证书实现文件、51 个部署驱动不等于已实现 TS 驱动 |
-| Wave 5：前端 | 安装、登录和会话控制台可用；51 个旧模板的完整业务功能尚待移植 |
+| Wave 5：前端 | 安装、登录、会话控制台、域名账户、域名列表、解析记录页面可用；其余 51 个旧模板对应模块仍显示迁移占位 |
 | Wave 6：同步与最终交付 | 本地 PHP 差异扫描可用；定期上游同步 CI、完整部署与回滚验收尚待完成 |
 
-继续开发时先完成 Makers Edge Function 的受认证 KV bridge、恢复/格式切换工具及验证码/快捷登录等安装辅助流程，再推进 Wave 3。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
+继续开发时先补齐剩余 DNS 驱动（`src/dns/registry.ts` 的 `unportedProviders` 列表）与域名分类、批量操作，再推进 Wave 4。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
 
-新界面仅显示真实运行环境与迁移状态，不伪造域名、证书或任务数据。旧 API 的 POST 表单 `uid/timestamp/sign` 验签中间件已验证，但对应 DNS/证书业务 API 尚未开放。未知 API、`/quicklogin`、`/cron` 不会被 SPA HTML 兜底吞掉。
+新界面仅显示真实运行环境与迁移状态，不伪造域名、证书或任务数据。域名账户、域名与解析记录直接调用服务商 API，凭据以 AES-GCM 加密存储（用途绑定账户 ID），写入前校验平台凭据；未移植的驱动会明确返回“尚未移植”，不会静默降级。未知 API、`/quicklogin`、`/cron` 不会被 SPA HTML 兜底吞掉。
 
 ### VitePress 文档站
 
-文档站源码位于 `docs/`，使用 VitePress 构建为独立静态站。项目根目录已提供 `/guide/` 配置与使用说明。构建基路径固定为 `/`：部署到 `https://docs.example.com/` 后页面资源会请求 `https://docs.example.com/assets/...`，不会添加 `/dnsmgr/` 仓库路径。发布时将 `docs/.vitepress/dist/` 的内容复制到站点 Web 根目录；如平台只提供 GitHub repository 子路径，则不满足该 URL 约束，应先配置独立自定义域名/根路径站点。文档站应部署到独立站点或域名，不能与 DNS Worker 一同写入同一个 `dist/public`。
+文档站源码位于 `docs/`，使用 VitePress 构建为独立静态站，由 `.github/workflows/docs.yml` 自动构建并发布到 **GitHub Pages**，不部署到 Cloudflare。构建基路径固定为 `/`：站点根为 `https://docs.example.com/` 时页面资源请求 `https://docs.example.com/assets/...`，不会出现 `/dnsmgr/` 仓库路径。
+
+因此 GitHub Pages 必须先绑定自定义域名（Settings → Pages → Custom domain）。工作流会在缺少自定义域名时直接失败，避免发布出 `/<repo>/assets/...` 这类坏链接。触发条件为推送到 `main` 且改动 `docs/`、`scripts/docs/` 或依赖清单，也可手动 `workflow_dispatch`。文档站产物不得写入 DNS 应用的 `dist/*/public`，两套站点互不覆盖。
 
 ```bash
 npm run docs:dev
@@ -94,9 +96,9 @@ npm run audit:dependencies
 | EdgeOne Makers | `cloud-functions/index.js`、`cloud-functions/[[default]].js` 引用构建产物 `_worker.mjs` / `edgeone.json` | `dist/edgeone/public` |
 | 阿里云 ESA | `dist/esa/worker.mjs` / `esa.jsonc`；`fetch(request, context, env)` 第三个参数读取变量 | `dist/esa/public` |
 
-只托管新 `public` 产物，不上传旧 `public/`、PHP、SQL、配置或 Worker 文件作为静态资源。不配置全局 SPA fallback；页面 shell 由 Hono 在受控页面路径返回。当前只完成本地标准 Request/Response 测试和打包，**未验证三家真实云环境、套餐 CPU 配额或持久化绑定，也未部署**。
+只托管新 `public` 产物，不上传旧 `public/`、PHP、SQL、配置或 Worker 文件作为静态资源。不配置全局 SPA fallback；页面 shell 由 Hono 在受控页面路径返回。Cloudflare Workers 已部署到 `dnsmgrui-work`（D1 `dnsmgrui-data`）；**尚未验证套餐 CPU 配额，Makers 与 ESA 仍未部署**。
 
-应用支持 D1/Turso 协调 SQL。Cloudflare 需配置 `DB` D1 绑定并执行 `migrations/0001_core.sql`；Makers/ESA 配置 `TURSO_DATABASE_URL`、`TURSO_AUTH_TOKEN`，并在独立 SQLite/libSQL 库执行迁移。D1 必须提供稳定的 `COORDINATOR_ID`，初始化后用于识别库身份；不要随意复用同一标识指向不同数据库。Cloudflare 对象模式的绑定名分别为 `KV` 与 `BUCKET`（R2），并设置相应稳定的 `PAYLOAD_STORE_ID`；ESA 的 EdgeKV 使用 `ESA_KV_NAMESPACE`。Makers Blob 设置 `BLOB_NAMESPACE`，Node Function 暂无 KV bridge。平台 secrets 至少包括 32 字节 Base64 `APP_KEY` 和不少于 32 字符的 `SETUP_TOKEN`；可设置 `PUBLIC_ORIGIN` 固定站点来源。不要把 Token、密码或主密钥放入 `VITE_*` 或前端代码。
+应用支持 D1/Turso 协调 SQL。Cloudflare 需配置 `DB` D1 绑定并依次执行 `migrations/0001_core.sql`、`migrations/0002_dns.sql`；Makers/ESA 配置 `TURSO_DATABASE_URL`、`TURSO_AUTH_TOKEN`，并在独立 SQLite/libSQL 库执行同样的迁移。D1 必须提供稳定的 `COORDINATOR_ID`，初始化后用于识别库身份；不要随意复用同一标识指向不同数据库。DNS 账户/域名/审计表目前只在 `DB_FORMAT=sql` 下可用，其他格式会明确返回 501。Cloudflare 对象模式的绑定名分别为 `KV` 与 `BUCKET`（R2），并设置相应稳定的 `PAYLOAD_STORE_ID`；ESA 的 EdgeKV 使用 `ESA_KV_NAMESPACE`。Makers Blob 设置 `BLOB_NAMESPACE`，Node Function 暂无 KV bridge。平台 secrets 至少包括 32 字节 Base64 `APP_KEY` 和不少于 32 字符的 `SETUP_TOKEN`；可设置 `PUBLIC_ORIGIN` 固定站点来源。不要把 Token、密码或主密钥放入 `VITE_*` 或前端代码。
 
 存储契约为 `DB_DRIVER=d1|turso|kv|blob|auto` 与 `DB_FORMAT=sql|map|key`。`map` 整对象与 `key` 逐实体格式使用不可变快照/实体键，活动版本仅由 SQL 协调库 fencing + CAS 指针发布；所有数据读取均校验版本与 SHA-256 摘要。对象驱动还须提供稳定的 `PAYLOAD_STORE_ID`（ESA 默认使用 KV namespace 标识），Blob 命名空间可用 `BLOB_NAMESPACE` 指定。驱动、格式或任一存储标识变化都视为不同数据集；需要显式迁移工具，目前尚未提供。
 
@@ -116,7 +118,7 @@ node scripts/compat/diff.mjs --php-root ../dnsmgr-upstream
 
 参数必须指向已准备好的上游 PHP 源码；此命令只读比较，不拉取远程、不修改 TS 或基线。发现差异后先审核业务语义、移植并补测试，再显式运行 `npm run compat:generate` 更新基线。不得把未知 PHP 语法静默跳过或将自动差异检测当成自动跨语言合并。
 
-本次执行边界：不修改参考仓库、不改生产 DNS/数据库、不创建线上资源、不部署。代码变更按用户要求提交并推送；推送不会自动部署生产环境。原 PHP Docker 工作流仍只用于原 PHP 版本。
+本次执行边界：未修改参考仓库与旧 PHP。按用户要求创建了 Cloudflare D1 `dnsmgrui-data` 与 Worker `dnsmgrui-work` 并完成部署，执行了 `0001`/`0002` 迁移；未修改任何真实 DNS 解析，Makers 与 ESA 仍未部署。原 PHP Docker 工作流仍只用于原 PHP 版本。
 
 ### VitePress 文档站
 

@@ -61,6 +61,15 @@ export function post<T>(path: string, body: Record<string, string>, signal: Abor
   });
 }
 
+export function send<T>(path: string, method: string, body: unknown, signal: AbortSignal, headers: Record<string, string> = {}) {
+  return request<T>(path, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal,
+  });
+}
+
 export function readSession(value: Session): Session {
   if (!value.user || typeof value.user.username !== 'string' || typeof value.user.level !== 'number'
     || typeof value.user.id !== 'number' || typeof value.csrfToken !== 'string' || !value.csrfToken) {

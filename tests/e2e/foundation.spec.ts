@@ -37,8 +37,11 @@ test('initialization, login, session restore, responsive navigation and logout',
       await expect(open).toBeFocused();
     }
   }
+  await page.goto('/account');
+  await expect(page.getByRole('heading', { name: '添加 DNS 账户' })).toBeVisible();
   await page.goto('/record/1000');
-  await expect(page.getByRole('heading', { name: '此模块尚未移植' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '解析记录', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('link', { name: '返回域名列表' })).toBeVisible();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();

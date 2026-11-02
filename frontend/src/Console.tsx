@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { ApiError, errorMessage, request, type Bootstrap, type Session } from './api';
 import { Brand, Icon } from './icons';
 import { navigation, resolvePage, type Capability } from './navigation';
+import { DnsAccounts } from './DnsAccounts';
+import { DnsDomains } from './DnsDomains';
+import { DnsRecords } from './DnsRecords';
 
 interface ConsoleProps {
   session: Session;
@@ -32,6 +35,8 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   const groups = navigation.filter((group) => !group.adminOnly || level === 2);
   const page = resolvePage(path, level);
   const home = path === '/';
+  const recordMatch = /^\/record\/(\d+)$/.exec(path);
+  const implemented = page.item.implemented === true;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -149,7 +154,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
       <nav aria-label="功能分组" className="sidebar-nav">
         {groups.map((group) => <section className="nav-group" key={group.label}>
           <h2>{group.label}</h2>
-          <ul>{group.items.map((item) => <li key={item.path}><a href={item.path} className={page.item.path === item.path ? 'active' : ''} aria-current={page.item.path === item.path ? 'page' : undefined} onClick={(event) => followLink(event, item.path)}><span>{item.label}</span>{item.path !== '/' && <span className="nav-pending" aria-label="待移植">待移植</span>}</a></li>)}</ul>
+          <ul>{group.items.map((item) => <li key={item.path}><a href={item.path} className={page.item.path === item.path ? 'active' : ''} aria-current={page.item.path === item.path ? 'page' : undefined} onClick={(event) => followLink(event, item.path)}><span>{item.label}</span>{item.path !== '/' && !item.implemented && <span className="nav-pending" aria-label="待移植">待移植</span>}</a></li>)}</ul>
         </section>)}
       </nav>
       <div className="sidebar-footer"><span className="sidebar-avatar" aria-hidden="true">{session.user.username.slice(0, 1).toUpperCase()}</span><div><strong>{session.user.username}</strong><small>{level === 2 ? '管理员' : '用户'} · 已登录</small></div></div>
@@ -160,17 +165,20 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
         <div className="topbar-actions"><span className="session-label"><Icon name="shield" />安全会话</span><button className="button button-quiet logout-button" disabled={loggingOut} onClick={logout}><Icon name="logout" />{loggingOut ? '正在退出…' : '退出登录'}</button></div>
       </header>
       <main id="main-content" className="main-content" tabIndex={-1}>
-        <div className="page-heading"><div><div className="section-kicker">{home ? '工作空间 / WORKSPACE' : '功能模块 / MODULE'}</div><h1 ref={contentTitle} tabIndex={-1}>{page.item.label}</h1><p>{home ? '查看当前运行环境、会话与功能迁移状态。' : page.item.scope}</p></div><span className="phase-badge">{home ? '基础阶段' : '待移植'}</span></div>
+        <div className="page-heading"><div><div className="section-kicker">{home ? '工作空间 / WORKSPACE' : '功能模块 / MODULE'}</div><h1 ref={contentTitle} tabIndex={-1}>{page.item.label}</h1><p>{home ? '查看当前运行环境、会话与功能迁移状态。' : page.item.scope}</p></div><span className="phase-badge">{home ? 'DNS 已接入' : implemented ? '运行中' : '待移植'}</span></div>
         {logoutError && <div className="notice notice-error" role="alert"><strong>退出未完成</strong><span>{logoutError} 可再次点击退出登录重试。</span></div>}
         {loadError && <div className="notice notice-error with-action" role="alert"><div><strong>运行环境加载失败</strong><span>{loadError}</span></div><button className="button button-secondary" onClick={() => setRetry((value) => value + 1)}>重新加载</button></div>}
         {home ? <>
-          <section className="foundation-banner" aria-labelledby="foundation-title"><div className="foundation-index mono">01—02</div><div><h2 id="foundation-title">基础服务已接入，业务模块尚待移植</h2><p>本阶段提供安装、登录与会话控制台。不展示模拟域名、证书或任务数据，也不执行 DNS 变更。</p></div><Icon name="shield" /></section>
+          <section className="foundation-banner" aria-labelledby="foundation-title"><div className="foundation-index mono">03</div><div><h2 id="foundation-title">DNS 账户与解析记录已接入</h2><p>可在「域名账户」「域名管理」中配置真实服务商凭据并读写解析记录；证书、容灾、任务与执行器仍待移植。</p></div><Icon name="shield" /></section>
           <div className="overview-grid">
             <section className="panel environment-panel" aria-labelledby="environment-title"><div className="panel-heading"><div><Icon name="server" /><h2 id="environment-title">运行环境</h2></div><span className="panel-meta">来自服务端</span></div>{loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取运行环境…</div> : bootstrap ? <dl className="data-list"><div><dt>运行平台</dt><dd className="mono">{bootstrap.runtime.platform}</dd></div><div><dt>存储驱动</dt><dd className="mono">{bootstrap.runtime.storage.driver}</dd></div><div><dt>存储格式</dt><dd className="mono">{bootstrap.runtime.storage.format}</dd></div><div><dt>迁移阶段</dt><dd><span className="data-badge mono">{bootstrap.migration.stage}</span></dd></div></dl> : <div className="panel-empty">环境数据不可用，请重新加载。</div>}<div className="panel-footnote">数据来源 <code>/api/v1/bootstrap</code></div></section>
             <section className="panel session-panel" aria-labelledby="session-title"><div className="panel-heading"><div><Icon name="lock" /><h2 id="session-title">当前会话</h2></div><span className="data-badge">已验证</span></div><dl className="data-list"><div><dt>用户名</dt><dd>{session.user.username}</dd></div><div><dt>账户角色</dt><dd>{level === 2 ? '管理员' : '用户'}<span className="value-detail mono">LEVEL {level}</span></dd></div><div><dt>会话存储</dt><dd>服务端 Cookie</dd></div><div><dt>请求保护</dt><dd>CSRF 令牌<span className="value-detail">仅保存在内存中</span></dd></div></dl><div className="panel-footnote">不会在浏览器本地存储用户名、密码或会话令牌。</div></section>
           </div>
-          <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">功能迁移状态</h2></div><span className="panel-meta">不是业务统计</span></div><div className="capability-table" role="table" aria-label="后端能力状态"><div className="capability-row capability-header" role="row"><span role="columnheader">模块</span><span role="columnheader">后端能力</span><span role="columnheader">当前前端</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{capabilityNames[key]}</strong><span role="cell">{loading ? '读取中…' : bootstrap ? bootstrap.capabilities[key] ? '已声明可用' : '未开放' : '未知'}</span><span role="cell"><span className="status-label"><span className="status-dot" />待移植</span></span></div>)}</div><div className="panel-footnote">后端能力不等于页面已完成。左侧保留旧路径，仅提供对应模块的移植说明。</div></section>
-        </> : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">模块状态 / NOT MIGRATED</span><h2 id="module-state-title">此模块尚未移植</h2><p>已保留「{page.item.label}」的导航入口与访问路径。当前页面只说明迁移边界，不提供业务查询、配置或执行操作。</p><dl className="module-details"><div><dt>当前路径</dt><dd><code>{path}</code></dd></div><div><dt>功能范围</dt><dd>{page.item.scope}</dd></div><div><dt>后端能力</dt><dd>{loading ? '正在读取…' : !bootstrap ? '读取失败，状态未知' : page.item.capability ? `${capabilityNames[page.item.capability]}：${bootstrap.capabilities[page.item.capability] ? '已声明可用，页面仍待移植' : '未开放'}` : '基础阶段未提供此功能的业务接口'}</dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>返回后台首页<Icon name="arrow" /></a><span>不会调用旧接口或产生业务变更。</span></div></section>}
+          <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">功能迁移状态</h2></div><span className="panel-meta">不是业务统计</span></div><div className="capability-table" role="table" aria-label="后端能力状态"><div className="capability-row capability-header" role="row"><span role="columnheader">模块</span><span role="columnheader">后端能力</span><span role="columnheader">当前前端</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{capabilityNames[key]}</strong><span role="cell">{loading ? '读取中…' : bootstrap ? bootstrap.capabilities[key] ? '已声明可用' : '未开放' : '未知'}</span><span role="cell"><span className="status-label"><span className="status-dot" />{key === 'dns' ? '已上线' : '待移植'}</span></span></div>)}</div><div className="panel-footnote">后端能力不等于页面已完成。左侧保留旧路径，仅提供对应模块的移植说明。</div></section>
+        </> : path === '/account' && level === 2 ? <DnsAccounts session={session} onExpired={onExpired} />
+          : path === '/domain' ? <DnsDomains session={session} navigate={navigate} onExpired={onExpired} />
+            : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />
+              : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">模块状态 / NOT MIGRATED</span><h2 id="module-state-title">此模块尚未移植</h2><p>已保留「{page.item.label}」的导航入口与访问路径。当前页面只说明迁移边界，不提供业务查询、配置或执行操作。</p><dl className="module-details"><div><dt>当前路径</dt><dd><code>{path}</code></dd></div><div><dt>功能范围</dt><dd>{page.item.scope}</dd></div><div><dt>后端能力</dt><dd>{loading ? '正在读取…' : !bootstrap ? '读取失败，状态未知' : page.item.capability ? `${capabilityNames[page.item.capability]}：${bootstrap.capabilities[page.item.capability] ? '已声明可用，页面仍待移植' : '未开放'}` : '基础阶段未提供此功能的业务接口'}</dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>返回后台首页<Icon name="arrow" /></a><span>不会调用旧接口或产生业务变更。</span></div></section>}
         <footer className="workspace-footer"><span>聚合 DNS 管理系统</span><span>安装 · 认证 · 会话基础 <span className="mono">/ FOUNDATION</span></span></footer>
       </main>
     </div>
