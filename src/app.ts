@@ -13,6 +13,7 @@ import { publicUser } from './core/request';
 import { requireSession } from './security/auth';
 import { authRoutes } from './routes/auth';
 import { dnsRoutes } from './routes/dns';
+import { cloudflareRoutes } from './routes/cloudflare';
 
 declare const __APP_SHELL__: string;
 const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
@@ -63,6 +64,7 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
   app.get('/health', (c) => c.json({ code: 0, service: 'dnsmgr-serverless', stage: 'foundation' }));
   app.route('/', authRoutes());
   app.route('/', dnsRoutes());
+  app.route('/', cloudflareRoutes());
   app.get('/api/v1/bootstrap', requireSession, (c) => {
     const storage = c.get('storage').config;
     return c.json({

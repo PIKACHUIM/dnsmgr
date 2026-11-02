@@ -54,11 +54,23 @@ export const navigation: NavigationGroup[] = [
   ] },
 ];
 
-export function resolvePage(path: string, level: number) {
+export function resolvePage(path: string, level: number): { item: NavigationItem; group: string } {
   const visibleGroups = navigation.filter((group) => !group.adminOnly || level === 2);
   const visibleItems = visibleGroups.flatMap((group) => group.items);
   const exact = visibleItems.find((item) => item.path === path);
   if (exact) return { item: exact, group: visibleGroups.find((group) => group.items.includes(exact))!.label };
+  if (/^\/cloudflare\/hostnames\/\d+$/.test(path) && level === 2) {
+    return {
+      item: { path, label: 'Cloudflare 自定义主机名', scope: 'SaaS 主机名、证书验证与 Fallback Origin', capability: 'dns', implemented: true },
+      group: '域名配置',
+    };
+  }
+  if (/^\/cloudflare\/tunnels\/\d+$/.test(path) && level === 2) {
+    return {
+      item: { path, label: 'Cloudflare Tunnels', scope: 'Tunnel、公网主机名与 Zero Trust 路由', capability: 'dns', implemented: true },
+      group: '域名配置',
+    };
+  }
   if (/^\/record\/\d+$/.test(path)) {
     const domainItem = visibleItems.find((item) => item.path === '/domain')!;
     const item: NavigationItem = { path, label: '解析记录', scope: '域名解析记录的查询与变更', capability: 'dns', implemented: true };

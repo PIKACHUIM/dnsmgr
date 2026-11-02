@@ -205,6 +205,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     <div className="page-tools">
       <a className="button button-secondary" href="/domain" onClick={(event) => { event.preventDefault(); navigate('/domain'); }}>返回域名列表</a>
       <button className="button button-secondary" type="button" disabled={logsLoading} onClick={() => void loadLogs()}>{logsLoading ? '读取日志…' : '服务商操作日志'}</button>
+      {domain?.accountType === 'cloudflare' && session.user.level === 2 && <a className="button button-secondary" href={`/cloudflare/hostnames/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/cloudflare/hostnames/${domainId}`); }}>自定义主机名</a>}
       {domain && <span className="mono">{domain.name} · {domain.accountName}（{domain.accountType}）</span>}
     </div>
     {error && <div className="notice notice-error" role="alert">{error}</div>}

@@ -358,6 +358,8 @@ a.button:hover { text-decoration: none; }
 .dns-batch { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-subtle); }
 .dns-batch select,
 .dns-batch input { min-height: 36px; padding: 6px 10px; border: 1px solid var(--color-control-border); border-radius: var(--radius-sm); background: var(--color-surface); font-size: var(--font-sm); }
+.route-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.route-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 .table-wrap { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 .data-table { width: 100%; border-collapse: collapse; font-size: var(--font-sm); min-width: 640px; }
 .data-table th,

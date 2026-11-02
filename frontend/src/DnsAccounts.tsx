@@ -144,7 +144,7 @@ export function DnsAccounts({ session, onExpired }: Props) {
               <td className="mono">{account.type}</td>
               <td>{account.domainCount}</td>
               <td>{account.remark ?? '—'}</td>
-              <td className="row-actions"><button className="button button-secondary" disabled={busy} onClick={() => void sync(account)}>同步域名</button><button className="button button-quiet" disabled={busy} onClick={() => void remove(account)}>删除</button></td>
+              <td className="row-actions">{account.type === 'cloudflare' && <a className="button button-secondary" href={`/cloudflare/tunnels/${account.id}`}>Tunnels</a>}<button className="button button-secondary" disabled={busy} onClick={() => void sync(account)}>同步域名</button><button className="button button-quiet" disabled={busy} onClick={() => void remove(account)}>删除</button></td>
             </tr>)}</tbody>
           </table></div>}
       {unported.length > 0 && <div className="panel-footnote">尚未移植的驱动：{unported.join('、')}</div>}
