@@ -1,4 +1,4 @@
-name = "dnsmgr-serverless"
+name = "dnsmgrui-work"
 main = "dist/cloudflare/worker.mjs"
 compatibility_date = "2026-10-28"
 
@@ -11,6 +11,12 @@ run_worker_first = true
 [vars]
 DB_DRIVER = "d1"
 DB_FORMAT = "sql"
+# 初始化后不可更改；它参与存储身份校验，改动会被当作换库而拒绝。
+COORDINATOR_ID = "dnsmgrui-data"
 
-# Configure a D1 binding named DB in the target environment before deployment.
+[[d1_databases]]
+binding = "DB"
+database_name = "dnsmgrui-data"
+database_id = "7e483cab-5039-4665-b181-f1377f4265a6"
+
 # Keep APP_KEY and SETUP_TOKEN in platform secrets, not in this file.
