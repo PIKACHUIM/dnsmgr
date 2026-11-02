@@ -12,7 +12,7 @@ DnsMgr 原版是 ThinkPHP + PHP + MySQL 的 DNS 管理系统。当前仓库正�
 | EdgeOne Makers | Node Cloud Function | Turso/libSQL | Makers Blob；Node Function 尚无原生 KV bridge |
 | 阿里云 ESA | Edge Routine `fetch(request, context, env)` | Turso/libSQL | EdgeKV |
 
-Hono 公共核心负责请求路由、认证和业务服务。DNS 驱动、域名分类、批量操作与操作日志已实现，但域名别名、URL 转发、证书、定时/容灾任务、通知、执行器以及相关管理页面仍在迁移中。
+Hono 公共核心负责请求路由、认证和业务服务。DNS 驱动、域名分类、批量操作与操作日志已实现，但 DNSPod 域名别名、证书、定时/容灾任务、通知、执行器以及相关管理页面仍在迁移中。
 
 ## 当前能力
 
@@ -25,7 +25,7 @@ Hono 公共核心负责请求路由、认证和业务服务。DNS 驱动、域�
 - DNS 账户、域名同步与解析记录 CRUD，22 个服务商驱动已全部实现（Cloudflare、阿里云、DNSPod、EdgeOne、阿里云 ESA、Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium）；凭据 AES-GCM 加密，写操作审计入库。驱动目前仅有本地请求构造单测，未经真实凭据冒烟。
 - 旧 PHP 路由、控制器分派、提供方注册与模板调用清单。
 
-尚未完成：Makers Node Function 的 KV bridge、格式/驱动导出导入和故障恢复/回收工具、验证码与快捷登录、域名别名与 URL 转发、证书与任务、执行器、完整业务界面及上游定期同步 CI。
+尚未完成：Makers Node Function 的 KV bridge、格式/驱动导出导入和故障恢复/回收工具、验证码与快捷登录、DNSPod 域名别名、证书与任务、执行器、完整业务界面；上游定期同步 CI 仍待完善。
 
 > Cloudflare Workers 已部署用于验证基础链路，但 DNS 业务尚未在真实服务商凭据下做线上冒烟；Makers 与 ESA 未部署。
 

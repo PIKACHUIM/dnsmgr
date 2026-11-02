@@ -1,4 +1,4 @@
-export const RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'URL'] as const;
+export const RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'URL', 'REDIRECT_URL', 'FORWARD_URL'] as const;
 export type RecordType = (typeof RECORD_TYPES)[number];
 
 export interface DnsLine {

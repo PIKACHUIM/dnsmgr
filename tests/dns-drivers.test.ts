@@ -19,6 +19,7 @@ import { createTechnitiumProvider } from '../src/dns/providers/technitium';
 import { createTencentEoProvider } from '../src/dns/providers/tencenteo';
 import { createWestProvider } from '../src/dns/providers/west';
 import { createAliyunEsaProvider } from '../src/dns/providers/aliyunesa';
+import { createDnspodProvider } from '../src/dns/providers/dnspod';
 
 interface Call { url: string; init: RequestInit; body: string }
 
@@ -346,5 +347,28 @@ describe('HE.net drive', () => {
     const page = await provider.listRecords({ ...zone, id: '55' }, { page: 1, pageSize: 20 });
     expect(page.items[0]).toMatchObject({ id: 'r-1', name: 'www', type: 'A', value: '1.1.1.1', ttl: 600 });
     await expect(provider.setRecordStatus(zone, 'r-1', false)).rejects.toBeInstanceOf(DnsError);
+  });
+});
+
+describe('URL forwarding types', () => {
+  it('maps explicit and implicit redirects for DNSPod', async () => {
+    const { calls, implementation } = fakeFetch(() => ({ body: { Response: { RecordId: 9 } } }));
+    const provider = createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, implementation);
+    await provider.addRecord(zone, { ...input, type: 'REDIRECT_URL', value: 'https://example.com' });
+    expect(JSON.parse(calls[0]!.body)).toMatchObject({ RecordType: '显性URL', Value: 'https://example.com' });
+    await provider.addRecord(zone, { ...input, type: 'FORWARD_URL', value: 'https://example.com' });
+    expect(JSON.parse(calls[1]!.body)).toMatchObject({ RecordType: '隐性URL' });
+  });
+
+  it('reads DNSLA URL rows as explicit or implicit based on dominant', async () => {
+    const { implementation } = fakeFetch((call) => call.url.includes('recordList')
+      ? { body: { code: 200, data: { results: [
+        { id: 'r1', host: 'a', type: 256, data: 'https://a.example', lineId: '0', ttl: 600, dominant: true },
+        { id: 'r2', host: 'b', type: 256, data: 'https://b.example', lineId: '0', ttl: 600, dominant: false },
+      ], total: 2 } } }
+      : { body: { code: 200, data: [] } });
+    const provider = createDnslaProvider({ apiid: 'id', apisecret: 'secret' }, implementation);
+    const page = await provider.listRecords({ ...zone, id: '42' }, { page: 1, pageSize: 20 });
+    expect(page.items.map((item) => item.type)).toEqual(['REDIRECT_URL', 'FORWARD_URL']);
   });
 });

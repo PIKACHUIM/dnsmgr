@@ -15,11 +15,12 @@ const BASE = 'https://api.dns.la';
 
 /** DNSLA 使用数字化类型编号，256 表示 URL 转发。 */
 const TYPE_BY_ID: Record<number, string> = {
-  1: 'A', 2: 'NS', 5: 'CNAME', 15: 'MX', 16: 'TXT', 28: 'AAAA', 33: 'SRV', 257: 'CAA', 256: 'URL',
+  1: 'A', 2: 'NS', 5: 'CNAME', 15: 'MX', 16: 'TXT', 28: 'AAAA', 33: 'SRV', 257: 'CAA',
 };
-const ID_BY_TYPE: Record<string, number> = Object.fromEntries(
-  Object.entries(TYPE_BY_ID).map(([id, type]) => [type, Number(id)]),
-);
+const ID_BY_TYPE: Record<string, number> = {
+  ...Object.fromEntries(Object.entries(TYPE_BY_ID).map(([id, type]) => [type, Number(id)])),
+  URL: 256, REDIRECT_URL: 256, FORWARD_URL: 256,
+};
 
 export function createDnslaProvider(config: DnslaConfig, fetchImpl: typeof fetch = fetch): DnsProvider {
   const authorization = `Basic ${base64Encode(`${config.apiid}:${config.apisecret}`)}`;
@@ -56,10 +57,13 @@ export function createDnslaProvider(config: DnslaConfig, fetchImpl: typeof fetch
     const row = asRecord(raw);
     const numeric = num(row.type, 1);
     const line = typeof row.lineId === 'string' ? row.lineId : '';
+    const type = numeric === 256
+      ? (row.dominant === false ? 'FORWARD_URL' : 'REDIRECT_URL')
+      : TYPE_BY_ID[numeric] ?? 'A';
     return {
       id: String(row.id ?? ''),
       name: String(row.host ?? '@') || '@',
-      type: TYPE_BY_ID[numeric] ?? 'A',
+      type,
       value: String(row.data ?? ''),
       line: line === '' || line === '0' ? 'default' : line,
       ttl: num(row.ttl, 600),
@@ -123,6 +127,7 @@ export function createDnslaProvider(config: DnslaConfig, fetchImpl: typeof fetch
         lineId: lineOf(input.line),
       };
       if (input.type === 'MX') params.preference = input.mx ?? 10;
+      if (typeId(input.type) === 256) params.dominant = input.type !== 'FORWARD_URL';
       if (input.weight && input.weight > 0) params.weight = input.weight;
       const data = asRecord(await execute('POST', '/api/record', params));
       return String(data.id ?? '');
@@ -138,6 +143,7 @@ export function createDnslaProvider(config: DnslaConfig, fetchImpl: typeof fetch
         lineId: lineOf(input.line),
       };
       if (input.type === 'MX') params.preference = input.mx ?? 10;
+      if (typeId(input.type) === 256) params.dominant = input.type !== 'FORWARD_URL';
       if (input.weight && input.weight > 0) params.weight = input.weight;
       await execute('PUT', '/api/record', params);
     },

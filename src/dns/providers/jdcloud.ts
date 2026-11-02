@@ -66,14 +66,15 @@ export function createJdcloudProvider(config: JdcloudConfig, fetchImpl: typeof f
   function toRecord(raw: unknown, domain: DnsDomain): DnsRecord {
     const row = asRecord(raw);
     const type = String(row.type ?? 'A').toUpperCase();
+    const normalized = type === 'EXPLICIT_URL' ? 'REDIRECT_URL' : type === 'IMPLICIT_URL' ? 'FORWARD_URL' : type;
     const views = Array.isArray(row.viewValue) ? row.viewValue : [];
-    const value = type === 'SRV'
+    const value = normalized === 'SRV'
       ? `${num(row.mxPriority)} ${num(row.weight)} ${num(row.port)} ${String(row.hostValue ?? '')}`
       : String(row.hostValue ?? '');
     return {
       id: String(row.id ?? ''),
       name: String(row.hostRecord ?? '@') || '@',
-      type,
+      type: normalized,
       value,
       line: views.length ? String(views[views.length - 1]) : 'default',
       ttl: num(row.ttl, 600),
@@ -90,7 +91,7 @@ export function createJdcloudProvider(config: JdcloudConfig, fetchImpl: typeof f
   function recordBody(input: DnsRecordInput, withDomain: boolean): Record<string, unknown> {
     const body: Record<string, unknown> = {
       hostRecord: input.name,
-      type: input.type,
+      type: input.type === 'REDIRECT_URL' || input.type === 'URL' ? 'EXPLICIT_URL' : input.type === 'FORWARD_URL' ? 'IMPLICIT_URL' : input.type,
       hostValue: input.value,
       viewValue: input.line === 'default' ? 0 : Number(input.line) || 0,
       ttl: input.ttl,

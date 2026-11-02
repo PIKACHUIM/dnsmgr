@@ -45,7 +45,7 @@ export function createAliyunProvider(config: AliyunConfig, fetchImpl: typeof fet
     return {
       id: String(row.RecordId ?? ''),
       name: String(row.RR ?? '@'),
-      type: String(row.Type ?? 'A').replace('REDIRECT_URL', 'URL'),
+      type: String(row.Type ?? 'A'),
       value: String(row.Value ?? ''),
       line: String(row.Line ?? 'default'),
       ttl: num(row.TTL, 600),

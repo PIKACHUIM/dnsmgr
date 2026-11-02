@@ -59,7 +59,7 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
     return {
       id: String(row.RecordId ?? ''),
       name: String(row.Name ?? '@'),
-      type: String(row.Type ?? 'A'),
+      type: normalizeType(String(row.Type ?? 'A')),
       value: String(row.Value ?? ''),
       line: typeof row.LineId === 'string' && row.LineId ? row.LineId : String(row.Line ?? '0'),
       ttl: num(row.TTL, 600),
@@ -71,12 +71,24 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
     };
   }
 
+  function apiType(type: string): string {
+    if (type === 'REDIRECT_URL' || type === 'URL') return '显性URL';
+    if (type === 'FORWARD_URL') return '隐性URL';
+    return type;
+  }
+
+  function normalizeType(type: string): string {
+    if (type === '显性URL') return 'REDIRECT_URL';
+    if (type === '隐性URL') return 'FORWARD_URL';
+    return type;
+  }
+
   function recordBody(domain: DnsDomain, input: DnsRecordInput): Record<string, unknown> {
     const line = input.line || '0';
     return {
       Domain: domainName(domain),
       SubDomain: input.name,
-      RecordType: input.type,
+      RecordType: apiType(input.type),
       Value: input.value,
       RecordLine: line === '0' ? '默认' : line,
       RecordLineId: line,
@@ -120,7 +132,7 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
         Limit: query.pageSize,
       };
       if (query.name) params.Subdomain = query.name;
-      if (query.type) params.RecordType = query.type;
+      if (query.type) params.RecordType = apiType(query.type);
       if (query.value) params.Keyword = query.value;
       if (query.keyword) params.Keyword = query.keyword;
       if (query.line) params.RecordLineId = query.line;

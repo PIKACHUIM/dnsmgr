@@ -12,7 +12,8 @@ interface FormState {
 }
 interface VendorLog { time: string | null; action: string }
 
-const TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'URL'];
+const TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'URL', 'REDIRECT_URL', 'FORWARD_URL'];
+const TYPE_LABELS: { [key: string]: string } = { URL: 'URL', REDIRECT_URL: '显性URL', FORWARD_URL: '隐性URL' };
 const PAGE_SIZE = 20;
 const EMPTY: FormState = { name: '', type: 'A', value: '', line: 'default', ttl: '600', mx: '', remark: '' };
 
@@ -214,7 +215,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
       <div className="panel-heading"><div><h2 id="record-form-title">{editing ? '修改解析记录' : '添加解析记录'}</h2></div><span className="panel-meta">实时写入服务商</span></div>
       <form className="dns-form" onSubmit={submit}>
         <label className="form-field"><span>主机记录</span><input value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="@ 或 www" required maxLength={128} /></label>
-        <label className="form-field"><span>类型</span><select value={form.type} onChange={(event) => update('type', event.target.value)}>{TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+        <label className="form-field"><span>类型</span><select value={form.type} onChange={(event) => update('type', event.target.value)}>{TYPES.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}</select></label>
         <label className="form-field"><span>记录值</span><input value={form.value} onChange={(event) => update('value', event.target.value)} required maxLength={2048} placeholder="IP、目标域名或文本" /></label>
         <label className="form-field"><span>线路</span><select value={form.line} onChange={(event) => update('line', event.target.value)}>
           {lines === null
@@ -256,7 +257,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
             <tbody>{records.map((record) => <tr key={record.id}>
               <td><input type="checkbox" checked={selected.includes(record.id)} aria-label={`选择 ${record.name}`} onChange={() => toggleSelected(record.id)} /></td>
               <td className="mono">{record.name}</td>
-              <td>{record.type}</td>
+              <td>{TYPE_LABELS[record.type] ?? record.type}</td>
               <td className="record-value">{record.value}</td>
               <td>{lines?.find((line) => line.id === record.line)?.name ?? record.line}</td>
               <td>{record.ttl}</td>
@@ -281,7 +282,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
         <label className="form-field"><span>默认类型（留空自动判断）</span>
           <select value={batchType} onChange={(event) => setBatchType(event.target.value)}>
             <option value="">自动判断</option>
-            {TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+            {TYPES.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}
           </select>
         </label>
         <label className="form-field" style={{ gridColumn: '1 / -1' }}><span>记录行</span>
