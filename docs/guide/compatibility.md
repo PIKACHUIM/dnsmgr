@@ -21,7 +21,7 @@
 
 - **Wave 1**：三平台入口、Hono 公共核心、基础构建与契约扫描完成。
 - **Wave 2**：SQL/协调租约、`map`/`key` 不可变存储、单键 CAS、基本分页、安装/登录/会话、CSRF、TOTP 和平台对象适配已实现。Makers Node KV bridge、恢复与对象回收、显式格式迁移、验证码和快捷登录仍待实现。
-- **Wave 3**：22 个 DNS 驱动全部迁移（Cloudflare、阿里云、DNSPod、EdgeOne、阿里云 ESA、Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium），账户、域名、解析记录 CRUD/启停/备注、域名分类、域名/记录批量操作、本地操作日志与厂商日志（阿里云/DNSPod）、Cloudflare 自定义主机名/Fallback Origin/DCV 委派与 Tunnel（公网主机名自动 CNAME、CIDR/主机名路由）可用。驱动与 Cloudflare 扩展仅通过本地构造请求单测，尚未用真实服务商凭据冒烟；显性/隐性 URL 转发类型已接入阿里云、DNSPod、京东云、DNSLA 与 Cloudflare（URI），域名别名（DNSPod）尚未迁移。
+- **Wave 3**：22 个 DNS 驱动全部迁移（Cloudflare、阿里云、DNSPod、EdgeOne、阿里云 ESA、Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium），账户、域名、解析记录 CRUD/启停/备注、域名分类、域名/记录批量操作、本地操作日志与厂商日志（阿里云/DNSPod）、Cloudflare 自定义主机名/Fallback Origin/DCV 委派与 Tunnel（公网主机名自动 CNAME、CIDR/主机名路由）可用。驱动与 Cloudflare 扩展仅通过本地构造请求单测，尚未用真实服务商凭据冒烟；显性/隐性 URL 转发类型已接入阿里云、DNSPod、京东云、DNSLA 与 Cloudflare（URI）；DNSPod 域名别名与本地镜像表已接入。
 - **Wave 4**：定时/容灾/优选IP、证书签发与部署、通知 webhook 和自托管执行器未完整迁移。
 - **Wave 5**：登录、基础状态控制台、域名账户、域名列表与解析记录页面可用；其余旧模板对应模块仍显示迁移占位。
 - **Wave 6**：显式上游 PHP 差异扫描与 GitHub Actions `Verify` CI 可用，发布与回滚步骤见[发布与回滚](./release)；定期上游同步和真实云回滚演练尚待完善。

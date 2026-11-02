@@ -71,6 +71,11 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
       group: '域名配置',
     };
   }
+  if (/^\/record\/\d+\/alias$/.test(path)) {
+    const domainItem = visibleItems.find((item) => item.path === '/domain')!;
+    const item: NavigationItem = { path, label: '域名别名', scope: 'DNSPod 域名别名与解析共用', capability: 'dns', implemented: true };
+    return { item, group: visibleGroups.find((group) => group.items.includes(domainItem))!.label };
+  }
   if (/^\/record\/\d+$/.test(path)) {
     const domainItem = visibleItems.find((item) => item.path === '/domain')!;
     const item: NavigationItem = { path, label: '解析记录', scope: '域名解析记录的查询与变更', capability: 'dns', implemented: true };

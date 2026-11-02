@@ -372,3 +372,19 @@ describe('URL forwarding types', () => {
     expect(page.items.map((item) => item.type)).toEqual(['REDIRECT_URL', 'FORWARD_URL']);
   });
 });
+
+describe('DNSPod alias drive', () => {
+  it('lists and mutates domain aliases through the TC3 API', async () => {
+    const { calls, implementation } = fakeFetch(() => ({
+      body: { Response: { DomainAliasList: [{ Id: 11, DomainAlias: 'alias.example.com' }] } },
+    }));
+    const provider = createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, implementation);
+    expect(await provider.listDomainAliases?.(zone)).toEqual([{ id: '11', name: 'alias.example.com' }]);
+    await provider.addDomainAlias?.(zone, 'alias2.example.com');
+    await provider.deleteDomainAlias?.(zone, '11');
+    expect((calls[1]!.init.headers as Record<string, string>)['X-TC-Action']).toBe('CreateDomainAlias');
+    expect(JSON.parse(calls[1]!.body)).toMatchObject({ Domain: 'example.com', DomainAlias: 'alias2.example.com' });
+    expect((calls[2]!.init.headers as Record<string, string>)['X-TC-Action']).toBe('DeleteDomainAlias');
+    expect(JSON.parse(calls[2]!.body)).toMatchObject({ DomainAliasId: 11 });
+  });
+});

@@ -1,7 +1,7 @@
 import { asArray, asRecord, num, sendJson } from '../http';
 import { tencentAuthorization } from '../sign';
 import {
-  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordLog,
+  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordLog, type DnsDomainAlias,
   type DnsRecordInput, type PageResult, type RecordQuery,
 } from '../types';
 
@@ -184,6 +184,22 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
 
     async minTtl(): Promise<number | null> {
       return 600;
+    },
+
+    async listDomainAliases(domain): Promise<DnsDomainAlias[]> {
+      const data = await request('DescribeDomainAliasList', { Domain: domainName(domain) });
+      return asArray(data.DomainAliasList).map((raw) => {
+        const row = asRecord(raw);
+        return { id: String(row.Id ?? row.DomainAliasId ?? ''), name: String(row.DomainAlias ?? row.Name ?? '') };
+      }).filter((item) => item.id && item.name);
+    },
+
+    async addDomainAlias(domain, alias) {
+      await request('CreateDomainAlias', { Domain: domainName(domain), DomainAlias: alias });
+    },
+
+    async deleteDomainAlias(domain, aliasId) {
+      await request('DeleteDomainAlias', { Domain: domainName(domain), DomainAliasId: Number(aliasId) });
     },
 
     async recordLogs(domain, page): Promise<PageResult<DnsRecordLog>> {

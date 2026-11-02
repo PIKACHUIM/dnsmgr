@@ -153,6 +153,21 @@ function recordInput(body: Record<string, unknown>): DnsRecordInput {
   return { name, type, value, line, ttl, mx: mxRaw, weight: weightRaw, remark: remarkRaw || null };
 }
 
+async function replaceAliases(c: Context<AppEnv>, domainId: number, remote: { id: string; name: string }[]): Promise<{ id: string; name: string; remoteId: string }[]> {
+  await db(c).execute('DELETE FROM dns_domain_aliases WHERE domain_id = ?', [domainId]);
+  const now = nowSeconds();
+  for (const item of remote) {
+    await db(c).execute(
+      'INSERT INTO dns_domain_aliases (domain_id, name, remote_id, created_at) VALUES (?,?,?,?)',
+      [domainId, item.name.toLowerCase(), item.id, now],
+    );
+  }
+  const rows = await db(c).query<{ id: number; name: string; remote_id: string }>(
+    'SELECT id, name, remote_id FROM dns_domain_aliases WHERE domain_id = ? ORDER BY id', [domainId],
+  );
+  return rows.map((row) => ({ id: String(row.id), name: row.name, remoteId: row.remote_id }));
+}
+
 function recordIdsFrom(body: Record<string, unknown>): string[] {
   const raw = Array.isArray(body.recordIds) ? body.recordIds : [];
   const ids = [...new Set(raw.map((value) => String(value)))];
@@ -786,6 +801,61 @@ export function dnsRoutes() {
     try {
       const result = await provider.recordLogs(toDnsDomain(domain), { page, pageSize });
       return c.json({ code: 0, supported: true, ...result });
+    } catch (error) { providerError(error); }
+  });
+
+  routes.get('/api/v1/dns/domains/:id/aliases', requireSession, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId);
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.listDomainAliases) throw new AppError(501, '当前服务商不支持域名别名', 'DNS_ALIAS_UNSUPPORTED');
+    try {
+      const remote = await provider.listDomainAliases(toDnsDomain(domain));
+      return c.json({ code: 0, items: await replaceAliases(c, domainId, remote) });
+    } catch (error) { providerError(error); }
+  });
+
+  routes.post('/api/v1/dns/domains/:id/aliases', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    const body = await input(c);
+    const alias = text(body, 'alias', 253).trim().toLowerCase();
+    if (!DOMAIN_NAME.test(alias)) throw new AppError(400, '别名域名格式无效', 'INVALID_DOMAIN_NAME');
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.listDomainAliases || !provider.addDomainAlias) {
+      throw new AppError(501, '当前服务商不支持域名别名', 'DNS_ALIAS_UNSUPPORTED');
+    }
+    try {
+      await provider.addDomainAlias(toDnsDomain(domain), alias);
+      const remote = await provider.listDomainAliases(toDnsDomain(domain));
+      const items = await replaceAliases(c, domainId, remote);
+      await audit(c, 'alias.create', domain.name, alias);
+      return c.json({ code: 0, items });
+    } catch (error) { providerError(error); }
+  });
+
+  routes.delete('/api/v1/dns/domains/:id/aliases/:aliasId', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    const aliasId = id(c.req.param('aliasId'));
+    const rows = await db(c).query<{ id: number; name: string; remote_id: string }>(
+      'SELECT id, name, remote_id FROM dns_domain_aliases WHERE id = ? AND domain_id = ?', [aliasId, domainId],
+    );
+    const row = rows[0];
+    if (!row) throw new AppError(404, '别名不存在', 'ALIAS_NOT_FOUND');
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.deleteDomainAlias) throw new AppError(501, '当前服务商不支持域名别名', 'DNS_ALIAS_UNSUPPORTED');
+    try {
+      await provider.deleteDomainAlias(toDnsDomain(domain), row.remote_id);
+      await db(c).execute('DELETE FROM dns_domain_aliases WHERE id = ?', [aliasId]);
+      await audit(c, 'alias.delete', domain.name, row.name);
+      return c.json({ code: 0 });
     } catch (error) { providerError(error); }
   });
 

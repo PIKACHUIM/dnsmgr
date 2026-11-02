@@ -29,6 +29,11 @@ export interface DnsRecordLog {
   action: string;
 }
 
+export interface DnsDomainAlias {
+  id: string;
+  name: string;
+}
+
 export interface DnsDomain {
   id: string;
   name: string;
@@ -70,6 +75,10 @@ export interface DnsProvider {
   minTtl(domain: DnsDomain): Promise<number | null>;
   /** 可选：厂商侧解析操作日志；未实现表示平台不提供 */
   recordLogs?(domain: DnsDomain, page: { page: number; pageSize: number }): Promise<PageResult<DnsRecordLog>>;
+  /** 可选：厂商侧域名别名（多个域名共用同一套解析） */
+  listDomainAliases?(domain: DnsDomain): Promise<DnsDomainAlias[]>;
+  addDomainAlias?(domain: DnsDomain, alias: string): Promise<void>;
+  deleteDomainAlias?(domain: DnsDomain, aliasId: string): Promise<void>;
 }
 
 export class DnsError extends Error {
