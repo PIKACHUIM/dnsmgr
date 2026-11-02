@@ -409,7 +409,7 @@ export function dnsRoutes() {
     await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 120, 60);
     const { domain, account: owner } = await domainRow(c, domainId);
     const recordId = c.req.param('recordId');
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+    if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
     const inputData = recordInput(await input(c));
     const provider = await providerFor(c, owner);
     try { await provider.updateRecord(toDnsDomain(domain), recordId, inputData); } catch (error) { providerError(error); }
@@ -424,7 +424,7 @@ export function dnsRoutes() {
     await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 120, 60);
     const { domain, account: owner } = await domainRow(c, domainId);
     const recordId = c.req.param('recordId');
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+    if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
     const provider = await providerFor(c, owner);
     try { await provider.deleteRecord(toDnsDomain(domain), recordId); } catch (error) { providerError(error); }
     await audit(c, 'record.delete', domain.name, recordId);
@@ -437,7 +437,7 @@ export function dnsRoutes() {
     await requireDomain(c, domainId, true);
     const { domain, account: owner } = await domainRow(c, domainId);
     const recordId = c.req.param('recordId');
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+    if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
     const body = await input(c);
     if (typeof body.enabled !== 'boolean') throw new AppError(400, '状态参数无效', 'INVALID_STATUS');
     const provider = await providerFor(c, owner);
@@ -452,7 +452,7 @@ export function dnsRoutes() {
     await requireDomain(c, domainId, true);
     const { domain, account: owner } = await domainRow(c, domainId);
     const recordId = c.req.param('recordId');
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+    if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
     const body = await input(c);
     const remark = typeof body.remark === 'string' ? body.remark.trim().slice(0, 100) : '';
     const provider = await providerFor(c, owner);

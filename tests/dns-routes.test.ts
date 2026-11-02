@@ -106,11 +106,11 @@ describe('DNS account, domain and record API', () => {
     expect(payload.items[0]).toMatchObject({ name: 'example.com', thirdId: 'zone-1' });
   });
 
-  it('rejects unsynced or unported providers with explicit errors', async () => {
+  it('rejects unknown providers before touching storage', async () => {
     const { cookie, csrf } = await session();
     expect((await post('/api/v1/dns/accounts', {
-      type: 'aws', name: 'aws', config: { AccessKeyId: 'a', AccessKeySecret: 'b' },
-    }, { cookie, 'X-CSRF-Token': csrf })).status).toBe(501);
+      type: 'nope', name: 'nope', config: { AccessKeyId: 'a', AccessKeySecret: 'b' },
+    }, { cookie, 'X-CSRF-Token': csrf })).status).toBe(400);
 
     const audit = await testDb.db.query('SELECT * FROM audit_logs');
     expect(audit).toHaveLength(0);

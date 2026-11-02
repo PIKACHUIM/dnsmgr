@@ -3,7 +3,7 @@ import { DnsError } from '../src/dns/types';
 import { createCloudflareProvider } from '../src/dns/providers/cloudflare';
 import { createAliyunProvider } from '../src/dns/providers/aliyun';
 import { createDnspodProvider } from '../src/dns/providers/dnspod';
-import { createProvider, providerMeta, validateProviderConfig } from '../src/dns/registry';
+import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../src/dns/registry';
 
 interface Call { url: string; init: RequestInit }
 
@@ -128,10 +128,24 @@ describe('DNSPod provider', () => {
 });
 
 describe('provider registry', () => {
-  it('only advertises drivers that are actually implemented', () => {
+  it('advertises every ported driver and rejects unknown ones', () => {
     expect(providerMeta('cloudflare').supported).toBe(true);
-    expect(() => providerMeta('aws')).toThrow(/尚未移植/);
-    expect(() => createProvider('baidu', {})).toThrow(/尚未移植/);
+    expect(providerCatalog().unported).toEqual([]);
+    for (const type of [
+      'aliyun', 'aliyunesa', 'aws', 'baidu', 'bt', 'cloudflare', 'dnsla', 'dnsmgr', 'dnspod', 'dynv6',
+      'goedge', 'henet', 'huawei', 'huoshan', 'jdcloud', 'namesilo', 'powerdns', 'qingcloud', 'spaceship',
+      'technitium', 'tencenteo', 'west',
+    ]) {
+      expect(providerMeta(type).supported).toBe(true);
+    }
+    expect(() => providerMeta('nope')).toThrow(/未知/);
+    expect(() => createProvider('nope', {})).toThrow(/未知/);
     expect(() => validateProviderConfig('aliyun', { AccessKeyId: 'ak' })).toThrow(/AccessKeySecret/);
+  });
+
+  it('requires the documented fields for non-AK/SK drivers', () => {
+    expect(() => validateProviderConfig('goedge', { base_url: 'https://x' })).toThrow(/AccessKey ID/);
+    expect(() => validateProviderConfig('powerdns', { ip: '127.0.0.1', port: '8081' })).toThrow(/API Key/);
+    expect(validateProviderConfig('dynv6', { token: 't' })).toEqual({ token: 't' });
   });
 });
