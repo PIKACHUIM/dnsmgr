@@ -2,6 +2,7 @@ import { defineConfig } from 'vitepress';
 
 export default defineConfig({
   base: '/',
+  vite: { resolve: { preserveSymlinks: true } },
   lang: 'zh-CN',
   title: 'DnsMgr 文档',
   description: '彩虹聚合 DNS 管理系统：Serverless 改造、开发与部署文档。',
