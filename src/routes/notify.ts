@@ -9,6 +9,27 @@ import {
   saveNotificationSettings, sendConfiguredNotifications,
 } from '../notify/settings';
 
+function normalizeTelegramBotToken(value: string): string {
+  if (!/^\d{5,15}:[A-Za-z0-9_-]{20,128}$/.test(value)) {
+    throw new AppError(400, 'Telegram Bot Token 格式无效', 'INVALID_TELEGRAM_TOKEN');
+  }
+  return value;
+}
+
+function normalizeTelegramChatId(value: string): string {
+  if (!/^-?\d{1,20}$/.test(value) && !/^@[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value)) {
+    throw new AppError(400, 'Telegram Chat ID 格式无效', 'INVALID_TELEGRAM_CHAT_ID');
+  }
+  return value;
+}
+
+function normalizeTelegramTopicId(value: string): string {
+  if (value && (!/^\d{1,12}$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1)) {
+    throw new AppError(400, 'Telegram Topic ID 必须是正整数', 'INVALID_TELEGRAM_TOPIC_ID');
+  }
+  return value;
+}
+
 function requireSql(c: Context<AppEnv>): void {
   if (c.get('storage').config.format !== 'sql') {
     throw new AppError(501, '当前存储格式尚未支持通知设置，请使用 DB_FORMAT=sql', 'STORAGE_FORMAT_UNSUPPORTED');
@@ -40,12 +61,24 @@ export function notifyRoutes() {
       webhookBody: secretValue('body', 'clearBody', 8192, current.secrets.webhookBody),
       wxpusherAppToken: secretValue('wxpusherAppToken', 'clearWxpusherAppToken', 256, current.secrets.wxpusherAppToken),
       wxpusherUids: secretValue('wxpusherUids', 'clearWxpusherUids', 2048, current.secrets.wxpusherUids),
+      telegramBotToken: secretValue('telegramBotToken', 'clearTelegram', 256, current.secrets.telegramBotToken),
+      telegramChatId: secretValue('telegramChatId', 'clearTelegram', 128, current.secrets.telegramChatId),
+      telegramTopicId: secretValue('telegramTopicId', 'clearTelegram', 12, current.secrets.telegramTopicId),
     };
     if (typeof body.wxpusherUids === 'string' && body.wxpusherUids.trim() && body.clearWxpusherUids !== true) {
       secrets.wxpusherUids = normalizeWxPusherUids(body.wxpusherUids.trim());
     }
     if (Boolean(secrets.wxpusherAppToken) !== Boolean(secrets.wxpusherUids)) {
       throw new AppError(400, 'WxPusher AppToken 与用户 UID 必须同时配置或清除', 'INCOMPLETE_WXPUSHER_CONFIG');
+    }
+    if (typeof body.telegramTopicId === 'string' && body.telegramTopicId.trim().length > 12 && body.clearTelegram !== true) {
+      throw new AppError(400, 'Telegram Topic ID 必须是正整数', 'INVALID_TELEGRAM_TOPIC_ID');
+    }
+    if (secrets.telegramBotToken) secrets.telegramBotToken = normalizeTelegramBotToken(secrets.telegramBotToken);
+    if (secrets.telegramChatId) secrets.telegramChatId = normalizeTelegramChatId(secrets.telegramChatId);
+    secrets.telegramTopicId = normalizeTelegramTopicId(secrets.telegramTopicId);
+    if (Boolean(secrets.telegramBotToken) !== Boolean(secrets.telegramChatId)) {
+      throw new AppError(400, 'Telegram Bot Token 与 Chat ID 必须同时配置或清除', 'INCOMPLETE_TELEGRAM_CONFIG');
     }
     const method = typeof body.method === 'string' ? body.method.trim().toUpperCase() : current.method;
     const contentType = typeof body.contentType === 'string'
@@ -64,7 +97,7 @@ export function notifyRoutes() {
     await saveNotificationSettings(c, { secrets, method, contentType });
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
-      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)}`, nowSeconds()],
+      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)}`, nowSeconds()],
     );
     return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType }) });
   });
@@ -74,7 +107,7 @@ export function notifyRoutes() {
     requireAdmin(c);
     const body = await input(c);
     const settings = await loadNotificationSettings(c);
-    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken) {
+    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken) {
       throw new AppError(400, '请先配置至少一个通知渠道', 'NOTIFICATION_NOT_CONFIGURED');
     }
     const title = text(body, 'title', 100).trim() || 'DNSMGR 测试通知';

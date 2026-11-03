@@ -17,19 +17,25 @@ export interface NotificationSettings {
     webhookBody: string;
     wxpusherAppToken: string;
     wxpusherUids: string;
+    telegramBotToken: string;
+    telegramChatId: string;
+    telegramTopicId: string;
   };
   method: string;
   contentType: string;
 }
 
 export interface NotificationDelivery {
-  channel: 'webhook' | 'wxpusher';
+  channel: 'webhook' | 'wxpusher' | 'telegram';
   ok: boolean;
   status: number | null;
 }
 
 function emptySecrets(): NotificationSettings['secrets'] {
-  return { webhookUrl: '', webhookHeaders: '', webhookBody: '', wxpusherAppToken: '', wxpusherUids: '' };
+  return {
+    webhookUrl: '', webhookHeaders: '', webhookBody: '', wxpusherAppToken: '', wxpusherUids: '',
+    telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
+  };
 }
 
 function parseSecrets(value: string): NotificationSettings['secrets'] {
@@ -39,7 +45,10 @@ function parseSecrets(value: string): NotificationSettings['secrets'] {
     throw new AppError(503, '通知配置损坏，请重新保存通知设置', 'NOTIFICATION_CONFIG_CORRUPTED');
   }
   const source = decoded as Record<string, unknown>;
-  const keys = ['webhookUrl', 'webhookHeaders', 'webhookBody', 'wxpusherAppToken', 'wxpusherUids'] as const;
+  const keys = [
+    'webhookUrl', 'webhookHeaders', 'webhookBody', 'wxpusherAppToken', 'wxpusherUids',
+    'telegramBotToken', 'telegramChatId', 'telegramTopicId',
+  ] as const;
   if (keys.some((key) => source[key] !== undefined && typeof source[key] !== 'string')) {
     throw new AppError(503, '通知配置损坏，请重新保存通知设置', 'NOTIFICATION_CONFIG_CORRUPTED');
   }
@@ -99,14 +108,19 @@ export function notificationSettingsView(settings: NotificationSettings) {
   const { secrets } = settings;
   const webhookConfigured = Boolean(secrets.webhookUrl);
   const wxpusherConfigured = Boolean(secrets.wxpusherAppToken && secrets.wxpusherUids);
+  const telegramConfigured = Boolean(secrets.telegramBotToken && secrets.telegramChatId);
   return {
     url: '', headers: '', body: '', wxpusherAppToken: '', wxpusherUids: '',
+    telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
     method: settings.method, contentType: settings.contentType,
     configured: webhookConfigured, webhookConfigured,
     urlConfigured: webhookConfigured, headersConfigured: Boolean(secrets.webhookHeaders),
     bodyConfigured: Boolean(secrets.webhookBody),
     wxpusherConfigured, wxpusherTokenConfigured: Boolean(secrets.wxpusherAppToken),
     wxpusherUidsConfigured: Boolean(secrets.wxpusherUids),
+    telegramConfigured, telegramTokenConfigured: Boolean(secrets.telegramBotToken),
+    telegramChatIdConfigured: Boolean(secrets.telegramChatId),
+    telegramTopicIdConfigured: Boolean(secrets.telegramTopicId),
   };
 }
 
@@ -134,6 +148,35 @@ async function sendWxPusher(
   try {
     const payload = JSON.parse(body) as { success?: unknown };
     return { status: response.status, ok: payload.success === true };
+  } catch {
+    return { status: response.status, ok: false };
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+}
+
+async function sendTelegram(
+  token: string, chatId: string, topicId: string, title: string, content: string, fetchImpl: typeof fetch,
+): Promise<{ status: number; ok: boolean }> {
+  const payload: Record<string, string | number> = {
+    chat_id: chatId, text: `<b>${escapeHtml(title)}</b>\n${escapeHtml(content)}`, parse_mode: 'HTML',
+  };
+  if (topicId) payload.message_thread_id = Number(topicId);
+  const response = await fetchImpl(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15_000),
+    redirect: 'error',
+  });
+  if (!response.ok) return { status: response.status, ok: false };
+  const body = await response.text();
+  if (body.length > 4096) return { status: response.status, ok: false };
+  try {
+    const result = JSON.parse(body) as { ok?: unknown };
+    return { status: response.status, ok: result.ok === true };
   } catch {
     return { status: response.status, ok: false };
   }
@@ -168,6 +211,16 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'wxpusher', ...result });
     } catch {
       deliveries.push({ channel: 'wxpusher', ok: false, status: null });
+    }
+  }
+  if (config.secrets.telegramBotToken && config.secrets.telegramChatId) {
+    try {
+      const result = await sendTelegram(
+        config.secrets.telegramBotToken, config.secrets.telegramChatId, config.secrets.telegramTopicId, title, content, fetchImpl,
+      );
+      deliveries.push({ channel: 'telegram', ...result });
+    } catch {
+      deliveries.push({ channel: 'telegram', ok: false, status: null });
     }
   }
   return deliveries;

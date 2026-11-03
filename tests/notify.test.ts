@@ -29,17 +29,22 @@ describe('notification settings API', () => {
   let csrf = '';
   let sent: string[] = [];
   let wxpusherSuccess = true;
+  let telegramOk = true;
 
   beforeEach(async () => {
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     sent = [];
     wxpusherSuccess = true;
+    telegramOk = true;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       sent.push(`${init.method ?? 'GET'} ${String(input)} ${String(init.body ?? '')}`);
       const url = new URL(String(input));
       if (url.hostname === 'wxpusher.zjiecode.com') {
         return new Response(JSON.stringify({ success: wxpusherSuccess }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.hostname === 'api.telegram.org') {
+        return new Response(JSON.stringify({ ok: telegramOk }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof fetch;
@@ -156,5 +161,77 @@ describe('notification settings API', () => {
     });
     expect(invalid.status).toBe(400);
     expect((await invalid.json()).reason).toBe('INVALID_WXPUSHER_UID');
+  });
+
+  it('encrypts and redacts Telegram credentials, escapes HTML and sends to the configured topic', async () => {
+    const token = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi';
+    const chatId = '-1001234567890';
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ telegramBotToken: token, telegramChatId: chatId, telegramTopicId: '42' }),
+    });
+    expect(await saved.json()).toMatchObject({ telegramConfigured: true, telegramTokenConfigured: true, telegramChatIdConfigured: true, telegramTopicIdConfigured: true });
+
+    const stored = await testDb.db.query<{ value: string }>("SELECT value FROM app_settings WHERE key = 'notification_secrets_cipher'");
+    expect(stored[0]!.value).not.toContain(token);
+    expect(stored[0]!.value).not.toContain(chatId);
+    expect(stored[0]!.value).not.toContain('"telegramTopicId":"42"');
+    const viewResponse = await request('/api/v1/system/notify', { headers: { cookie } });
+    const view = await viewResponse.json() as Record<string, unknown>;
+    expect(view).toMatchObject({ telegramBotToken: '', telegramChatId: '', telegramTopicId: '', telegramConfigured: true });
+    expect(JSON.stringify(view)).not.toContain(token);
+    expect(JSON.stringify(view)).not.toContain(chatId);
+
+    const sentResponse = await post('/api/v1/system/notify/test', { title: '<unsafe>', content: '&payload' });
+    expect(await sentResponse.json()).toMatchObject({ code: 0, channels: [{ channel: 'telegram', status: 200 }] });
+    const telegramCall = sent.find((entry) => entry.includes('api.telegram.org'))!;
+    expect(telegramCall).toContain(`/bot${token}/sendMessage`);
+    const payload = JSON.parse(telegramCall.slice(telegramCall.indexOf('{'))) as Record<string, unknown>;
+    expect(payload).toMatchObject({ chat_id: chatId, parse_mode: 'HTML', message_thread_id: 42 });
+    expect(payload.text).toBe('<b>&lt;unsafe&gt;</b>\n&amp;payload');
+
+    const cleared = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ clearTelegram: true }),
+    });
+    expect(await cleared.json()).toMatchObject({ telegramConfigured: false, telegramTokenConfigured: false, telegramChatIdConfigured: false, telegramTopicIdConfigured: false });
+  });
+
+  it('sends Telegram messages without a topic and reports Bot API rejection without leaking the token', async () => {
+    const token = '987654321:abcdefghijklmnopqrstuvwxyzABCDEFGH';
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ telegramBotToken: token, telegramChatId: '@alerts_channel' }),
+    });
+    expect(saved.status).toBe(200);
+    const sentResponse = await post('/api/v1/system/notify/test', { title: 'ok', content: 'message' });
+    expect(sentResponse.status).toBe(200);
+    const telegramCall = sent.find((entry) => entry.includes('api.telegram.org'))!;
+    const payload = JSON.parse(telegramCall.slice(telegramCall.indexOf('{'))) as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('message_thread_id');
+
+    telegramOk = false;
+    const rejected = await post('/api/v1/system/notify/test', { title: 'ok', content: 'message' });
+    const result = await rejected.json() as Record<string, unknown>;
+    expect(rejected.status).toBe(503);
+    expect(result.reason).toBe('NOTIFICATION_FAILED');
+    expect(JSON.stringify(result)).not.toContain(token);
+  });
+
+  it('rejects incomplete Telegram credentials and malformed topic IDs', async () => {
+    const token = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi';
+    const incomplete = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ telegramBotToken: token }),
+    });
+    expect(incomplete.status).toBe(400);
+    expect((await incomplete.json()).reason).toBe('INCOMPLETE_TELEGRAM_CONFIG');
+
+    const invalidTopic = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ telegramBotToken: token, telegramChatId: '12345', telegramTopicId: '12x' }),
+    });
+    expect(invalidTopic.status).toBe(400);
+    expect((await invalidTopic.json()).reason).toBe('INVALID_TELEGRAM_TOPIC_ID');
   });
 });
