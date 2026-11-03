@@ -16,6 +16,7 @@ import { dnsRoutes } from './routes/dns';
 import { cloudflareRoutes } from './routes/cloudflare';
 import { scheduleRoutes } from './routes/schedule';
 import { notifyRoutes } from './routes/notify';
+import { failoverRoutes } from './routes/failover';
 
 declare const __APP_SHELL__: string;
 const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
@@ -69,13 +70,14 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
   app.route('/', cloudflareRoutes());
   app.route('/', scheduleRoutes());
   app.route('/', notifyRoutes());
+  app.route('/', failoverRoutes());
   app.get('/api/v1/bootstrap', requireSession, (c) => {
     const storage = c.get('storage').config;
     return c.json({
       code: 0, user: publicUser(c.get('principal').user),
       runtime: { platform: c.env.RUNTIME.platform, storage: { driver: storage.driver, format: storage.format } },
       capabilities: { dns: true, cert: false, tasks: true, executor: false },
-      migration: { stage: 'wave4-schedule' },
+      migration: { stage: 'wave4-failover' },
     });
   });
 

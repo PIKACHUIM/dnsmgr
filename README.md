@@ -33,11 +33,11 @@
 | Wave 1：三平台工程与兼容基线 | 已完成本地构建和基础路由验证 |
 | Wave 2：存储与安全 | SQL、事务、租约 fencing、map/key 不可变版本、key 增量写删/分页、安装/会话/CSRF/TOTP、CF KV/R2、ESA EdgeKV、Makers Blob 已接入并通过本地假绑定测试；Makers KV bridge、恢复回收、格式切换、验证码与快捷登录仍待完成 |
 | Wave 3：DNS/Cloudflare | 22 个 DNS 驱动全部接入：Cloudflare、阿里云、DNSPod、腾讯云 EdgeOne、阿里云 ESA、AWS Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium；账户、域名、解析记录 CRUD/启停/备注可用，域名分类、批量操作、操作日志、记录批量添加与厂商日志（阿里云/DNSPod）、Cloudflare 自定义主机名/Fallback Origin/DCV 委派与 Tunnel（公网主机名自动 CNAME、CIDR/主机名路由）已接入，数据表见 `migrations/0002_dns.sql` 与 `migrations/0003_dns_aliases.sql`。驱动与 Cloudflare 扩展仅通过本地构造请求单测，未使用真实服务商凭据冒烟；显性/隐性 URL 转发类型已接入阿里云、DNSPod、京东云、DNSLA 与 Cloudflare（URI）；DNSPod 域名别名（本地镜像 `dns_domain_aliases`）已接入 |
-| Wave 4：任务/SSL/通知/执行器 | 定时解析切换任务（一次性/每天/每周/每月，启用/暂停/删除/改值）、`/cron?key=` 入口、时区与密钥设置已实现，数据表见 `migrations/0004_schedule.sql`；容灾切换、证书签发与部署、CF 优选 IP、自定义 Webhook 通知（失败告警）已接入，其余通知渠道与执行器仍待移植 |
-| Wave 5：前端 | 安装、登录、会话控制台、域名账户、域名列表、解析记录页面可用；其余 51 个旧模板对应模块仍显示迁移占位 |
+| Wave 4：任务/SSL/通知/执行器 | 定时解析切换任务（一次性/每天/每周/每月，启用/暂停/删除/改值）、`/cron?key=`、时区与密钥设置已实现，数据表见 `migrations/0004_schedule.sql`；基于公网 HTTP(S) 健康检查的 DNS 主备容灾切换与自定义 Webhook 通知已接入，容灾表见 `migrations/0005_failover.sql`。证书签发/部署、CF 优选 IP、其余通知渠道与自托管执行器仍待移植 |
+| Wave 5：前端 | 安装、登录、会话控制台、域名账户、域名列表、解析记录、定时任务及容灾概览/策略管理页面可用；其余旧模板对应模块仍待移植 |
 | Wave 6：同步与最终交付 | 本地 PHP 差异扫描与 GitHub Actions `Verify` CI 可用；发布/回滚步骤已写入 `docs/guide/release.md`；定期上游同步与真实云回滚演练尚待完成 |
 
-继续开发时先补剩余服务商的 URL 转发映射，再推进 Wave 4；`src/dns/registry.ts` 的 `unportedProviders` 现为空数组，新增驱动时若有未实现项应登记到该列表并保持 `providerCatalog().unported` 与实际一致。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
+继续开发时按剩余模块推进证书签发/部署、CF 优选 IP、通知渠道与执行器；`src/dns/registry.ts` 的 `unportedProviders` 现为空数组，新增驱动时若有未实现项应登记到该列表并保持 `providerCatalog().unported` 与实际一致。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
 
 新界面仅显示真实运行环境与迁移状态，不伪造域名、证书或任务数据。域名账户、域名与解析记录直接调用服务商 API，凭据以 AES-GCM 加密存储（用途绑定账户 ID），写入前校验平台凭据；未知驱动类型返回 400，服务商不支持的操作显式报错，不会静默降级。未知 API、`/quicklogin`、`/cron` 不会被 SPA HTML 兜底吞掉。
 
@@ -98,7 +98,7 @@ npm run audit:dependencies
 
 只托管新 `public` 产物，不上传旧 `public/`、PHP、SQL、配置或 Worker 文件作为静态资源。不配置全局 SPA fallback；页面 shell 由 Hono 在受控页面路径返回。Cloudflare Workers 已部署到 `dnsmgrui-work`（D1 `dnsmgrui-data`）；**尚未验证套餐 CPU 配额，Makers 与 ESA 仍未部署**。
 
-应用支持 D1/Turso 协调 SQL。Cloudflare 需配置 `DB` D1 绑定并依次执行 `migrations/0001_core.sql`、`migrations/0002_dns.sql`、`migrations/0003_dns_aliases.sql`、`migrations/0004_schedule.sql`；Makers/ESA 配置 `TURSO_DATABASE_URL`、`TURSO_AUTH_TOKEN`，并在独立 SQLite/libSQL 库执行同样的迁移。D1 必须提供稳定的 `COORDINATOR_ID`，初始化后用于识别库身份；不要随意复用同一标识指向不同数据库。DNS 账户/域名/审计表目前只在 `DB_FORMAT=sql` 下可用，其他格式会明确返回 501。Cloudflare 对象模式的绑定名分别为 `KV` 与 `BUCKET`（R2），并设置相应稳定的 `PAYLOAD_STORE_ID`；ESA 的 EdgeKV 使用 `ESA_KV_NAMESPACE`。Makers Blob 设置 `BLOB_NAMESPACE`，Node Function 暂无 KV bridge。平台 secrets 至少包括 32 字节 Base64 `APP_KEY` 和不少于 32 字符的 `SETUP_TOKEN`；可设置 `PUBLIC_ORIGIN` 固定站点来源。不要把 Token、密码或主密钥放入 `VITE_*` 或前端代码。
+应用支持 D1/Turso 协调 SQL。Cloudflare 需配置 `DB` D1 绑定并依次执行 `migrations/0001_core.sql`、`migrations/0002_dns.sql`、`migrations/0003_dns_aliases.sql`、`migrations/0004_schedule.sql`、`migrations/0005_failover.sql`；Makers/ESA 配置 `TURSO_DATABASE_URL`、`TURSO_AUTH_TOKEN`，并在独立 SQLite/libSQL 库执行同样的迁移。D1 必须提供稳定的 `COORDINATOR_ID`，初始化后用于识别库身份；不要随意复用同一标识指向不同数据库。DNS 账户/域名/审计表目前只在 `DB_FORMAT=sql` 下可用，其他格式会明确返回 501。Cloudflare 对象模式的绑定名分别为 `KV` 与 `BUCKET`（R2），并设置相应稳定的 `PAYLOAD_STORE_ID`；ESA 的 EdgeKV 使用 `ESA_KV_NAMESPACE`。Makers Blob 设置 `BLOB_NAMESPACE`，Node Function 暂无 KV bridge。平台 secrets 至少包括 32 字节 Base64 `APP_KEY` 和不少于 32 字符的 `SETUP_TOKEN`；可设置 `PUBLIC_ORIGIN` 固定站点来源。不要把 Token、密码或主密钥放入 `VITE_*` 或前端代码。
 
 存储契约为 `DB_DRIVER=d1|turso|kv|blob|auto` 与 `DB_FORMAT=sql|map|key`。`map` 整对象与 `key` 逐实体格式使用不可变快照/实体键，活动版本仅由 SQL 协调库 fencing + CAS 指针发布；所有数据读取均校验版本与 SHA-256 摘要。对象驱动还须提供稳定的 `PAYLOAD_STORE_ID`（ESA 默认使用 KV namespace 标识），Blob 命名空间可用 `BLOB_NAMESPACE` 指定。驱动、格式或任一存储标识变化都视为不同数据集；需要显式迁移工具，目前尚未提供。
 

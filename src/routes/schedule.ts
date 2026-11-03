@@ -9,6 +9,7 @@ import { DnsError, type DnsDomain, type DnsRecordInput } from '../dns/types';
 import { type SqlDatabase } from '../storage/sql';
 import { nextRunAt, parseRunTime, type ScheduleMode, type ScheduleTaskRow } from '../schedule/tasks';
 import { parseConfig, sendCustomWebhook } from '../notify/custom';
+import { executeFailoverDue } from '../schedule/failover';
 
 interface AccountRow extends Record<string, unknown> {
   id: number;
@@ -221,6 +222,7 @@ export function scheduleRoutes() {
     const expected = await getSetting(c, 'cron_key');
     if (enabled !== '1' || !expected) return c.text('未开启当前方式');
     if (!key || !safeEqual(key, expected)) return c.text('访问密钥错误');
+    await executeFailoverDue(c);
     await executeDue(c);
     return c.text('success!');
   });

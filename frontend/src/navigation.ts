@@ -24,8 +24,8 @@ export const navigation: NavigationGroup[] = [
     { path: '/domain/category', label: '域名分类', scope: '域名分类与分组管理', capability: 'dns', implemented: true },
   ] },
   { label: '容灾与调度', adminOnly: true, items: [
-    { path: '/dmonitor/overview', label: '运行概览', scope: '容灾探测与切换运行情况', capability: 'tasks' },
-    { path: '/dmonitor/task', label: '切换策略', scope: '探测策略与故障切换规则', capability: 'tasks' },
+    { path: '/dmonitor/overview', label: '运行概览', scope: '容灾探测与切换运行情况', capability: 'tasks', implemented: true },
+    { path: '/dmonitor/task', label: '切换策略', scope: 'HTTP 探测与主备 DNS 故障切换', capability: 'tasks', implemented: true },
     { path: '/schedule/stask', label: '定时切换', scope: '定时 DNS 切换任务', capability: 'tasks', implemented: true },
   ] },
   { label: 'SSL 证书', adminOnly: true, items: [

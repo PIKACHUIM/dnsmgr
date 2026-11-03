@@ -13,6 +13,7 @@ import { CfTunnels } from './CfTunnels';
 import { ScheduleTasks } from './ScheduleTasks';
 import { CronSettings } from './CronSettings';
 import { NotifySettings } from './NotifySettings';
+import { DnsFailover } from './DnsFailover';
 
 interface ConsoleProps {
   session: Session;
@@ -161,7 +162,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
     {mobileOpen && <button className="navigation-backdrop" aria-label="关闭导航菜单" tabIndex={-1} onClick={closeNavigation} />}
     <aside id="workspace-navigation" className="sidebar" ref={navRef} role={mobileOpen ? 'dialog' : undefined} aria-modal={mobileOpen ? true : undefined} aria-label="功能导航">
       <div className="sidebar-brand"><Brand compact /><button ref={closeButton} className="icon-button sidebar-close" aria-label="关闭导航菜单" onClick={closeNavigation}><Icon name="close" /></button></div>
-      <div className="workspace-label"><span className="status-dot" />迁移基础阶段<span className="mono">W1 / W2</span></div>
+      <div className="workspace-label"><span className="status-dot" />迁移进行中<span className="mono">W4</span></div>
       <nav aria-label="功能分组" className="sidebar-nav">
         {groups.map((group) => <section className="nav-group" key={group.label}>
           <h2>{group.label}</h2>
@@ -180,17 +181,19 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
         {logoutError && <div className="notice notice-error" role="alert"><strong>退出未完成</strong><span>{logoutError} 可再次点击退出登录重试。</span></div>}
         {loadError && <div className="notice notice-error with-action" role="alert"><div><strong>运行环境加载失败</strong><span>{loadError}</span></div><button className="button button-secondary" onClick={() => setRetry((value) => value + 1)}>重新加载</button></div>}
         {home ? <>
-          <section className="foundation-banner" aria-labelledby="foundation-title"><div className="foundation-index mono">03</div><div><h2 id="foundation-title">DNS 账户与解析记录已接入</h2><p>可在「域名账户」「域名管理」中配置真实服务商凭据并读写解析记录；证书、容灾、任务与执行器仍待移植。</p></div><Icon name="shield" /></section>
+          <section className="foundation-banner" aria-labelledby="foundation-title"><div className="foundation-index mono">03</div><div><h2 id="foundation-title">DNS 账户与解析记录已接入</h2><p>DNS 解析、HTTP 容灾主备切换、定时任务与自定义 Webhook 已接入；证书、优选 IP 与自托管执行器仍待移植。</p></div><Icon name="shield" /></section>
           <div className="overview-grid">
             <section className="panel environment-panel" aria-labelledby="environment-title"><div className="panel-heading"><div><Icon name="server" /><h2 id="environment-title">运行环境</h2></div><span className="panel-meta">来自服务端</span></div>{loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取运行环境…</div> : bootstrap ? <dl className="data-list"><div><dt>运行平台</dt><dd className="mono">{bootstrap.runtime.platform}</dd></div><div><dt>存储驱动</dt><dd className="mono">{bootstrap.runtime.storage.driver}</dd></div><div><dt>存储格式</dt><dd className="mono">{bootstrap.runtime.storage.format}</dd></div><div><dt>迁移阶段</dt><dd><span className="data-badge mono">{bootstrap.migration.stage}</span></dd></div></dl> : <div className="panel-empty">环境数据不可用，请重新加载。</div>}<div className="panel-footnote">数据来源 <code>/api/v1/bootstrap</code></div></section>
             <section className="panel session-panel" aria-labelledby="session-title"><div className="panel-heading"><div><Icon name="lock" /><h2 id="session-title">当前会话</h2></div><span className="data-badge">已验证</span></div><dl className="data-list"><div><dt>用户名</dt><dd>{session.user.username}</dd></div><div><dt>账户角色</dt><dd>{level === 2 ? '管理员' : '用户'}<span className="value-detail mono">LEVEL {level}</span></dd></div><div><dt>会话存储</dt><dd>服务端 Cookie</dd></div><div><dt>请求保护</dt><dd>CSRF 令牌<span className="value-detail">仅保存在内存中</span></dd></div></dl><div className="panel-footnote">不会在浏览器本地存储用户名、密码或会话令牌。</div></section>
           </div>
-          <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">功能迁移状态</h2></div><span className="panel-meta">不是业务统计</span></div><div className="capability-table" role="table" aria-label="后端能力状态"><div className="capability-row capability-header" role="row"><span role="columnheader">模块</span><span role="columnheader">后端能力</span><span role="columnheader">当前前端</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{capabilityNames[key]}</strong><span role="cell">{loading ? '读取中…' : bootstrap ? bootstrap.capabilities[key] ? '已声明可用' : '未开放' : '未知'}</span><span role="cell"><span className="status-label"><span className="status-dot" />{key === 'dns' ? '已上线' : '待移植'}</span></span></div>)}</div><div className="panel-footnote">后端能力不等于页面已完成。左侧保留旧路径，仅提供对应模块的移植说明。</div></section>
+          <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">功能迁移状态</h2></div><span className="panel-meta">不是业务统计</span></div><div className="capability-table" role="table" aria-label="后端能力状态"><div className="capability-row capability-header" role="row"><span role="columnheader">模块</span><span role="columnheader">后端能力</span><span role="columnheader">当前前端</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{capabilityNames[key]}</strong><span role="cell">{loading ? '读取中…' : bootstrap ? bootstrap.capabilities[key] ? '已声明可用' : '未开放' : '未知'}</span><span role="cell"><span className="status-label"><span className="status-dot" />{bootstrap?.capabilities[key] ? '已上线' : '待移植'}</span></span></div>)}</div><div className="panel-footnote">后端能力不等于页面已完成。左侧保留旧路径，仅提供对应模块的移植说明。</div></section>
         </> : path === '/account' && level === 2 ? <DnsAccounts session={session} onExpired={onExpired} />
           : path === '/domain' ? <DnsDomains session={session} navigate={navigate} onExpired={onExpired} />
             : path === '/domain/category' && level === 2 ? <DnsCategories session={session} onExpired={onExpired} />
               : path === '/log' ? <DnsLogs session={session} onExpired={onExpired} />
-                : path === '/schedule/stask' && level === 2 ? <ScheduleTasks session={session} onExpired={onExpired} />
+                : path === '/dmonitor/overview' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} overview />
+                  : path === '/dmonitor/task' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} />
+                    : path === '/schedule/stask' && level === 2 ? <ScheduleTasks session={session} onExpired={onExpired} />
                   : path === '/system/cronset' && level === 2 ? <CronSettings session={session} onExpired={onExpired} />
                     : path === '/system/noticeset' && level === 2 ? <NotifySettings session={session} onExpired={onExpired} />
                     : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
