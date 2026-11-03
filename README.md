@@ -33,11 +33,11 @@
 | Wave 1：三平台工程与兼容基线 | 已完成本地构建和基础路由验证 |
 | Wave 2：存储与安全 | SQL、事务、租约 fencing、map/key 不可变版本、key 增量写删/分页、安装/会话/CSRF/TOTP、CF KV/R2、ESA EdgeKV、Makers Blob 已接入并通过本地假绑定测试；Makers KV bridge、恢复回收、格式切换、验证码与快捷登录仍待完成 |
 | Wave 3：DNS/Cloudflare | 22 个 DNS 驱动全部接入：Cloudflare、阿里云、DNSPod、腾讯云 EdgeOne、阿里云 ESA、AWS Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium；账户、域名、解析记录 CRUD/启停/备注可用，域名分类、批量操作、操作日志、记录批量添加与厂商日志（阿里云/DNSPod）、Cloudflare 自定义主机名/Fallback Origin/DCV 委派与 Tunnel（公网主机名自动 CNAME、CIDR/主机名路由）已接入，数据表见 `migrations/0002_dns.sql` 与 `migrations/0003_dns_aliases.sql`。驱动与 Cloudflare 扩展仅通过本地构造请求单测，未使用真实服务商凭据冒烟；显性/隐性 URL 转发类型已接入阿里云、DNSPod、京东云、DNSLA 与 Cloudflare（URI）；DNSPod 域名别名（本地镜像 `dns_domain_aliases`）已接入 |
-| Wave 4：任务/SSL/通知/执行器 | 定时解析切换任务（一次性/每天/每周/每月，启用/暂停/删除/改值）、`/cron?key=`、时区与密钥设置已实现，数据表见 `migrations/0004_schedule.sql`；基于公网 HTTP(S) 健康检查的 DNS 主备容灾切换与自定义 Webhook 通知已接入，容灾表见 `migrations/0005_failover.sql`。证书签发/部署、CF 优选 IP、其余通知渠道与自托管执行器仍待移植 |
+| Wave 4：任务/SSL/通知/执行器 | 定时解析切换任务（一次性/每天/每周/每月，启用/暂停/删除/改值）、`/cron?key=`、时区与密钥设置已实现，数据表见 `migrations/0004_schedule.sql`；基于公网 HTTP(S) 健康检查的 DNS 主备容灾切换、自定义 Webhook 与 WxPusher 通知已接入，容灾表见 `migrations/0005_failover.sql`；通知凭据使用 AES-GCM 密文存储，旧版明文 Webhook 设置在首次读取时迁移。证书签发/部署、CF 优选 IP、邮件/Telegram/企业微信/钉钉/飞书/QQ 机器人与自托管执行器仍待移植 |
 | Wave 5：前端 | 安装、登录、会话控制台、域名账户、域名列表、解析记录、定时任务及容灾概览/策略管理页面可用；其余旧模板对应模块仍待移植 |
 | Wave 6：同步与最终交付 | 本地 PHP 差异扫描与 GitHub Actions `Verify` CI 可用；发布/回滚步骤已写入 `docs/guide/release.md`；定期上游同步与真实云回滚演练尚待完成 |
 
-继续开发时按剩余模块推进证书签发/部署、CF 优选 IP、通知渠道与执行器；`src/dns/registry.ts` 的 `unportedProviders` 现为空数组，新增驱动时若有未实现项应登记到该列表并保持 `providerCatalog().unported` 与实际一致。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
+继续开发时按剩余模块推进证书签发/部署、CF 优选 IP、其余通知渠道与执行器；`src/dns/registry.ts` 的 `unportedProviders` 现为空数组，新增驱动时若有未实现项应登记到该列表并保持 `providerCatalog().unported` 与实际一致。`tests/fixtures/legacy-contracts.json` 是旧 PHP 契约基线，记录 149 条路由、141 个公开方法、101 处分派比较、51 个模板和 205 个模板调用；它**不代表 TypeScript 实现覆盖率**。`/domain/dnscheck` 缺少旧控制器方法，`huoshan` 证书实现未注册，已记录为基线诊断。
 
 新界面仅显示真实运行环境与迁移状态，不伪造域名、证书或任务数据。域名账户、域名与解析记录直接调用服务商 API，凭据以 AES-GCM 加密存储（用途绑定账户 ID），写入前校验平台凭据；未知驱动类型返回 400，服务商不支持的操作显式报错，不会静默降级。未知 API、`/quicklogin`、`/cron` 不会被 SPA HTML 兜底吞掉。
 

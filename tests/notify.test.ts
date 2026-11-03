@@ -28,13 +28,19 @@ describe('notification settings API', () => {
   let cookie = '';
   let csrf = '';
   let sent: string[] = [];
+  let wxpusherSuccess = true;
 
   beforeEach(async () => {
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     sent = [];
+    wxpusherSuccess = true;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       sent.push(`${init.method ?? 'GET'} ${String(input)} ${String(init.body ?? '')}`);
+      const url = new URL(String(input));
+      if (url.hostname === 'wxpusher.zjiecode.com') {
+        return new Response(JSON.stringify({ success: wxpusherSuccess }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof fetch;
     const budget: RequestBudget = { consume: () => {}, remainingMs: () => 30_000, fetch: fetchMock };
@@ -61,17 +67,94 @@ describe('notification settings API', () => {
     });
   }
 
-  it('saves settings and sends a templated test webhook', async () => {
+  it('encrypts channel credentials, redacts reads and sends both configured channels', async () => {
     const saved = await request('/api/v1/system/notify', {
       method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
-      body: JSON.stringify({ url: 'https://example.com/hook', method: 'POST', headers: '{"X-Test":"1"}', contentType: 'application/json', body: '{"t":"{title}","c":"{content}"}' }),
+      body: JSON.stringify({
+        url: 'https://example.com/hook?token=webhook-secret', method: 'POST',
+        headers: '{"Authorization":"Bearer header-secret"}', contentType: 'application/json',
+        body: '{"t":"{title}","c":"{content}","credential":"body-secret"}',
+        wxpusherAppToken: 'AT_wxpusher-secret', wxpusherUids: 'UID_test-user',
+      }),
     });
-    expect(await saved.json()).toMatchObject({ code: 0, configured: true });
+    expect(await saved.json()).toMatchObject({ code: 0, configured: true, webhookConfigured: true, wxpusherConfigured: true });
+
+    const stored = await testDb.db.query<{ key: string; value: string }>(
+      "SELECT key, value FROM app_settings WHERE key IN ('notification_secrets_cipher','custom_webhook_url','custom_webhook_headers','custom_webhook_body')",
+    );
+    const cipher = stored.find((row) => row.key === 'notification_secrets_cipher')!.value;
+    expect(cipher).not.toContain('webhook-secret');
+    expect(cipher).not.toContain('header-secret');
+    expect(cipher).not.toContain('body-secret');
+    expect(cipher).not.toContain('AT_wxpusher-secret');
+    expect(cipher).not.toContain('UID_test-user');
+    expect(stored.filter((row) => row.key !== 'notification_secrets_cipher')).toHaveLength(0);
+
+    const viewResponse = await request('/api/v1/system/notify', { headers: { cookie } });
+    const view = await viewResponse.json() as Record<string, unknown>;
+    expect(view).toMatchObject({ url: '', headers: '', body: '', urlConfigured: true, headersConfigured: true, bodyConfigured: true, wxpusherTokenConfigured: true, wxpusherUidsConfigured: true });
+    expect(JSON.stringify(view)).not.toContain('webhook-secret');
+    expect(JSON.stringify(view)).not.toContain('header-secret');
+    expect(JSON.stringify(view)).not.toContain('body-secret');
+    expect(JSON.stringify(view)).not.toContain('AT_wxpusher-secret');
+    expect(JSON.stringify(view)).not.toContain('UID_test-user');
+
+    const updated = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ method: 'PUT' }),
+    });
+    expect(await updated.json()).toMatchObject({ webhookConfigured: true, wxpusherConfigured: true });
 
     const sentResponse = await post('/api/v1/system/notify/test', { title: '标题', content: '正文' });
-    expect(await sentResponse.json()).toMatchObject({ code: 0, status: 200 });
-    expect(sent[0]).toContain('POST https://example.com/hook');
+    expect(await sentResponse.json()).toMatchObject({ code: 0, status: 200, channels: [{ channel: 'webhook', status: 200 }, { channel: 'wxpusher', status: 200 }] });
+    expect(sent[0]).toContain('PUT https://example.com/hook?token=webhook-secret');
     expect(sent[0]).toContain('"t":"标题"');
     expect(sent[0]).toContain('"c":"正文"');
+    expect(sent[1]).toContain('https://wxpusher.zjiecode.com/api/send/message');
+    expect(sent[1]).toContain('"appToken":"AT_wxpusher-secret"');
+    expect(sent[1]).toContain('"uids":["UID_test-user"]');
+
+    const cleared = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ clearWxpusherAppToken: true, clearWxpusherUids: true }),
+    });
+    expect(await cleared.json()).toMatchObject({ webhookConfigured: true, wxpusherConfigured: false });
+  });
+
+  it('reports WxPusher rejection without returning response details or credentials', async () => {
+    await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ wxpusherAppToken: 'AT_rejected-secret', wxpusherUids: 'UID_rejected-test' }),
+    });
+    wxpusherSuccess = false;
+    const response = await post('/api/v1/system/notify/test', { title: 'test', content: 'test' });
+    const result = await response.json() as Record<string, unknown>;
+    expect(response.status).toBe(503);
+    expect(result.reason).toBe('NOTIFICATION_FAILED');
+    expect(JSON.stringify(result)).not.toContain('AT_rejected-secret');
+  });
+
+  it('encrypts legacy plaintext settings on first read and rejects invalid WxPusher recipients', async () => {
+    await testDb.db.batch([
+      { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', args: ['custom_webhook_url', 'https://legacy.example/hook?secret=legacy-secret', 1] },
+      { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', args: ['custom_webhook_headers', '{"Authorization":"legacy-header"}', 1] },
+      { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', args: ['custom_webhook_body', '{"token":"legacy-body"}', 1] },
+    ]);
+    const response = await request('/api/v1/system/notify', { headers: { cookie } });
+    const view = await response.json() as Record<string, unknown>;
+    expect(view).toMatchObject({ webhookConfigured: true, url: '', headers: '', body: '' });
+    expect(JSON.stringify(view)).not.toContain('legacy-secret');
+    const keys = await testDb.db.query<{ key: string; value: string }>(
+      "SELECT key, value FROM app_settings WHERE key IN ('notification_secrets_cipher','custom_webhook_url','custom_webhook_headers','custom_webhook_body')",
+    );
+    expect(keys).toHaveLength(1);
+    expect(keys[0]!.value).not.toContain('legacy-secret');
+
+    const invalid = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ wxpusherAppToken: 'AT_test', wxpusherUids: 'not-a-uid' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_WXPUSHER_UID');
   });
 });

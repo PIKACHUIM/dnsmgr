@@ -44,7 +44,7 @@ export async function sendCustomWebhook(
   const rendered = renderTemplate(config.body, title, content);
   const headers: Record<string, string> = { ...config.headers };
   if (config.method !== 'GET') headers['Content-Type'] = config.contentType;
-  const init: RequestInit = { method: config.method, headers: { ...headers }, signal: AbortSignal.timeout(15_000) };
+  const init: RequestInit = { method: config.method, headers: { ...headers }, signal: AbortSignal.timeout(15_000), redirect: 'error' };
   if (config.method === 'GET') {
     const url = new URL(config.url);
     url.searchParams.set('title', title);

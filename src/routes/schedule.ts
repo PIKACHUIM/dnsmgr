@@ -8,7 +8,7 @@ import { createProvider } from '../dns/registry';
 import { DnsError, type DnsDomain, type DnsRecordInput } from '../dns/types';
 import { type SqlDatabase } from '../storage/sql';
 import { nextRunAt, parseRunTime, type ScheduleMode, type ScheduleTaskRow } from '../schedule/tasks';
-import { parseConfig, sendCustomWebhook } from '../notify/custom';
+import { sendConfiguredNotifications } from '../notify/settings';
 import { executeFailoverDue } from '../schedule/failover';
 
 interface AccountRow extends Record<string, unknown> {
@@ -136,12 +136,7 @@ async function offsetMinutes(c: Context<AppEnv>): Promise<number> {
 
 async function notifyFailure(c: Context<AppEnv>, domain: string, message: string): Promise<void> {
   try {
-    const rows = await db(c).query<{ key: string; value: string }>(
-      "SELECT key, value FROM app_settings WHERE key LIKE 'custom_webhook_%'",
-    );
-    const config = parseConfig(Object.fromEntries(rows.map((row) => [row.key, row.value])));
-    if (!config) return;
-    await sendCustomWebhook(config, 'DNSMGR 定时任务失败', `域名 ${domain}：${message}`, c.env.BUDGET?.fetch ?? fetch);
+    await sendConfiguredNotifications(c, 'DNSMGR 定时任务失败', `域名 ${domain}：${message}`);
   } catch { /* 通知失败不影响任务结果 */ }
 }
 

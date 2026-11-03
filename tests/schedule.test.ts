@@ -7,13 +7,22 @@ import { createTestDatabase } from './helpers/sqlite';
 
 const credentials = { username: 'admin', password: 'test-password-2026!' };
 const appKey = btoa('12345678901234567890123456789012');
+let failRecordUpdate = false;
+let wxpusherRequests: string[] = [];
 
 function transport() {
   return vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(String(input));
     const json = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (url.hostname === 'wxpusher.zjiecode.com') {
+      wxpusherRequests.push(String(init.body ?? ''));
+      return json({ success: true });
+    }
     if (url.pathname === '/client/v4/zones') return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }] });
     if (/\/dns_records\/r\d+$/.test(url.pathname)) {
+      if (failRecordUpdate && init.method === 'PATCH') {
+        return json({ success: false, errors: [{ code: 1000, message: 'write failed' }] });
+      }
       return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
     }
     if (url.pathname.endsWith('/dns_records') && (init.method ?? 'GET') === 'GET') return json({ success: true, result: [], result_info: { total_count: 0 } });
@@ -43,6 +52,8 @@ describe('schedule API', () => {
   let csrf = '';
 
   beforeEach(async () => {
+    failRecordUpdate = false;
+    wxpusherRequests = [];
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const budget: RequestBudget = { consume: () => {}, remainingMs: () => 30_000, fetch: transport() };
@@ -114,5 +125,26 @@ describe('schedule API', () => {
 
     expect(await (await request(`/cron?key=${config.key}`)).text()).toBe('success!');
     expect(await (await request('/cron?key=wrong')).text()).toBe('访问密钥错误');
+  });
+
+  it('sends WxPusher notifications when a scheduled DNS update fails', async () => {
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ wxpusherAppToken: 'AT_scheduled-test', wxpusherUids: 'UID_scheduled-test' }),
+    });
+    expect(saved.status).toBe(200);
+    const domains = await (await request('/api/v1/dns/domains', { headers: { cookie } })).json() as { items: { id: number }[] };
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      `INSERT INTO dns_schedule_tasks
+       (domain_id, record_id, record_name, record_type, switch_type, mode, run_time, value, active, next_run_at, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [domains.items[0]!.id, 'r1', 'www', 'A', 0, 'once', '10:00', '8.8.8.8', 1, now - 1, now, now],
+    );
+    failRecordUpdate = true;
+    const run = await post('/api/v1/schedule/run', {});
+    expect(await run.json()).toMatchObject({ code: 0, ran: 0, failed: 1 });
+    expect(wxpusherRequests).toHaveLength(1);
+    expect(JSON.parse(wxpusherRequests[0]!)).toMatchObject({ appToken: 'AT_scheduled-test', uids: ['UID_scheduled-test'] });
   });
 });

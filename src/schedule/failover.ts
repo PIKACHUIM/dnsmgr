@@ -5,7 +5,7 @@ import { DnsError, type DnsDomain, type DnsRecordInput } from '../dns/types';
 import { createProvider } from '../dns/registry';
 import { decrypt } from '../security/crypto';
 import type { SqlDatabase } from '../storage/sql';
-import { parseConfig, sendCustomWebhook } from '../notify/custom';
+import { sendConfiguredNotifications } from '../notify/settings';
 
 interface FailoverTask extends Record<string, unknown> {
   id: number;
@@ -189,12 +189,9 @@ async function updateRecord(c: Context<AppEnv>, task: FailoverTask, value: strin
 
 async function sendTransitionNotice(c: Context<AppEnv>, task: FailoverTask, event: 'switch_backup' | 'recover_main', value: string): Promise<void> {
   try {
-    const rows = await db(c).query<{ key: string; value: string }>("SELECT key, value FROM app_settings WHERE key LIKE 'custom_webhook_%'");
-    const config = parseConfig(Object.fromEntries(rows.map((row) => [row.key, row.value])));
-    if (!config) return;
     const title = event === 'switch_backup' ? 'DNSMGR 容灾切换至备用' : 'DNSMGR 容灾已恢复主线路';
     const content = `${task.domain_name} ${task.record_name} ${task.record_type} → ${value}`;
-    await sendCustomWebhook(config, title, content, c.env.BUDGET.fetch);
+    await sendConfiguredNotifications(c, title, content);
   } catch { /* notification failure does not change DNS task state */ }
 }
 
