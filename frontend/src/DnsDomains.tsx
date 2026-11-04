@@ -128,6 +128,24 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
     if (await patch(domain, { categoryId: value ? Number(value) : 0 })) setNotice('分类已更新');
   }
 
+  async function refreshExpiration(domain: Domain) {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    const signal = new AbortController();
+    try {
+      await send(`/api/v1/dns/domains/${domain.id}/expiration/refresh`, 'POST', undefined, signal.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`「${domain.name}」到期时间已更新`);
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.status === 401) handle(failure);
+      else setNotice(`「${domain.name}」到期信息刷新失败：${errorMessage(failure)}`);
+    } finally {
+      setBusy(false);
+      setRefresh((value) => value + 1);
+    }
+  }
+
   async function toggleHidden(domain: Domain) {
     if (await patch(domain, { hidden: !domain.hidden })) setNotice(domain.hidden ? '域名已显示' : '域名已隐藏');
   }
@@ -248,6 +266,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
               <td>{domain.hidden ? '已隐藏' : '正常'}{domain.notice ? <span className="value-detail">到期提醒</span> : null}</td>
               <td className="row-actions">
                 <a className="button button-secondary" href={`/record/${domain.id}`} onClick={(event) => { event.preventDefault(); navigate(`/record/${domain.id}`); }}>解析记录</a>
+                <button className="button button-quiet" disabled={busy} onClick={() => void refreshExpiration(domain)}>刷新到期时间</button>
                 {admin && <button className="button button-quiet" disabled={busy} onClick={() => void toggleHidden(domain)}>{domain.hidden ? '显示' : '隐藏'}</button>}
                 {admin && <button className="button button-quiet" disabled={busy} onClick={() => void remove(domain)}>移除</button>}
               </td>

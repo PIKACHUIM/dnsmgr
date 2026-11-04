@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DnsError } from '../src/dns/types';
+import { lookupDomainExpiration } from '../src/dns/expiration';
 import { createCloudflareProvider } from '../src/dns/providers/cloudflare';
 import { createAliyunProvider } from '../src/dns/providers/aliyun';
 import { createDnspodProvider } from '../src/dns/providers/dnspod';
@@ -124,6 +125,60 @@ describe('DNSPod provider', () => {
     }), { status: 200 })) as typeof fetch;
     await expect(createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, failing).check())
       .rejects.toBeInstanceOf(DnsError);
+  });
+});
+
+describe('domain expiration lookup', () => {
+  it('resolves the TLD through the IANA bootstrap and parses the RDAP expiration event', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      calls.push(url.toString());
+      const payload = url.hostname === 'data.iana.org'
+        ? { services: [[['com'], ['https://rdap.verisign.com/com/v1/']]] }
+        : { events: [{ eventAction: 'expiration', eventDate: '2030-01-01T00:00:00Z' }] };
+      return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+
+    await expect(lookupDomainExpiration('Example.COM', fetchImpl)).resolves.toBe(1_893_456_000);
+    expect(calls).toEqual([
+      'https://data.iana.org/rdap/dns.json',
+      'https://rdap.verisign.com/com/v1/domain/example.com',
+    ]);
+  });
+
+  it('uses the longest matching RDAP bootstrap suffix', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      calls.push(url.toString());
+      const payload = url.hostname === 'data.iana.org'
+        ? { services: [
+          [['uk'], ['https://rdap.registry.uk/']],
+          [['co.uk'], ['https://rdap.registry.uk/co/']],
+        ] }
+        : { events: [{ eventAction: 'expiration', eventDate: '2031-02-03T00:00:00Z' }] };
+      return new Response(JSON.stringify(payload), { status: 200 });
+    });
+
+    await expect(lookupDomainExpiration('example.co.uk', fetchImpl)).resolves.toBe(1_927_843_200);
+    expect(calls[1]).toBe('https://rdap.registry.uk/co/domain/example.co.uk');
+  });
+
+  it('rejects insecure bootstrap endpoints and responses without an expiration event', async () => {
+    const insecure = vi.fn(async () => new Response(JSON.stringify({
+      services: [[['com'], ['http://127.0.0.1/']]],
+    }), { status: 200 }));
+    await expect(lookupDomainExpiration('example.com', insecure as typeof fetch)).rejects.toMatchObject({ reason: 'RDAP_UNSUPPORTED_TLD' });
+    expect(insecure).toHaveBeenCalledTimes(1);
+
+    const missingDate = vi.fn(async (input: RequestInfo | URL) => {
+      const payload = new URL(String(input)).hostname === 'data.iana.org'
+        ? { services: [[['com'], ['https://rdap.verisign.com/com/v1/']]] }
+        : { events: [{ eventAction: 'registration', eventDate: '2020-01-01T00:00:00Z' }] };
+      return new Response(JSON.stringify(payload), { status: 200 });
+    });
+    await expect(lookupDomainExpiration('example.com', missingDate as typeof fetch)).rejects.toMatchObject({ reason: 'RDAP_EXPIRATION_MISSING' });
   });
 });
 

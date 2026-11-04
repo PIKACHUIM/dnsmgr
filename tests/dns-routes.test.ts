@@ -1,17 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
+import { AppError } from '../src/core/errors';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { environment } from '../src/platform/runtime';
 import { createTestDatabase } from './helpers/sqlite';
 
 const credentials = { username: 'admin', password: 'test-password-2026!' };
 const appKey = btoa('12345678901234567890123456789012');
+let rdapLookupStatus = 200;
 
 function cloudflareFetch() {
   let nextRecord = 1;
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
-    const json = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+    if (url.hostname === 'data.iana.org') {
+      return json({ services: [[['com'], ['https://rdap.verisign.com/com/v1/']]] });
+    }
+    if (url.hostname === 'rdap.verisign.com') {
+      return json({ events: [{ eventAction: 'expiration', eventDate: '2030-01-01T00:00:00Z' }] }, rdapLookupStatus);
+    }
     if (url.pathname === '/client/v4/zones' && url.searchParams.get('name')) {
       return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }], result_info: { total_count: 1 } });
     }
@@ -35,6 +43,7 @@ describe('DNS account, domain and record API', () => {
   let bindings: Bindings;
 
   beforeEach(() => {
+    rdapLookupStatus = 200;
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const transport = cloudflareFetch();
@@ -129,6 +138,50 @@ describe('DNS account, domain and record API', () => {
     const list = await (await request(`/api/v1/dns/domains?accountId=${created.id}&page=1&pageSize=20`, { headers: { cookie } })).json() as { items: { id: number; name: string }[] };
     return list.items;
   }
+
+  it('refreshes one domain expiration through RDAP with CSRF protection', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const path = `/api/v1/dns/domains/${domain!.id}/expiration/refresh`;
+    expect((await post(path, {}, { cookie })).status).toBe(403);
+
+    const response = await post(path, {}, { cookie, 'X-CSRF-Token': csrf });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ code: 0, expiresAt: 1893456000, checkStatus: 1 });
+    const stored = await testDb.db.query<{ expires_at: number; checked_at: number; check_status: number }>(
+      'SELECT expires_at, checked_at, check_status FROM dns_domains WHERE id=?', [domain!.id],
+    );
+    expect(stored[0]).toMatchObject({ expires_at: 1893456000, check_status: 1, checked_at: expect.any(Number) });
+  });
+
+  it('marks failed expiration lookups without replacing the previous date', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    await testDb.db.execute('UPDATE dns_domains SET expires_at=?, check_status=1 WHERE id=?', [1_900_000_000, domain!.id]);
+    rdapLookupStatus = 503;
+
+    const response = await post(`/api/v1/dns/domains/${domain!.id}/expiration/refresh`, {}, { cookie, 'X-CSRF-Token': csrf });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'EXPIRATION_LOOKUP_FAILED' });
+    const stored = await testDb.db.query<{ expires_at: number; checked_at: number; check_status: number }>(
+      'SELECT expires_at, checked_at, check_status FROM dns_domains WHERE id=?', [domain!.id],
+    );
+    expect(stored[0]).toMatchObject({ expires_at: 1_900_000_000, check_status: 2, checked_at: expect.any(Number) });
+  });
+
+  it('does not record a failed lookup when the platform request budget is exhausted', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    budget.fetch = async () => { throw new AppError(503, 'budget exhausted', 'REQUEST_BUDGET_EXCEEDED'); };
+
+    const response = await post(`/api/v1/dns/domains/${domain!.id}/expiration/refresh`, {}, { cookie, 'X-CSRF-Token': csrf });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'REQUEST_BUDGET_EXCEEDED' });
+    const stored = await testDb.db.query<{ expires_at: number | null; checked_at: number | null; check_status: number }>(
+      'SELECT expires_at, checked_at, check_status FROM dns_domains WHERE id=?', [domain!.id],
+    );
+    expect(stored[0]).toEqual({ expires_at: null, checked_at: null, check_status: 0 });
+  });
 
   it('manages domain categories and filters domains by them', async () => {
     const { cookie, csrf } = await session();

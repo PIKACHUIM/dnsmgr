@@ -6,6 +6,7 @@ import { requireSession, requireCsrf, requireAdmin, requireDomain, nowSeconds, c
 import { decrypt, encrypt } from '../security/crypto';
 import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecordInput } from '../dns/types';
 import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../dns/registry';
+import { lookupDomainExpiration } from '../dns/expiration';
 import type { SqlDatabase } from '../storage/sql';
 
 interface AccountRow extends Record<string, unknown> {
@@ -576,6 +577,36 @@ export function dnsRoutes() {
     }
     await audit(c, `domain.batch.${action}`, `${ids.length} ids`, `affected=${affected}`);
     return c.json({ code: 0, affected, requested: ids.length });
+  });
+
+  routes.post('/api/v1/dns/domains/:id/expiration/refresh', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    await consumeRateLimit(c, `domain:expiration:${c.get('principal').user.id}`, 10, 60);
+    const { domain } = await domainRow(c, domainId);
+    const checkedAt = nowSeconds();
+    let expiresAt: number;
+    try {
+      expiresAt = await lookupDomainExpiration(domain.name, providerFetch(c));
+    } catch (error) {
+      if (
+        (error instanceof AppError && (error.reason === 'REQUEST_BUDGET_EXCEEDED' || error.reason === 'REQUEST_TIMEOUT'))
+        || c.env.BUDGET?.remainingMs() === 0
+      ) throw error;
+      await db(c).execute(
+        'UPDATE dns_domains SET checked_at=?, check_status=2, updated_at=? WHERE id=?',
+        [checkedAt, checkedAt, domainId],
+      );
+      await audit(c, 'domain.expiration.refresh', domain.name, 'status=failed');
+      throw new AppError(503, '无法查询域名到期时间，请稍后重试', 'EXPIRATION_LOOKUP_FAILED');
+    }
+    await db(c).execute(
+      'UPDATE dns_domains SET expires_at=?, checked_at=?, check_status=1, updated_at=? WHERE id=?',
+      [expiresAt, checkedAt, checkedAt, domainId],
+    );
+    await audit(c, 'domain.expiration.refresh', domain.name, 'status=success');
+    return c.json({ code: 0, expiresAt, checkedAt, checkStatus: 1 });
   });
 
   routes.get('/api/v1/dns/domains/:id', requireSession, async (c) => {
