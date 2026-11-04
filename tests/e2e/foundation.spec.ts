@@ -39,6 +39,25 @@ test('initialization, login, session restore, responsive navigation and logout',
   }
   await page.goto('/account');
   await expect(page.getByRole('heading', { name: '添加 DNS 账户' })).toBeVisible();
+  await page.route(/\/api\/v1\/dns\/domains\?/, (route) => route.fulfill({ json: {
+    code: 0, total: 1, items: [{
+      id: 1001, name: 'example.com', accountId: 1, accountName: 'test', accountType: 'cloudflare',
+      remark: null, recordCount: 0, hidden: false, notice: false, categoryId: null, categoryName: null,
+      expiresAt: 1893456000, checkStatus: 1,
+    }],
+  } }));
+  await page.route('**/api/v1/dns/categories', (route) => route.fulfill({ json: { code: 0, items: [] } }));
+  await page.route('**/api/v1/dns/accounts', (route) => route.fulfill({ json: { code: 0, items: [{ id: 1, name: 'test', type: 'cloudflare' }] } }));
+  await page.route('**/api/v1/dns/domains/batch', async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ ids: [1001], action: 'expiration-refresh' });
+    await route.fulfill({ json: { code: 0, affected: 1, requested: 1 } });
+  });
+  await page.goto('/domain');
+  await expect(page.getByRole('heading', { name: '域名列表' })).toBeVisible();
+  await page.getByLabel('选择 example.com').check();
+  await page.getByLabel('批量操作').selectOption('expiration-refresh');
+  await page.getByRole('button', { name: '应用' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('已将 1/1 个请求项加入到期查询队列');
   await page.route('**/api/v1/dns/domains/1000', (route) => route.fulfill({ json: {
     code: 0, domain: { id: 1000, name: 'example.com', accountName: 'test', accountType: 'cloudflare' },
   } }));

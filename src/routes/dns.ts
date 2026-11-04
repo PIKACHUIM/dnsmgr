@@ -573,6 +573,12 @@ export function dnsRoutes() {
         [categoryId, nowSeconds(), ...ids],
       );
       affected = Number(result.changes) || 0;
+    } else if (action === 'expiration-refresh') {
+      const result = await db(c).execute(
+        `UPDATE dns_domains SET check_status=0, checked_at=NULL, updated_at=? WHERE id IN (${placeholders}) AND check_status <> 3`,
+        [nowSeconds(), ...ids],
+      );
+      affected = Number(result.changes) || 0;
     } else {
       throw new AppError(400, '不支持的批量操作', 'INVALID_BATCH_ACTION');
     }

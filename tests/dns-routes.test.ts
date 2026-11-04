@@ -283,6 +283,29 @@ describe('DNS account, domain and record API', () => {
     expect((await request(`/api/v1/dns/categories/${category.id}`, { method: 'DELETE', headers })).status).toBe(200);
   });
 
+  it('queues batch expiration refreshes without resetting active claims or replacing dates', async () => {
+    const { cookie, csrf } = await session();
+    const domains = await seedDomain(cookie, csrf, ['a.example.com', 'b.example.com']);
+    const headers = { cookie, 'X-CSRF-Token': csrf };
+    await testDb.db.execute('UPDATE dns_domains SET expires_at=?, checked_at=123, check_status=1, updated_at=100 WHERE id=?', [1_900_000_000, domains[0]!.id]);
+    await testDb.db.execute('UPDATE dns_domains SET expires_at=?, checked_at=456, check_status=3, updated_at=100 WHERE id=?', [1_910_000_000, domains[1]!.id]);
+
+    expect((await post('/api/v1/dns/domains/batch', { ids: domains.map((domain) => domain.id), action: 'expiration-refresh' }, { cookie })).status).toBe(403);
+    const response = await post('/api/v1/dns/domains/batch', { ids: domains.map((domain) => domain.id), action: 'expiration-refresh' }, headers);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ code: 0, affected: 1, requested: 2 });
+
+    const rows = await testDb.db.query<{ id: number; expires_at: number; checked_at: number | null; check_status: number; updated_at: number }>(
+      'SELECT id, expires_at, checked_at, check_status, updated_at FROM dns_domains ORDER BY id',
+    );
+    expect(rows[0]).toMatchObject({ expires_at: 1_900_000_000, checked_at: null, check_status: 0 });
+    expect(rows[0]!.updated_at).toBeGreaterThan(100);
+    expect(rows[1]).toEqual({ id: domains[1]!.id, expires_at: 1_910_000_000, checked_at: 456, check_status: 3, updated_at: 100 });
+    expect((await testDb.db.query<{ action: string; detail: string }>(
+      "SELECT action, detail FROM audit_logs WHERE action='domain.batch.expiration-refresh'",
+    ))[0]).toEqual({ action: 'domain.batch.expiration-refresh', detail: 'affected=1' });
+  });
+
   it('applies domain batch actions and deletes local rows only', async () => {
     const { cookie, csrf } = await session();
     const domains = await seedDomain(cookie, csrf, ['a.example.com', 'b.example.com']);

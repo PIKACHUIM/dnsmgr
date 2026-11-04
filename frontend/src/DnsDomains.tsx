@@ -20,11 +20,13 @@ const PAGE_SIZE = 20;
 function expirationText(domain: Domain): string {
   if (domain.expiresAt === null || !Number.isFinite(domain.expiresAt)) {
     if (domain.checkStatus === 3) return '查询中';
-    return domain.checkStatus === 2 ? '查询失败' : '未记录';
+    if (domain.checkStatus === 2) return '查询失败';
+    return domain.checkStatus === 0 ? '待查询' : '未记录';
   }
   const date = new Date(domain.expiresAt * 1000);
   const label = date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
-  return `${domain.expiresAt < Date.now() / 1000 ? '已过期' : '到期'} ${label}`;
+  const refreshStatus = domain.checkStatus === 0 ? '（待刷新）' : domain.checkStatus === 3 ? '（查询中）' : '';
+  return `${domain.expiresAt < Date.now() / 1000 ? '已过期' : '到期'} ${label}${refreshStatus}`;
 }
 
 export function DnsDomains({ session, navigate, onExpired }: Props) {
@@ -180,8 +182,10 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
     if (batchAction === 'hidden' || batchAction === 'notice') body.value = batchFlag === '1';
     if (batchAction === 'remark') body.remark = batchRemark;
     try {
-      const result = await send<{ code: 0; affected: number }>('/api/v1/dns/domains/batch', 'POST', body, signal.signal, { 'X-CSRF-Token': session.csrfToken });
-      setNotice(`已处理 ${result.affected} 个域名`);
+      const result = await send<{ code: 0; affected: number; requested: number }>('/api/v1/dns/domains/batch', 'POST', body, signal.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(batchAction === 'expiration-refresh'
+        ? `已将 ${result.affected}/${result.requested} 个请求项加入到期查询队列；cron 每次最多处理 1 个，正在查询中的项目不会被重置`
+        : `已处理 ${result.affected} 个域名`);
       setSelected([]);
       setRefresh((value) => value + 1);
     } catch (failure) { handle(failure); }
@@ -229,6 +233,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
           <option value="category">设置分类</option>
           <option value="hidden">隐藏/显示</option>
           <option value="notice">到期提醒</option>
+          <option value="expiration-refresh">排队刷新到期时间</option>
           <option value="remark">设置备注</option>
           <option value="delete">移除域名</option>
         </select>
