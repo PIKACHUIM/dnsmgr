@@ -445,6 +445,13 @@ describe('notification settings API', () => {
     expect(invalidUserId.status).toBe(400);
     expect((await invalidUserId.json()).reason).toBe('INVALID_FEISHU_USER_ID');
 
+    const mixedAll = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ feishuWebhookUrl: webhookUrl, feishuUserIds: 'all,ou_user_123' }),
+    });
+    expect(mixedAll.status).toBe(400);
+    expect((await mixedAll.json()).reason).toBe('INVALID_FEISHU_USER_ID');
+
     const incomplete = await request('/api/v1/system/notify', {
       method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
       body: JSON.stringify({ feishuUserIds: 'ou_user_123' }),

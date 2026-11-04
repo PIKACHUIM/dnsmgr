@@ -202,7 +202,7 @@ export function normalizeFeishuWebhookUrl(value: string): string {
 export function normalizeFeishuUserIds(value: string): string {
   const recipients = [...new Set(value.split(/[\s,，]+/).map((recipient) => recipient.trim()).filter(Boolean))];
   if (recipients.length === 1 && recipients[0]!.toLowerCase() === 'all') return 'all';
-  if (recipients.length > 20 || recipients.some((recipient) => !/^[A-Za-z0-9_-]{1,128}$/.test(recipient))) {
+  if (recipients.length > 20 || recipients.some((recipient) => recipient.toLowerCase() === 'all' || !/^[A-Za-z0-9_-]{1,128}$/.test(recipient))) {
     throw new AppError(400, '飞书 @用户须为有效 user_id（最多 20 个），或填写 all', 'INVALID_FEISHU_USER_ID');
   }
   return recipients.join(',');
