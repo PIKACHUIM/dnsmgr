@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DnsError } from '../src/dns/types';
 import { lookupDomainExpiration } from '../src/dns/expiration';
+import { checkDnsRecordValue, lookupPublicDnsRecords } from '../src/dns/record-check';
 import { createCloudflareProvider } from '../src/dns/providers/cloudflare';
 import { createAliyunProvider } from '../src/dns/providers/aliyun';
 import { createDnspodProvider } from '../src/dns/providers/dnspod';
@@ -179,6 +180,41 @@ describe('domain expiration lookup', () => {
       return new Response(JSON.stringify(payload), { status: 200 });
     });
     await expect(lookupDomainExpiration('example.com', missingDate as typeof fetch)).rejects.toMatchObject({ reason: 'RDAP_EXPIRATION_MISSING' });
+  });
+});
+
+describe('public DNS record checks', () => {
+  it('uses the fixed DoH resolver and queries the validated hostname and record type', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      expect(url.hostname).toBe('dns.alidns.com');
+      expect(url.searchParams.get('name')).toBe('www.example.com');
+      expect(url.searchParams.get('type')).toBe('1');
+      return new Response(JSON.stringify({ Status: 0, Answer: [{ type: 1, data: '1.1.1.1' }] }), { status: 200 });
+    });
+
+    await expect(lookupPublicDnsRecords('www.example.com', 'A', fetchImpl)).resolves.toEqual(['1.1.1.1']);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes DNS names, MX priority, TXT quotes and equivalent IP forms', () => {
+    expect(checkDnsRecordValue('MAIL.Example.COM.', ['10 mail.example.com.'], 'MX').status).toBe('active');
+    expect(checkDnsRecordValue('v=spf1 include:example.com', ['"v=spf1 include:example.com"'], 'TXT').status).toBe('active');
+    expect(checkDnsRecordValue('001.001.001.001', ['1.1.1.1'], 'A').status).toBe('active');
+    expect(checkDnsRecordValue('2001:0db8:0:0:0:0:0:1', ['2001:db8::1'], 'AAAA').status).toBe('active');
+    expect(checkDnsRecordValue('target.example.com', ['wrong.example.com.'], 'CNAME')).toEqual({
+      status: 'mismatch', actual: ['wrong.example.com'], expected: 'target.example.com',
+    });
+    expect(checkDnsRecordValue('1.1.1.1', [], 'A')).toEqual({ status: 'not_found', actual: [] });
+  });
+
+  it('rejects invalid query names and reports resolver errors instead of not_found', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ Status: 2 }), { status: 200 }));
+    await expect(lookupPublicDnsRecords('bad name.example.com', 'A', fetchImpl as typeof fetch))
+      .rejects.toMatchObject({ reason: 'INVALID_DNS_QUERY_NAME' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await expect(lookupPublicDnsRecords('www.example.com', 'A', fetchImpl as typeof fetch))
+      .rejects.toMatchObject({ reason: 'DNS_LOOKUP_FAILED' });
   });
 });
 

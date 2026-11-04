@@ -8,12 +8,18 @@ import { createTestDatabase } from './helpers/sqlite';
 const credentials = { username: 'admin', password: 'test-password-2026!' };
 const appKey = btoa('12345678901234567890123456789012');
 let rdapLookupStatus = 200;
+let dohPayload: unknown = { Status: 0, Answer: [{ type: 1, data: '1.1.1.1' }] };
+let dohQueries: URL[] = [];
 
 function cloudflareFetch() {
   let nextRecord = 1;
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+    if (url.hostname === 'dns.alidns.com') {
+      dohQueries.push(url);
+      return json(dohPayload);
+    }
     if (url.hostname === 'data.iana.org') {
       return json({ services: [[['com'], ['https://rdap.verisign.com/com/v1/']]] });
     }
@@ -44,6 +50,8 @@ describe('DNS account, domain and record API', () => {
 
   beforeEach(() => {
     rdapLookupStatus = 200;
+    dohPayload = { Status: 0, Answer: [{ type: 1, data: '1.1.1.1' }] };
+    dohQueries = [];
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const transport = cloudflareFetch();
@@ -181,6 +189,70 @@ describe('DNS account, domain and record API', () => {
       'SELECT expires_at, checked_at, check_status FROM dns_domains WHERE id=?', [domain!.id],
     );
     expect(stored[0]).toEqual({ expires_at: null, checked_at: null, check_status: 0 });
+  });
+
+  it('checks public DNS records without changing DNS state', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const path = `/api/v1/dns/domains/${domain!.id}/records/check`;
+    const body = { name: 'www', type: 'A', value: '1.1.1.1' };
+    const headers = { cookie, 'X-CSRF-Token': csrf };
+    const stateBefore = await testDb.db.query('SELECT expires_at, checked_at, check_status, updated_at FROM dns_domains WHERE id=?', [domain!.id]);
+    const auditBefore = await testDb.db.query<{ n: number }>('SELECT COUNT(*) AS n FROM audit_logs');
+
+    expect((await post(path, body, { cookie })).status).toBe(403);
+    const active = await post(path, body, headers);
+    expect(active.status).toBe(200);
+    expect(await active.json()).toEqual({ code: 0, data: { status: 'active', actual: ['1.1.1.1'] } });
+    expect(dohQueries[0]!.searchParams.get('name')).toBe('www.example.com');
+
+    dohPayload = { Status: 0, Answer: [{ type: 1, data: '2.2.2.2' }] };
+    const mismatch = await post(path, body, headers);
+    expect(await mismatch.json()).toEqual({ code: 0, data: { status: 'mismatch', actual: ['2.2.2.2'], expected: '1.1.1.1' } });
+
+    dohPayload = { Status: 3 };
+    const missing = await post(path, body, headers);
+    expect(await missing.json()).toEqual({ code: 0, data: { status: 'not_found', actual: [] } });
+
+    const unsupported = await post(path, { ...body, type: 'URL' }, headers);
+    expect(unsupported.status).toBe(400);
+    expect(await unsupported.json()).toMatchObject({ reason: 'UNSUPPORTED_DNS_CHECK_TYPE' });
+    const invalidName = await post(path, { ...body, name: 'www..net' }, headers);
+    expect(invalidName.status).toBe(400);
+    const emptyValue = await post(path, { ...body, value: '   ' }, headers);
+    expect(emptyValue.status).toBe(400);
+    expect(await emptyValue.json()).toMatchObject({ reason: 'INVALID_RECORD_VALUE' });
+
+    expect(await testDb.db.query('SELECT expires_at, checked_at, check_status, updated_at FROM dns_domains WHERE id=?', [domain!.id])).toEqual(stateBefore);
+    expect((await testDb.db.query<{ n: number }>('SELECT COUNT(*) AS n FROM audit_logs'))[0]!.n).toBe(auditBefore[0]!.n);
+  });
+
+  it('requires domain read permission and rate-limits public DNS lookups', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const path = `/api/v1/dns/domains/${domain!.id}/records/check`;
+    const body = { name: 'www', type: 'A', value: '1.1.1.1' };
+    await testDb.db.execute('UPDATE users SET level=0 WHERE id=1');
+    expect((await post(path, body, { cookie, 'X-CSRF-Token': csrf })).status).toBe(403);
+    expect(dohQueries).toHaveLength(0);
+
+    await testDb.db.execute('UPDATE users SET level=2 WHERE id=1');
+    const responses: Response[] = [];
+    for (let attempt = 0; attempt < 21; attempt++) responses.push(await post(path, body, { cookie, 'X-CSRF-Token': csrf }));
+    expect(responses.slice(0, 20).every((response) => response.status === 200)).toBe(true);
+    expect(responses[20]!.status).toBe(429);
+    expect(dohQueries).toHaveLength(20);
+  });
+
+  it('preserves request-budget errors instead of reporting DNS not_found', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    budget.fetch = async () => { throw new AppError(503, 'budget exhausted', 'REQUEST_BUDGET_EXCEEDED'); };
+
+    const response = await post(`/api/v1/dns/domains/${domain!.id}/records/check`,
+      { name: '@', type: 'A', value: '1.1.1.1' }, { cookie, 'X-CSRF-Token': csrf });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'REQUEST_BUDGET_EXCEEDED' });
   });
 
   it('manages domain categories and filters domains by them', async () => {

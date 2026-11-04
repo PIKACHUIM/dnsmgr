@@ -39,9 +39,28 @@ test('initialization, login, session restore, responsive navigation and logout',
   }
   await page.goto('/account');
   await expect(page.getByRole('heading', { name: '添加 DNS 账户' })).toBeVisible();
+  await page.route('**/api/v1/dns/domains/1000', (route) => route.fulfill({ json: {
+    code: 0, domain: { id: 1000, name: 'example.com', accountName: 'test', accountType: 'cloudflare' },
+  } }));
+  await page.route(/\/api\/v1\/dns\/domains\/1000\/records\?/, (route) => route.fulfill({ json: {
+    code: 0, page: 1, pageSize: 20, total: 2, items: [
+      { id: 'a-record', name: 'www', type: 'A', value: '1.1.1.1', line: 'default', ttl: 600, mx: null, weight: null, remark: null, status: 1 },
+      { id: 'url-record', name: 'web', type: 'URL', value: 'https://example.com', line: 'default', ttl: 600, mx: null, weight: null, remark: null, status: 1 },
+    ],
+  } }));
+  await page.route('**/api/v1/dns/domains/1000/lines', (route) => route.fulfill({ json: { code: 0, lines: null, minTtl: null } }));
+  await page.route('**/api/v1/dns/domains/1000/records/check', async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ name: 'www', type: 'A', value: '1.1.1.1' });
+    await route.fulfill({ json: { code: 0, data: { status: 'mismatch', actual: ['<img src=x onerror=alert(1)>'], expected: '1.1.1.1' } } });
+  });
   await page.goto('/record/1000');
   await expect(page.getByRole('heading', { name: '解析记录', exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole('link', { name: '返回域名列表' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '检测解析' })).toHaveCount(1);
+  await page.getByRole('button', { name: '检测解析' }).click();
+  await expect(page.getByText('解析值不一致')).toBeVisible();
+  await expect(page.locator('.record-value').filter({ hasText: '<img src=x onerror=alert(1)>' })).toContainText('<img src=x onerror=alert(1)>');
+  await expect(page.locator('img[src="x"]')).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();

@@ -11,8 +11,10 @@ interface FormState {
   name: string; type: string; value: string; line: string; ttl: string; mx: string; remark: string;
 }
 interface VendorLog { time: string | null; action: string }
+interface RecordCheck { status: 'active' | 'mismatch' | 'not_found'; actual: string[]; expected?: string }
 
 const TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'URL', 'REDIRECT_URL', 'FORWARD_URL'];
+const CHECK_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV', 'CAA']);
 const TYPE_LABELS: { [key: string]: string } = { URL: 'URL', REDIRECT_URL: '显性URL', FORWARD_URL: '隐性URL' };
 const PAGE_SIZE = 20;
 const EMPTY: FormState = { name: '', type: 'A', value: '', line: 'default', ttl: '600', mx: '', remark: '' };
@@ -27,6 +29,8 @@ interface Props {
 export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   const [domain, setDomain] = useState<DomainInfo | null>(null);
   const [records, setRecords] = useState<Record[]>([]);
+  const [recordChecks, setRecordChecks] = useState<{ [id: string]: RecordCheck }>({});
+  const [checkingRecordId, setCheckingRecordId] = useState<string | null>(null);
   const [lines, setLines] = useState<DnsLine[] | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -131,6 +135,26 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     finally { setBusy(false); }
   }
 
+  async function checkRecord(record: Record) {
+    if (busy) return;
+    setBusy(true);
+    setCheckingRecordId(record.id);
+    setError('');
+    const signal = new AbortController();
+    try {
+      const result = await send<{ code: 0; data: RecordCheck }>(
+        `/api/v1/dns/domains/${domainId}/records/check`, 'POST',
+        { name: record.name, type: record.type, value: record.value },
+        signal.signal, { 'X-CSRF-Token': session.csrfToken },
+      );
+      setRecordChecks((current) => ({ ...current, [record.id]: result.data }));
+    } catch (failure) { handle(failure); }
+    finally {
+      setBusy(false);
+      setCheckingRecordId(null);
+    }
+  }
+
   function toggleSelected(recordId: string) {
     setSelected((current) => current.includes(recordId) ? current.filter((id) => id !== recordId) : [...current, recordId]);
   }
@@ -233,7 +257,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
       </form>
     </section>
     <section className="panel" aria-labelledby="record-list-title">
-      <div className="panel-heading"><div><h2 id="record-list-title">解析记录</h2></div><span className="panel-meta">共 {total} 条</span></div>
+      <div className="panel-heading"><div><h2 id="record-list-title">解析记录</h2></div><span className="panel-meta">共 {total} 条 · 检查使用 AliDNS 公网 DNS，只读不修改记录</span></div>
       {selected.length > 0 && <div className="dns-batch">
         <span className="mono">已选 {selected.length} 条</span>
         <select value={batchAction} onChange={(event) => setBatchAction(event.target.value)} aria-label="批量操作">
@@ -259,12 +283,19 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
               <td><input type="checkbox" checked={selected.includes(record.id)} aria-label={`选择 ${record.name}`} onChange={() => toggleSelected(record.id)} /></td>
               <td className="mono">{record.name}</td>
               <td>{TYPE_LABELS[record.type] ?? record.type}</td>
-              <td className="record-value">{record.value}</td>
+              <td className="record-value">{record.value}
+                {recordChecks[record.id] && <div className={`notice ${recordChecks[record.id]!.status === 'mismatch' ? 'notice-error' : ''}`} role="status">
+                  <strong>{recordChecks[record.id]!.status === 'active' ? '解析已生效' : recordChecks[record.id]!.status === 'mismatch' ? '解析值不一致' : '未查询到记录'}</strong>
+                  {recordChecks[record.id]!.actual.length > 0 && <span>实际解析值：{recordChecks[record.id]!.actual.join('、')}</span>}
+                  {recordChecks[record.id]!.expected !== undefined && <span>期望解析值：{recordChecks[record.id]!.expected}</span>}
+                </div>}
+              </td>
               <td>{lines?.find((line) => line.id === record.line)?.name ?? record.line}</td>
               <td>{record.ttl}</td>
               <td>{record.status === 1 ? '启用' : '停用'}</td>
               <td>{record.remark ?? '—'}</td>
               <td className="row-actions">
+                {CHECK_TYPES.has(record.type) && <button className="button button-secondary" disabled={busy} onClick={() => void checkRecord(record)}>{checkingRecordId === record.id ? '检测中…' : '检测解析'}</button>}
                 <button className="button button-secondary" disabled={busy} onClick={() => edit(record)}>编辑</button>
                 <button className="button button-secondary" disabled={busy} onClick={() => void act(record, 'toggle')}>{record.status === 1 ? '停用' : '启用'}</button>
                 <button className="button button-quiet" disabled={busy} onClick={() => void act(record, 'delete')}>删除</button>

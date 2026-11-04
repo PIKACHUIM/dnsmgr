@@ -7,6 +7,7 @@ import { decrypt, encrypt } from '../security/crypto';
 import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecordInput } from '../dns/types';
 import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../dns/registry';
 import { lookupDomainExpiration } from '../dns/expiration';
+import { checkDnsRecordValue, isDnsCheckType, lookupPublicDnsRecords } from '../dns/record-check';
 import type { SqlDatabase } from '../storage/sql';
 
 interface AccountRow extends Record<string, unknown> {
@@ -624,6 +625,26 @@ export function dnsRoutes() {
         expiresAt: domain.expires_at, checkStatus: domain.check_status,
       },
     });
+  });
+
+  routes.post('/api/v1/dns/domains/:id/records/check', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId);
+    const body = await input(c);
+    const recordName = text(body, 'name', 128).trim();
+    if (!RECORD_NAME.test(recordName)) throw new AppError(400, '主机记录格式无效', 'INVALID_RECORD_NAME');
+    const type = text(body, 'type', 16).trim().toUpperCase();
+    if (!isDnsCheckType(type)) throw new AppError(400, '该记录类型暂不支持检测', 'UNSUPPORTED_DNS_CHECK_TYPE');
+    const expectedValue = text(body, 'value', 2048).trim();
+    if (!expectedValue) throw new AppError(400, '记录值不能为空', 'INVALID_RECORD_VALUE');
+    const domains = await db(c).query<{ name: string }>('SELECT name FROM dns_domains WHERE id = ?', [domainId]);
+    const domain = domains[0];
+    if (!domain) throw new AppError(404, '域名不存在', 'DOMAIN_NOT_FOUND');
+    await consumeRateLimit(c, `dns:record-check:${c.get('principal').user.id}`, 20, 60);
+    const queryName = recordName === '@' ? domain.name : `${recordName}.${domain.name}`;
+    const answers = await lookupPublicDnsRecords(queryName, type, providerFetch(c));
+    return c.json({ code: 0, data: checkDnsRecordValue(expectedValue, answers, type) });
   });
 
   routes.get('/api/v1/dns/domains/:id/records', requireSession, async (c) => {
