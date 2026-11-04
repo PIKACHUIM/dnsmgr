@@ -8,8 +8,9 @@ interface Config {
   wxpusherTokenConfigured: boolean; wxpusherUidsConfigured: boolean;
   telegramBotToken: string; telegramChatId: string; telegramTopicId: string; telegramConfigured: boolean;
   telegramTokenConfigured: boolean; telegramChatIdConfigured: boolean; telegramTopicIdConfigured: boolean;
+  wecomWebhookUrl: string; wecomConfigured: boolean; wecomUrlConfigured: boolean;
   clearUrl: boolean; clearHeaders: boolean; clearBody: boolean;
-  clearWxpusherAppToken: boolean; clearWxpusherUids: boolean; clearTelegram: boolean;
+  clearWxpusherAppToken: boolean; clearWxpusherUids: boolean; clearTelegram: boolean; clearWecom: boolean;
 }
 interface Props { session: Session; onExpired: (message: string) => void }
 
@@ -28,8 +29,8 @@ export function NotifySettings({ session, onExpired }: Props) {
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     try {
-      const result = await request<{ code: 0 } & Omit<Config, 'clearUrl' | 'clearHeaders' | 'clearBody' | 'clearWxpusherAppToken' | 'clearWxpusherUids' | 'clearTelegram'>>('/api/v1/system/notify', { signal });
-      if (!signal.aborted) setConfig({ ...result, clearUrl: false, clearHeaders: false, clearBody: false, clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false });
+      const result = await request<{ code: 0 } & Omit<Config, 'clearUrl' | 'clearHeaders' | 'clearBody' | 'clearWxpusherAppToken' | 'clearWxpusherUids' | 'clearTelegram' | 'clearWecom'>>('/api/v1/system/notify', { signal });
+      if (!signal.aborted) setConfig({ ...result, clearUrl: false, clearHeaders: false, clearBody: false, clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, clearWecom: false });
     } catch (failure) { if (!signal.aborted) handle(failure); }
     finally { if (!signal.aborted) setLoading(false); }
   }, [handle]);
@@ -40,7 +41,7 @@ export function NotifySettings({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [load]);
 
-  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId', value: string) {
+  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl', value: string) {
     setConfig((current) => {
       if (!current) return current;
       const updated = { ...current, [key]: value };
@@ -52,6 +53,7 @@ export function NotifySettings({ session, onExpired }: Props) {
         updated.clearWxpusherUids = false;
       }
       if (key === 'telegramBotToken' || key === 'telegramChatId' || key === 'telegramTopicId') updated.clearTelegram = false;
+      if (key === 'wecomWebhookUrl') updated.clearWecom = false;
       return updated;
     });
   }
@@ -69,13 +71,13 @@ export function NotifySettings({ session, onExpired }: Props) {
         wxpusherAppToken: config.wxpusherAppToken, wxpusherUids: config.wxpusherUids,
         clearWxpusherAppToken: config.clearWxpusherAppToken, clearWxpusherUids: config.clearWxpusherUids,
         telegramBotToken: config.telegramBotToken, telegramChatId: config.telegramChatId, telegramTopicId: config.telegramTopicId,
-        clearTelegram: config.clearTelegram,
+        clearTelegram: config.clearTelegram, wecomWebhookUrl: config.wecomWebhookUrl, clearWecom: config.clearWecom,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setConfig((current) => current ? {
         ...current, url: '', headers: '', body: '', wxpusherAppToken: '', wxpusherUids: '',
         telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
         clearUrl: false, clearHeaders: false, clearBody: false,
-        clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false,
+        clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, wecomWebhookUrl: '', clearWecom: false,
       } : current);
       setNotice('通知设置已保存');
       await load(controller.signal);
@@ -125,16 +127,20 @@ export function NotifySettings({ session, onExpired }: Props) {
           <label className="form-field"><span>Chat ID</span><input value={config.telegramChatId} onChange={(event) => update('telegramChatId', event.target.value)} maxLength={128} placeholder={config.telegramChatIdConfigured ? '已配置，留空保留' : '数字 ID 或 @channelusername'} /></label>
           <label className="form-field"><span>Topic ID（选填）</span><input value={config.telegramTopicId} onChange={(event) => update('telegramTopicId', event.target.value)} maxLength={12} placeholder={config.telegramTopicIdConfigured ? '已配置，留空保留' : '论坛群组消息主题 ID'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearTelegram} onChange={(event) => setConfig({ ...config, clearTelegram: event.target.checked })} /> 清除 Telegram 凭据</span></label>
+          <h3>企业微信群机器人</h3>
+          <p className="form-hint">仅接受 qyapi.weixin.qq.com 官方 HTTPS 机器人 URL；链接包含密钥，保存后不会回显。</p>
+          <label className="form-field"><span>机器人 Webhook URL</span><input value={config.wecomWebhookUrl} onChange={(event) => update('wecomWebhookUrl', event.target.value)} maxLength={1024} placeholder={config.wecomUrlConfigured ? '已配置，留空保留' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'} /></label>
+          <label className="form-field"><span><input type="checkbox" checked={config.clearWecom} onChange={(event) => setConfig({ ...config, clearWecom: event.target.checked })} /> 清除企业微信机器人凭据</span></label>
           <div className="form-actions">
             <button className="button button-primary" type="submit" disabled={busy}>保存</button>
-            <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured)} onClick={() => void test()}>发送测试</button>
+            <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured && !config.wecomConfigured)} onClick={() => void test()}>发送测试</button>
             <span>Webhook 模板支持 <code>{'{title}'}</code> 与 <code>{'{content}'}</code>；GET 使用查询参数。</span>
           </div>
         </form>}
     </section>
     <section className="panel" aria-labelledby="notify-help-title">
       <div className="panel-heading"><div><h2 id="notify-help-title">说明</h2></div><span className="panel-meta">当前范围</span></div>
-      <p>目前支持自定义 Webhook、WxPusher 和 Telegram；定时任务失败及容灾切换/恢复事件会尝试发送已配置渠道。邮件、企业微信、钉钉、飞书和 QQ 机器人仍待迁移。通知失败不会回滚已完成的 DNS 操作。</p>
+      <p>目前支持自定义 Webhook、WxPusher、Telegram 和企业微信群机器人；定时任务失败及容灾切换/恢复事件会尝试发送已配置渠道。邮件、钉钉、飞书和 QQ 机器人仍待迁移。通知失败不会回滚已完成的 DNS 操作。</p>
     </section>
   </>;
 }

@@ -30,6 +30,7 @@ describe('notification settings API', () => {
   let sent: string[] = [];
   let wxpusherSuccess = true;
   let telegramOk = true;
+  let wecomErrcode = 0;
 
   beforeEach(async () => {
     testDb = createTestDatabase();
@@ -37,6 +38,7 @@ describe('notification settings API', () => {
     sent = [];
     wxpusherSuccess = true;
     telegramOk = true;
+    wecomErrcode = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       sent.push(`${init.method ?? 'GET'} ${String(input)} ${String(init.body ?? '')}`);
       const url = new URL(String(input));
@@ -45,6 +47,9 @@ describe('notification settings API', () => {
       }
       if (url.hostname === 'api.telegram.org') {
         return new Response(JSON.stringify({ ok: telegramOk }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        return new Response(JSON.stringify({ errcode: wecomErrcode, errmsg: wecomErrcode === 0 ? 'ok' : 'rejected' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof fetch;
@@ -233,5 +238,50 @@ describe('notification settings API', () => {
     });
     expect(invalidTopic.status).toBe(400);
     expect((await invalidTopic.json()).reason).toBe('INVALID_TELEGRAM_TOPIC_ID');
+  });
+
+  it('encrypts and redacts the enterprise WeChat webhook and sends Markdown notifications', async () => {
+    const key = '0123456789abcdef0123456789abcdef';
+    const webhookUrl = `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${key}`;
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ wecomWebhookUrl: webhookUrl }),
+    });
+    expect(await saved.json()).toMatchObject({ wecomConfigured: true, wecomUrlConfigured: true, wecomWebhookUrl: '' });
+
+    const stored = await testDb.db.query<{ value: string }>("SELECT value FROM app_settings WHERE key = 'notification_secrets_cipher'");
+    expect(stored[0]!.value).not.toContain(key);
+    expect(stored[0]!.value).not.toContain(webhookUrl);
+    const viewResponse = await request('/api/v1/system/notify', { headers: { cookie } });
+    const view = await viewResponse.json() as Record<string, unknown>;
+    expect(view).toMatchObject({ wecomConfigured: true, wecomWebhookUrl: '' });
+    expect(JSON.stringify(view)).not.toContain(key);
+
+    const sentResponse = await post('/api/v1/system/notify/test', { title: '告警', content: '域名解析已更新 @all' });
+    expect(await sentResponse.json()).toMatchObject({ code: 0, channels: [{ channel: 'wecom', status: 200 }] });
+    const wecomCall = sent.find((entry) => entry.includes('qyapi.weixin.qq.com'))!;
+    expect(wecomCall).toContain(webhookUrl);
+    const payload = JSON.parse(wecomCall.slice(wecomCall.indexOf('{'))) as Record<string, unknown>;
+    expect(payload).toEqual({ msgtype: 'markdown', markdown: { content: `### 告警\n域名解析已更新 @${String.fromCharCode(0x200b)}all` } });
+
+    wecomErrcode = 93000;
+    const rejected = await post('/api/v1/system/notify/test', { title: '告警', content: '失败' });
+    expect(rejected.status).toBe(503);
+    expect(JSON.stringify(await rejected.json())).not.toContain(key);
+
+    const cleared = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ clearWecom: true }),
+    });
+    expect(await cleared.json()).toMatchObject({ wecomConfigured: false, wecomUrlConfigured: false });
+  });
+
+  it('rejects non-official enterprise WeChat webhook URLs', async () => {
+    const invalid = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ wecomWebhookUrl: 'https://qyapi.weixin.qq.com.evil.test/cgi-bin/webhook/send?key=0123456789abcdef' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_WECOM_WEBHOOK_URL');
   });
 });

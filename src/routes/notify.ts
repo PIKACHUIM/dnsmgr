@@ -5,7 +5,7 @@ import { input, text } from '../core/request';
 import { requireAdmin, requireCsrf, requireSession, nowSeconds } from '../security/auth';
 import { parseConfig } from '../notify/custom';
 import {
-  loadNotificationSettings, normalizeWxPusherUids, notificationSettingsView,
+  loadNotificationSettings, normalizeWecomWebhookUrl, normalizeWxPusherUids, notificationSettingsView,
   saveNotificationSettings, sendConfiguredNotifications,
 } from '../notify/settings';
 
@@ -64,6 +64,7 @@ export function notifyRoutes() {
       telegramBotToken: secretValue('telegramBotToken', 'clearTelegram', 256, current.secrets.telegramBotToken),
       telegramChatId: secretValue('telegramChatId', 'clearTelegram', 128, current.secrets.telegramChatId),
       telegramTopicId: secretValue('telegramTopicId', 'clearTelegram', 12, current.secrets.telegramTopicId),
+      wecomWebhookUrl: secretValue('wecomWebhookUrl', 'clearWecom', 1024, current.secrets.wecomWebhookUrl),
     };
     if (typeof body.wxpusherUids === 'string' && body.wxpusherUids.trim() && body.clearWxpusherUids !== true) {
       secrets.wxpusherUids = normalizeWxPusherUids(body.wxpusherUids.trim());
@@ -80,6 +81,7 @@ export function notifyRoutes() {
     if (Boolean(secrets.telegramBotToken) !== Boolean(secrets.telegramChatId)) {
       throw new AppError(400, 'Telegram Bot Token 与 Chat ID 必须同时配置或清除', 'INCOMPLETE_TELEGRAM_CONFIG');
     }
+    if (secrets.wecomWebhookUrl) secrets.wecomWebhookUrl = normalizeWecomWebhookUrl(secrets.wecomWebhookUrl);
     const method = typeof body.method === 'string' ? body.method.trim().toUpperCase() : current.method;
     const contentType = typeof body.contentType === 'string'
       ? body.contentType.trim().slice(0, 128) || 'application/json'
@@ -97,7 +99,7 @@ export function notifyRoutes() {
     await saveNotificationSettings(c, { secrets, method, contentType });
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
-      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)}`, nowSeconds()],
+      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)},wecom=${Boolean(secrets.wecomWebhookUrl)}`, nowSeconds()],
     );
     return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType }) });
   });
@@ -107,7 +109,7 @@ export function notifyRoutes() {
     requireAdmin(c);
     const body = await input(c);
     const settings = await loadNotificationSettings(c);
-    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken) {
+    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken && !settings.secrets.wecomWebhookUrl) {
       throw new AppError(400, '请先配置至少一个通知渠道', 'NOTIFICATION_NOT_CONFIGURED');
     }
     const title = text(body, 'title', 100).trim() || 'DNSMGR 测试通知';
