@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
+import { AppError } from '../src/core/errors';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { environment } from '../src/platform/runtime';
 import { nextRunAt } from '../src/schedule/tasks';
@@ -8,12 +9,22 @@ import { createTestDatabase } from './helpers/sqlite';
 const credentials = { username: 'admin', password: 'test-password-2026!' };
 const appKey = btoa('12345678901234567890123456789012');
 let failRecordUpdate = false;
+let rdapLookupStatus = 200;
+let rdapRequests: string[] = [];
 let wxpusherRequests: string[] = [];
 
 function transport() {
   return vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(String(input));
-    const json = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+    if (url.hostname === 'data.iana.org') {
+      rdapRequests.push(url.toString());
+      return json({ services: [[['com'], ['https://rdap.verisign.com/com/v1/']]] });
+    }
+    if (url.hostname === 'rdap.verisign.com') {
+      rdapRequests.push(url.toString());
+      return json({ events: [{ eventAction: 'expiration', eventDate: '2030-01-01T00:00:00Z' }] }, rdapLookupStatus);
+    }
     if (url.hostname === 'wxpusher.zjiecode.com') {
       wxpusherRequests.push(String(init.body ?? ''));
       return json({ success: true });
@@ -53,6 +64,8 @@ describe('schedule API', () => {
 
   beforeEach(async () => {
     failRecordUpdate = false;
+    rdapLookupStatus = 200;
+    rdapRequests = [];
     wxpusherRequests = [];
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
@@ -82,6 +95,12 @@ describe('schedule API', () => {
       headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf, ...headers },
       body: JSON.stringify(body),
     });
+  }
+
+  async function enableCron() {
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute('INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', ['cron_enabled', '1', now]);
+    await testDb.db.execute('INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', ['cron_key', 'test-cron-key', now]);
   }
 
   it('creates tasks, exposes cron settings and executes due work', async () => {
@@ -146,5 +165,52 @@ describe('schedule API', () => {
     expect(await run.json()).toMatchObject({ code: 0, ran: 0, failed: 1 });
     expect(wxpusherRequests).toHaveLength(1);
     expect(JSON.parse(wxpusherRequests[0]!)).toMatchObject({ appToken: 'AT_scheduled-test', uids: ['UID_scheduled-test'] });
+  });
+
+  it('refreshes one pending domain from cron and avoids duplicate concurrent lookups', async () => {
+    await enableCron();
+    const path = '/cron?key=test-cron-key';
+    const results = await Promise.all([request(path), request(path)]);
+    expect(await Promise.all(results.map((response) => response.text()))).toEqual(['success!', 'success!']);
+    expect(rdapRequests).toHaveLength(2);
+    const domains = await testDb.db.query<{ expires_at: number; check_status: number; checked_at: number }>(
+      'SELECT expires_at, check_status, checked_at FROM dns_domains WHERE name=?', ['example.com'],
+    );
+    expect(domains[0]).toMatchObject({ expires_at: 1_893_456_000, check_status: 1, checked_at: expect.any(Number) });
+
+    await request(path);
+    expect(rdapRequests).toHaveLength(2);
+  });
+
+  it('marks failed initial lookups without replacing an existing expiration date', async () => {
+    await enableCron();
+    rdapLookupStatus = 503;
+    await testDb.db.execute('UPDATE dns_domains SET expires_at=? WHERE name=?', [1_900_000_000, 'example.com']);
+    await request('/cron?key=test-cron-key');
+    const domains = await testDb.db.query<{ expires_at: number; check_status: number; checked_at: number }>(
+      'SELECT expires_at, check_status, checked_at FROM dns_domains WHERE name=?', ['example.com'],
+    );
+    expect(domains[0]).toMatchObject({ expires_at: 1_900_000_000, check_status: 2, checked_at: expect.any(Number) });
+  });
+
+  it('reclaims a stale pending expiration claim after a crashed cron request', async () => {
+    await enableCron();
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute('UPDATE dns_domains SET check_status=3, checked_at=? WHERE name=?', [now - 301, 'example.com']);
+    await request('/cron?key=test-cron-key');
+    const domains = await testDb.db.query<{ expires_at: number; check_status: number; checked_at: number }>(
+      'SELECT expires_at, check_status, checked_at FROM dns_domains WHERE name=?', ['example.com'],
+    );
+    expect(domains[0]).toMatchObject({ expires_at: 1_893_456_000, check_status: 1, checked_at: expect.any(Number) });
+  });
+
+  it('releases the pending claim when the platform fetch budget is exhausted', async () => {
+    await enableCron();
+    bindings.BUDGET!.fetch = async () => { throw new AppError(503, 'budget exhausted', 'REQUEST_BUDGET_EXCEEDED'); };
+    await request('/cron?key=test-cron-key');
+    const domains = await testDb.db.query<{ expires_at: number | null; check_status: number; checked_at: number | null }>(
+      'SELECT expires_at, check_status, checked_at FROM dns_domains WHERE name=?', ['example.com'],
+    );
+    expect(domains[0]).toEqual({ expires_at: null, check_status: 0, checked_at: null });
   });
 });

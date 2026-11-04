@@ -19,6 +19,7 @@ const PAGE_SIZE = 20;
 
 function expirationText(domain: Domain): string {
   if (domain.expiresAt === null || !Number.isFinite(domain.expiresAt)) {
+    if (domain.checkStatus === 3) return '查询中';
     return domain.checkStatus === 2 ? '查询失败' : '未记录';
   }
   const date = new Date(domain.expiresAt * 1000);
