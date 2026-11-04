@@ -24,13 +24,15 @@ export interface NotificationSettings {
     dingtalkWebhookUrl: string;
     dingtalkSecret: string;
     dingtalkAtMobiles: string;
+    feishuWebhookUrl: string;
+    feishuUserIds: string;
   };
   method: string;
   contentType: string;
 }
 
 export interface NotificationDelivery {
-  channel: 'webhook' | 'wxpusher' | 'telegram' | 'wecom' | 'dingtalk';
+  channel: 'webhook' | 'wxpusher' | 'telegram' | 'wecom' | 'dingtalk' | 'feishu';
   ok: boolean;
   status: number | null;
 }
@@ -39,7 +41,7 @@ function emptySecrets(): NotificationSettings['secrets'] {
   return {
     webhookUrl: '', webhookHeaders: '', webhookBody: '', wxpusherAppToken: '', wxpusherUids: '',
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '', wecomWebhookUrl: '',
-    dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '',
+    dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', feishuWebhookUrl: '', feishuUserIds: '',
   };
 }
 
@@ -52,7 +54,7 @@ function parseSecrets(value: string): NotificationSettings['secrets'] {
   const source = decoded as Record<string, unknown>;
   const keys = [
     'webhookUrl', 'webhookHeaders', 'webhookBody', 'wxpusherAppToken', 'wxpusherUids',
-    'telegramBotToken', 'telegramChatId', 'telegramTopicId', 'wecomWebhookUrl', 'dingtalkWebhookUrl', 'dingtalkSecret', 'dingtalkAtMobiles',
+    'telegramBotToken', 'telegramChatId', 'telegramTopicId', 'wecomWebhookUrl', 'dingtalkWebhookUrl', 'dingtalkSecret', 'dingtalkAtMobiles', 'feishuWebhookUrl', 'feishuUserIds',
   ] as const;
   if (keys.some((key) => source[key] !== undefined && typeof source[key] !== 'string')) {
     throw new AppError(503, '通知配置损坏，请重新保存通知设置', 'NOTIFICATION_CONFIG_CORRUPTED');
@@ -116,9 +118,10 @@ export function notificationSettingsView(settings: NotificationSettings) {
   const telegramConfigured = Boolean(secrets.telegramBotToken && secrets.telegramChatId);
   const wecomConfigured = Boolean(secrets.wecomWebhookUrl);
   const dingtalkConfigured = Boolean(secrets.dingtalkWebhookUrl);
+  const feishuConfigured = Boolean(secrets.feishuWebhookUrl);
   return {
     url: '', headers: '', body: '', wxpusherAppToken: '', wxpusherUids: '', wecomWebhookUrl: '',
-    dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '',
+    dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', feishuWebhookUrl: '', feishuUserIds: '',
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
     method: settings.method, contentType: settings.contentType,
     configured: webhookConfigured, webhookConfigured,
@@ -133,6 +136,8 @@ export function notificationSettingsView(settings: NotificationSettings) {
     dingtalkConfigured, dingtalkUrlConfigured: dingtalkConfigured,
     dingtalkSecretConfigured: Boolean(secrets.dingtalkSecret),
     dingtalkAtMobilesConfigured: Boolean(secrets.dingtalkAtMobiles),
+    feishuConfigured, feishuUrlConfigured: feishuConfigured,
+    feishuUserIdsConfigured: Boolean(secrets.feishuUserIds),
   };
 }
 
@@ -177,6 +182,28 @@ export function normalizeDingTalkAtMobiles(value: string): string {
   if (recipients.length === 1 && recipients[0]!.toLowerCase() === 'all') return 'all';
   if (recipients.length > 20 || recipients.some((recipient) => !/^\+?\d{5,20}$/.test(recipient))) {
     throw new AppError(400, '钉钉 @用户须为手机号（最多 20 个），或填写 all', 'INVALID_DINGTALK_AT_MOBILES');
+  }
+  return recipients.join(',');
+}
+
+export function normalizeFeishuWebhookUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new AppError(400, '飞书 Webhook URL 无效', 'INVALID_FEISHU_WEBHOOK_URL'); }
+  const hostAllowed = url.hostname === 'open.feishu.cn' || url.hostname === 'open.larksuite.com';
+  if (
+    url.protocol !== 'https:' || !hostAllowed || url.port || url.username || url.password ||
+    !/^\/open-apis\/bot\/v2\/hook\/[A-Za-z0-9_-]{16,128}$/.test(url.pathname) || url.search || url.hash
+  ) {
+    throw new AppError(400, '飞书 Webhook URL 必须使用官方 HTTPS 机器人地址', 'INVALID_FEISHU_WEBHOOK_URL');
+  }
+  return url.toString();
+}
+
+export function normalizeFeishuUserIds(value: string): string {
+  const recipients = [...new Set(value.split(/[\s,，]+/).map((recipient) => recipient.trim()).filter(Boolean))];
+  if (recipients.length === 1 && recipients[0]!.toLowerCase() === 'all') return 'all';
+  if (recipients.length > 20 || recipients.some((recipient) => !/^[A-Za-z0-9_-]{1,128}$/.test(recipient))) {
+    throw new AppError(400, '飞书 @用户须为有效 user_id（最多 20 个），或填写 all', 'INVALID_FEISHU_USER_ID');
   }
   return recipients.join(',');
 }
@@ -301,6 +328,65 @@ async function sendDingTalk(
   }
 }
 
+function escapeFeishuMarkdown(value: string): string {
+  const slash = String.fromCharCode(92);
+  const special = new Set([slash, '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|', '>', '~', '<', '>']);
+  return [...value].map((character) => special.has(character) ? `${slash}${character}` : character).join('');
+}
+
+function feishuCardTemplate(title: string): string {
+  if (title.includes('发生告警') || title.includes('失败')) return 'red';
+  if (title.includes('恢复正常')) return 'green';
+  if (title.includes('到期提醒')) return 'yellow';
+  return 'blue';
+}
+
+async function sendFeishu(
+  webhookUrl: string, userIds: string, title: string, content: string, fetchImpl: typeof fetch,
+): Promise<{ status: number; ok: boolean }> {
+  const markdownContent = escapeFeishuMarkdown(content);
+  const mentions = userIds.toLowerCase() === 'all'
+    ? '<at id=all></at>'
+    : userIds.split(',').filter(Boolean).map((id) => `<at user_id="${id}"></at>`).join('');
+  const message = mentions ? `${markdownContent}\n${mentions}` : markdownContent;
+  if (new TextEncoder().encode(message).byteLength > 20_000) return { status: 413, ok: false };
+  const padding = '12px 12px 12px 12px';
+  const payload = {
+    msg_type: 'interactive',
+    card: {
+      schema: '2.0',
+      config: {
+        update_multi: true,
+        style: { text_size: { normal_v2: { default: 'normal', pc: 'normal', mobile: 'heading' } } },
+      },
+      header: {
+        title: { tag: 'plain_text', content: title }, subtitle: { tag: 'plain_text', content: '' },
+        template: feishuCardTemplate(title), padding,
+      },
+      body: {
+        direction: 'vertical', padding,
+        elements: [{ tag: 'markdown', content: message, text_align: 'left', text_size: 'normal_v2', margin: '0px 0px 0px 0px' }],
+      },
+    },
+  };
+  const response = await fetchImpl(normalizeFeishuWebhookUrl(webhookUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=UTF-8' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15_000),
+    redirect: 'error',
+  });
+  if (!response.ok) return { status: response.status, ok: false };
+  const body = await response.text();
+  if (body.length > 4096) return { status: response.status, ok: false };
+  try {
+    const result = JSON.parse(body) as { errcode?: unknown; code?: unknown };
+    return { status: response.status, ok: result.errcode === 0 || result.code === 0 };
+  } catch {
+    return { status: response.status, ok: false };
+  }
+}
+
 export async function sendConfiguredNotifications(
   c: Context<AppEnv>, title: string, content: string,
 ): Promise<NotificationDelivery[]> {
@@ -358,6 +444,14 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'dingtalk', ...result });
     } catch {
       deliveries.push({ channel: 'dingtalk', ok: false, status: null });
+    }
+  }
+  if (config.secrets.feishuWebhookUrl) {
+    try {
+      const result = await sendFeishu(config.secrets.feishuWebhookUrl, config.secrets.feishuUserIds, title, content, fetchImpl);
+      deliveries.push({ channel: 'feishu', ...result });
+    } catch {
+      deliveries.push({ channel: 'feishu', ok: false, status: null });
     }
   }
   return deliveries;

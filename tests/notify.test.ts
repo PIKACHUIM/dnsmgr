@@ -32,6 +32,7 @@ describe('notification settings API', () => {
   let telegramOk = true;
   let wecomErrcode = 0;
   let dingtalkErrcode = 0;
+  let feishuCode = 0;
 
   beforeEach(async () => {
     testDb = createTestDatabase();
@@ -41,6 +42,7 @@ describe('notification settings API', () => {
     telegramOk = true;
     wecomErrcode = 0;
     dingtalkErrcode = 0;
+    feishuCode = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       sent.push(`${init.method ?? 'GET'} ${String(input)} ${String(init.body ?? '')}`);
       const url = new URL(String(input));
@@ -55,6 +57,9 @@ describe('notification settings API', () => {
       }
       if (url.hostname === 'oapi.dingtalk.com') {
         return new Response(JSON.stringify({ errcode: dingtalkErrcode, errmsg: dingtalkErrcode === 0 ? 'ok' : 'rejected' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.hostname === 'open.feishu.cn' || url.hostname === 'open.larksuite.com') {
+        return new Response(JSON.stringify({ code: feishuCode, msg: feishuCode === 0 ? 'success' : 'rejected' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof fetch;
@@ -354,5 +359,97 @@ describe('notification settings API', () => {
     });
     expect(invalidAt.status).toBe(400);
     expect((await invalidAt.json()).reason).toBe('INVALID_DINGTALK_AT_MOBILES');
+  });
+
+  it('encrypts Feishu bot settings and sends interactive cards with escaped content and mentions', async () => {
+    const token = 'feishu-hook-token-0123456789';
+    const webhookUrl = `https://open.feishu.cn/open-apis/bot/v2/hook/${token}`;
+    const userId = 'ou_test-user_123';
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ feishuWebhookUrl: webhookUrl, feishuUserIds: userId }),
+    });
+    expect(await saved.json()).toMatchObject({ feishuConfigured: true, feishuUrlConfigured: true, feishuUserIdsConfigured: true, feishuWebhookUrl: '', feishuUserIds: '' });
+
+    const stored = await testDb.db.query<{ value: string }>("SELECT value FROM app_settings WHERE key = 'notification_secrets_cipher'");
+    expect(stored[0]!.value).not.toContain(token);
+    expect(stored[0]!.value).not.toContain(userId);
+    const view = await (await request('/api/v1/system/notify', { headers: { cookie } })).json() as Record<string, unknown>;
+    expect(view).toMatchObject({ feishuWebhookUrl: '', feishuUserIds: '', feishuConfigured: true });
+    expect(JSON.stringify(view)).not.toContain(token);
+    expect(JSON.stringify(view)).not.toContain(userId);
+
+    const sentResponse = await post('/api/v1/system/notify/test', { title: 'DNS 发生告警', content: '域名 *切换* <edge>' });
+    expect(await sentResponse.json()).toMatchObject({ code: 0, channels: [{ channel: 'feishu', status: 200 }] });
+    const call = sent.find((entry) => entry.includes('open.feishu.cn'))!;
+    expect(call).toContain(webhookUrl);
+    const payload = JSON.parse(call.slice(call.indexOf('{'))) as {
+      msg_type: string;
+      card: { schema: string; header: { template: string; title: { content: string } }; body: { elements: Array<{ tag: string; content: string }> } };
+    };
+    expect(payload.msg_type).toBe('interactive');
+    expect(payload.card.schema).toBe('2.0');
+    expect(payload.card.header.template).toBe('red');
+    expect(payload.card.header.title.content).toBe('DNS 发生告警');
+    expect(payload.card.body.elements[0]!.tag).toBe('markdown');
+    expect(payload.card.body.elements[0]!.content).toContain(`域名 ${String.fromCharCode(92)}*切换${String.fromCharCode(92)}* ${String.fromCharCode(92)}<edge${String.fromCharCode(92)}>`);
+    expect(payload.card.body.elements[0]!.content).toContain(`<at user_id="${userId}"></at>`);
+
+    const allSaved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ feishuUserIds: 'all' }),
+    });
+    expect(allSaved.status).toBe(200);
+    await post('/api/v1/system/notify/test', { title: 'DNS 恢复正常', content: '已恢复' });
+    const allCall = sent.filter((entry) => entry.includes('open.feishu.cn')).at(-1)!;
+    const allPayload = JSON.parse(allCall.slice(allCall.indexOf('{'))) as { card: { header: { template: string }; body: { elements: Array<{ content: string }> } } };
+    expect(allPayload.card.header.template).toBe('green');
+    expect(allPayload.card.body.elements[0]!.content).toContain('<at id=all></at>');
+
+    await post('/api/v1/system/notify/test', { title: 'DNS 到期提醒', content: '请在到期前续期' });
+    const expiryCall = sent.filter((entry) => entry.includes('open.feishu.cn')).at(-1)!;
+    const expiryPayload = JSON.parse(expiryCall.slice(expiryCall.indexOf('{'))) as { card: { header: { template: string } } };
+    expect(expiryPayload.card.header.template).toBe('yellow');
+    await post('/api/v1/system/notify/test', { title: 'DNS 通知', content: '状态更新' });
+    const defaultCall = sent.filter((entry) => entry.includes('open.feishu.cn')).at(-1)!;
+    const defaultPayload = JSON.parse(defaultCall.slice(defaultCall.indexOf('{'))) as { card: { header: { template: string } } };
+    expect(defaultPayload.card.header.template).toBe('blue');
+
+    feishuCode = 999;
+    const rejected = await post('/api/v1/system/notify/test', { title: 'DNS 发生告警失败', content: '失败' });
+    expect(rejected.status).toBe(503);
+    const rejection = JSON.stringify(await rejected.json());
+    expect(rejection).not.toContain(token);
+    expect(rejection).not.toContain(userId);
+
+    const cleared = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ clearFeishu: true }),
+    });
+    expect(await cleared.json()).toMatchObject({ feishuConfigured: false, feishuUrlConfigured: false, feishuUserIdsConfigured: false });
+  });
+
+  it('validates official Feishu webhooks and recipient IDs', async () => {
+    const invalidUrl = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ feishuWebhookUrl: 'https://open.feishu.cn.evil.test/open-apis/bot/v2/hook/0123456789abcdef' }),
+    });
+    expect(invalidUrl.status).toBe(400);
+    expect((await invalidUrl.json()).reason).toBe('INVALID_FEISHU_WEBHOOK_URL');
+
+    const webhookUrl = 'https://open.larksuite.com/open-apis/bot/v2/hook/0123456789abcdef';
+    const invalidUserId = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ feishuWebhookUrl: webhookUrl, feishuUserIds: 'id with spaces' }),
+    });
+    expect(invalidUserId.status).toBe(400);
+    expect((await invalidUserId.json()).reason).toBe('INVALID_FEISHU_USER_ID');
+
+    const incomplete = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ feishuUserIds: 'ou_user_123' }),
+    });
+    expect(incomplete.status).toBe(400);
+    expect((await incomplete.json()).reason).toBe('INCOMPLETE_FEISHU_CONFIG');
   });
 });

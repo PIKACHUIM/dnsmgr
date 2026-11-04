@@ -11,8 +11,9 @@ interface Config {
   wecomWebhookUrl: string; wecomConfigured: boolean; wecomUrlConfigured: boolean;
   dingtalkWebhookUrl: string; dingtalkSecret: string; dingtalkAtMobiles: string;
   dingtalkConfigured: boolean; dingtalkUrlConfigured: boolean; dingtalkSecretConfigured: boolean; dingtalkAtMobilesConfigured: boolean;
+  feishuWebhookUrl: string; feishuUserIds: string; feishuConfigured: boolean; feishuUrlConfigured: boolean; feishuUserIdsConfigured: boolean;
   clearUrl: boolean; clearHeaders: boolean; clearBody: boolean;
-  clearWxpusherAppToken: boolean; clearWxpusherUids: boolean; clearTelegram: boolean; clearWecom: boolean; clearDingtalk: boolean;
+  clearWxpusherAppToken: boolean; clearWxpusherUids: boolean; clearTelegram: boolean; clearWecom: boolean; clearDingtalk: boolean; clearFeishu: boolean;
 }
 interface Props { session: Session; onExpired: (message: string) => void }
 
@@ -31,8 +32,8 @@ export function NotifySettings({ session, onExpired }: Props) {
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     try {
-      const result = await request<{ code: 0 } & Omit<Config, 'clearUrl' | 'clearHeaders' | 'clearBody' | 'clearWxpusherAppToken' | 'clearWxpusherUids' | 'clearTelegram' | 'clearWecom' | 'clearDingtalk'>>('/api/v1/system/notify', { signal });
-      if (!signal.aborted) setConfig({ ...result, clearUrl: false, clearHeaders: false, clearBody: false, clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, clearWecom: false, clearDingtalk: false });
+      const result = await request<{ code: 0 } & Omit<Config, 'clearUrl' | 'clearHeaders' | 'clearBody' | 'clearWxpusherAppToken' | 'clearWxpusherUids' | 'clearTelegram' | 'clearWecom' | 'clearDingtalk' | 'clearFeishu'>>('/api/v1/system/notify', { signal });
+      if (!signal.aborted) setConfig({ ...result, clearUrl: false, clearHeaders: false, clearBody: false, clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, clearWecom: false, clearDingtalk: false, clearFeishu: false });
     } catch (failure) { if (!signal.aborted) handle(failure); }
     finally { if (!signal.aborted) setLoading(false); }
   }, [handle]);
@@ -43,7 +44,7 @@ export function NotifySettings({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [load]);
 
-  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles', value: string) {
+  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles' | 'feishuWebhookUrl' | 'feishuUserIds', value: string) {
     setConfig((current) => {
       if (!current) return current;
       const updated = { ...current, [key]: value };
@@ -57,6 +58,7 @@ export function NotifySettings({ session, onExpired }: Props) {
       if (key === 'telegramBotToken' || key === 'telegramChatId' || key === 'telegramTopicId') updated.clearTelegram = false;
       if (key === 'wecomWebhookUrl') updated.clearWecom = false;
       if (key === 'dingtalkWebhookUrl' || key === 'dingtalkSecret' || key === 'dingtalkAtMobiles') updated.clearDingtalk = false;
+      if (key === 'feishuWebhookUrl' || key === 'feishuUserIds') updated.clearFeishu = false;
       return updated;
     });
   }
@@ -77,6 +79,7 @@ export function NotifySettings({ session, onExpired }: Props) {
         clearTelegram: config.clearTelegram, wecomWebhookUrl: config.wecomWebhookUrl, clearWecom: config.clearWecom,
         dingtalkWebhookUrl: config.dingtalkWebhookUrl, dingtalkSecret: config.dingtalkSecret,
         dingtalkAtMobiles: config.dingtalkAtMobiles, clearDingtalk: config.clearDingtalk,
+        feishuWebhookUrl: config.feishuWebhookUrl, feishuUserIds: config.feishuUserIds, clearFeishu: config.clearFeishu,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setConfig((current) => current ? {
         ...current, url: '', headers: '', body: '', wxpusherAppToken: '', wxpusherUids: '',
@@ -84,6 +87,7 @@ export function NotifySettings({ session, onExpired }: Props) {
         clearUrl: false, clearHeaders: false, clearBody: false,
         clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, wecomWebhookUrl: '', clearWecom: false,
         dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', clearDingtalk: false,
+        feishuWebhookUrl: '', feishuUserIds: '', clearFeishu: false,
       } : current);
       setNotice('通知设置已保存');
       await load(controller.signal);
@@ -143,16 +147,21 @@ export function NotifySettings({ session, onExpired }: Props) {
           <label className="form-field"><span>签名密钥（选填）</span><input value={config.dingtalkSecret} onChange={(event) => update('dingtalkSecret', event.target.value)} maxLength={256} placeholder={config.dingtalkSecretConfigured ? '已配置，留空保留' : '机器人安全设置中的加签密钥'} /></label>
           <label className="form-field"><span>@用户手机号</span><input value={config.dingtalkAtMobiles} onChange={(event) => update('dingtalkAtMobiles', event.target.value)} maxLength={512} placeholder={config.dingtalkAtMobilesConfigured ? '已配置，留空保留' : '逗号分隔手机号，或填写 all'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearDingtalk} onChange={(event) => setConfig({ ...config, clearDingtalk: event.target.checked })} /> 清除钉钉机器人配置</span></label>
+          <h3>飞书群机器人</h3>
+          <p className="form-hint">Webhook 仅接受 open.feishu.cn 或 open.larksuite.com 官方 HTTPS 机器人地址；链接包含密钥，保存后不会回显。</p>
+          <label className="form-field"><span>机器人 Webhook URL</span><input value={config.feishuWebhookUrl} onChange={(event) => update('feishuWebhookUrl', event.target.value)} maxLength={1024} placeholder={config.feishuUrlConfigured ? '已配置，留空保留' : 'https://open.feishu.cn/open-apis/bot/v2/hook/...'} /></label>
+          <label className="form-field"><span>@用户 user_id（选填）</span><input value={config.feishuUserIds} onChange={(event) => update('feishuUserIds', event.target.value)} maxLength={2048} placeholder={config.feishuUserIdsConfigured ? '已配置，留空保留' : '逗号分隔 user_id，或填写 all'} /></label>
+          <label className="form-field"><span><input type="checkbox" checked={config.clearFeishu} onChange={(event) => setConfig({ ...config, clearFeishu: event.target.checked })} /> 清除飞书机器人配置</span></label>
           <div className="form-actions">
             <button className="button button-primary" type="submit" disabled={busy}>保存</button>
-            <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured && !config.wecomConfigured && !config.dingtalkConfigured)} onClick={() => void test()}>发送测试</button>
+            <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured && !config.wecomConfigured && !config.dingtalkConfigured && !config.feishuConfigured)} onClick={() => void test()}>发送测试</button>
             <span>Webhook 模板支持 <code>{'{title}'}</code> 与 <code>{'{content}'}</code>；GET 使用查询参数。</span>
           </div>
         </form>}
     </section>
     <section className="panel" aria-labelledby="notify-help-title">
       <div className="panel-heading"><div><h2 id="notify-help-title">说明</h2></div><span className="panel-meta">当前范围</span></div>
-      <p>目前支持自定义 Webhook、WxPusher、Telegram、企业微信群机器人和钉钉群机器人；定时任务失败及容灾切换/恢复事件会尝试发送已配置渠道。邮件、飞书和 QQ 机器人仍待迁移。通知失败不会回滚已完成的 DNS 操作。</p>
+      <p>目前支持自定义 Webhook、WxPusher、Telegram、企业微信、钉钉和飞书群机器人；定时任务失败及容灾切换/恢复事件会尝试发送已配置渠道。邮件和 QQ 机器人仍待迁移。通知失败不会回滚已完成的 DNS 操作。</p>
     </section>
   </>;
 }
