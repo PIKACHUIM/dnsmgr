@@ -5,7 +5,8 @@ import { input, text } from '../core/request';
 import { requireAdmin, requireCsrf, requireSession, nowSeconds } from '../security/auth';
 import { parseConfig } from '../notify/custom';
 import {
-  loadNotificationSettings, normalizeWecomWebhookUrl, normalizeWxPusherUids, notificationSettingsView,
+  loadNotificationSettings, normalizeDingTalkAtMobiles, normalizeDingTalkWebhookUrl, normalizeWecomWebhookUrl,
+  normalizeWxPusherUids, notificationSettingsView,
   saveNotificationSettings, sendConfiguredNotifications,
 } from '../notify/settings';
 
@@ -65,6 +66,9 @@ export function notifyRoutes() {
       telegramChatId: secretValue('telegramChatId', 'clearTelegram', 128, current.secrets.telegramChatId),
       telegramTopicId: secretValue('telegramTopicId', 'clearTelegram', 12, current.secrets.telegramTopicId),
       wecomWebhookUrl: secretValue('wecomWebhookUrl', 'clearWecom', 1024, current.secrets.wecomWebhookUrl),
+      dingtalkWebhookUrl: secretValue('dingtalkWebhookUrl', 'clearDingtalk', 1024, current.secrets.dingtalkWebhookUrl),
+      dingtalkSecret: secretValue('dingtalkSecret', 'clearDingtalk', 256, current.secrets.dingtalkSecret),
+      dingtalkAtMobiles: secretValue('dingtalkAtMobiles', 'clearDingtalk', 512, current.secrets.dingtalkAtMobiles),
     };
     if (typeof body.wxpusherUids === 'string' && body.wxpusherUids.trim() && body.clearWxpusherUids !== true) {
       secrets.wxpusherUids = normalizeWxPusherUids(body.wxpusherUids.trim());
@@ -82,6 +86,14 @@ export function notifyRoutes() {
       throw new AppError(400, 'Telegram Bot Token 与 Chat ID 必须同时配置或清除', 'INCOMPLETE_TELEGRAM_CONFIG');
     }
     if (secrets.wecomWebhookUrl) secrets.wecomWebhookUrl = normalizeWecomWebhookUrl(secrets.wecomWebhookUrl);
+    if (secrets.dingtalkWebhookUrl) secrets.dingtalkWebhookUrl = normalizeDingTalkWebhookUrl(secrets.dingtalkWebhookUrl);
+    if (secrets.dingtalkAtMobiles) secrets.dingtalkAtMobiles = normalizeDingTalkAtMobiles(secrets.dingtalkAtMobiles);
+    if (secrets.dingtalkSecret && (secrets.dingtalkSecret.length < 8 || secrets.dingtalkSecret.length > 256)) {
+      throw new AppError(400, '钉钉签名密钥长度必须为 8 至 256 个字符', 'INVALID_DINGTALK_SECRET');
+    }
+    if (!secrets.dingtalkWebhookUrl && (secrets.dingtalkSecret || secrets.dingtalkAtMobiles)) {
+      throw new AppError(400, '钉钉 Webhook URL 与签名或 @配置必须一起设置或清除', 'INCOMPLETE_DINGTALK_CONFIG');
+    }
     const method = typeof body.method === 'string' ? body.method.trim().toUpperCase() : current.method;
     const contentType = typeof body.contentType === 'string'
       ? body.contentType.trim().slice(0, 128) || 'application/json'
@@ -99,7 +111,7 @@ export function notifyRoutes() {
     await saveNotificationSettings(c, { secrets, method, contentType });
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
-      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)},wecom=${Boolean(secrets.wecomWebhookUrl)}`, nowSeconds()],
+      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)},wecom=${Boolean(secrets.wecomWebhookUrl)},dingtalk=${Boolean(secrets.dingtalkWebhookUrl)}`, nowSeconds()],
     );
     return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType }) });
   });
@@ -109,7 +121,7 @@ export function notifyRoutes() {
     requireAdmin(c);
     const body = await input(c);
     const settings = await loadNotificationSettings(c);
-    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken && !settings.secrets.wecomWebhookUrl) {
+    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken && !settings.secrets.wecomWebhookUrl && !settings.secrets.dingtalkWebhookUrl) {
       throw new AppError(400, '请先配置至少一个通知渠道', 'NOTIFICATION_NOT_CONFIGURED');
     }
     const title = text(body, 'title', 100).trim() || 'DNSMGR 测试通知';

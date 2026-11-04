@@ -31,6 +31,7 @@ describe('notification settings API', () => {
   let wxpusherSuccess = true;
   let telegramOk = true;
   let wecomErrcode = 0;
+  let dingtalkErrcode = 0;
 
   beforeEach(async () => {
     testDb = createTestDatabase();
@@ -39,6 +40,7 @@ describe('notification settings API', () => {
     wxpusherSuccess = true;
     telegramOk = true;
     wecomErrcode = 0;
+    dingtalkErrcode = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       sent.push(`${init.method ?? 'GET'} ${String(input)} ${String(init.body ?? '')}`);
       const url = new URL(String(input));
@@ -50,6 +52,9 @@ describe('notification settings API', () => {
       }
       if (url.hostname === 'qyapi.weixin.qq.com') {
         return new Response(JSON.stringify({ errcode: wecomErrcode, errmsg: wecomErrcode === 0 ? 'ok' : 'rejected' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.hostname === 'oapi.dingtalk.com') {
+        return new Response(JSON.stringify({ errcode: dingtalkErrcode, errmsg: dingtalkErrcode === 0 ? 'ok' : 'rejected' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof fetch;
@@ -283,5 +288,71 @@ describe('notification settings API', () => {
     });
     expect(invalid.status).toBe(400);
     expect((await invalid.json()).reason).toBe('INVALID_WECOM_WEBHOOK_URL');
+  });
+
+  it('encrypts DingTalk robot credentials, signs requests, and sends escaped Markdown with mentions', async () => {
+    const accessToken = '0123456789abcdef0123456789abcdef0123456789abcdef';
+    const secret = 'SEC_dingtalk_signing_secret_0123456789';
+    const webhookUrl = `https://oapi.dingtalk.com/robot/send?access_token=${accessToken}`;
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ dingtalkWebhookUrl: webhookUrl, dingtalkSecret: secret, dingtalkAtMobiles: '+8613800138000,13800138001' }),
+    });
+    expect(await saved.json()).toMatchObject({ dingtalkConfigured: true, dingtalkUrlConfigured: true, dingtalkSecretConfigured: true, dingtalkAtMobilesConfigured: true });
+
+    const stored = await testDb.db.query<{ value: string }>("SELECT value FROM app_settings WHERE key = 'notification_secrets_cipher'");
+    expect(stored[0]!.value).not.toContain(accessToken);
+    expect(stored[0]!.value).not.toContain(secret);
+    expect(stored[0]!.value).not.toContain('13800138001');
+    const view = await (await request('/api/v1/system/notify', { headers: { cookie } })).json() as Record<string, unknown>;
+    expect(view).toMatchObject({ dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', dingtalkConfigured: true });
+    expect(JSON.stringify(view)).not.toContain(accessToken);
+    expect(JSON.stringify(view)).not.toContain(secret);
+
+    const sentResponse = await post('/api/v1/system/notify/test', { title: 'DNS *告警*', content: '解析[已切换]' });
+    expect(await sentResponse.json()).toMatchObject({ code: 0, channels: [{ channel: 'dingtalk', status: 200 }] });
+    const call = sent.find((entry) => entry.includes('oapi.dingtalk.com'))!;
+    const [method, requestUrl] = call.split(' ');
+    expect(method).toBe('POST');
+    const signedUrl = new URL(requestUrl!);
+    expect(signedUrl.searchParams.get('access_token')).toBe(accessToken);
+    const timestamp = signedUrl.searchParams.get('timestamp')!;
+    expect(Number(timestamp)).toBeGreaterThan(Date.now() - 30_000);
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const signature = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}\n${secret}`)));
+    expect(signedUrl.searchParams.get('sign')).toBe(btoa(String.fromCharCode(...signature)));
+    const payload = JSON.parse(call.slice(call.indexOf('{'))) as { at: Record<string, unknown>; markdown: { text: string } };
+    expect(payload.at).toEqual({ atMobiles: ['+8613800138000', '13800138001'], isAtAll: false });
+    expect(payload.markdown.text).toContain(`${String.fromCharCode(92)}*告警${String.fromCharCode(92)}*`);
+    expect(payload.markdown.text).toContain(`${String.fromCharCode(92)}[已切换${String.fromCharCode(92)}]`);
+
+    dingtalkErrcode = 310000;
+    const rejected = await post('/api/v1/system/notify/test', { title: 'test', content: 'failed' });
+    expect(rejected.status).toBe(503);
+    const rejection = JSON.stringify(await rejected.json());
+    expect(rejection).not.toContain(accessToken);
+    expect(rejection).not.toContain(secret);
+
+    const cleared = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ clearDingtalk: true }),
+    });
+    expect(await cleared.json()).toMatchObject({ dingtalkConfigured: false, dingtalkSecretConfigured: false, dingtalkAtMobilesConfigured: false });
+  });
+
+  it('validates the official DingTalk URL, signing secret and @mention configuration', async () => {
+    const invalid = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ dingtalkWebhookUrl: 'https://oapi.dingtalk.com.evil.test/robot/send?access_token=0123456789abcdef' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_DINGTALK_WEBHOOK_URL');
+
+    const invalidAt = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ dingtalkWebhookUrl: 'https://oapi.dingtalk.com/robot/send?access_token=0123456789abcdef', dingtalkAtMobiles: 'all,13800138000' }),
+    });
+    expect(invalidAt.status).toBe(400);
+    expect((await invalidAt.json()).reason).toBe('INVALID_DINGTALK_AT_MOBILES');
   });
 });

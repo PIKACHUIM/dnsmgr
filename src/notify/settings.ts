@@ -21,13 +21,16 @@ export interface NotificationSettings {
     telegramChatId: string;
     telegramTopicId: string;
     wecomWebhookUrl: string;
+    dingtalkWebhookUrl: string;
+    dingtalkSecret: string;
+    dingtalkAtMobiles: string;
   };
   method: string;
   contentType: string;
 }
 
 export interface NotificationDelivery {
-  channel: 'webhook' | 'wxpusher' | 'telegram' | 'wecom';
+  channel: 'webhook' | 'wxpusher' | 'telegram' | 'wecom' | 'dingtalk';
   ok: boolean;
   status: number | null;
 }
@@ -36,6 +39,7 @@ function emptySecrets(): NotificationSettings['secrets'] {
   return {
     webhookUrl: '', webhookHeaders: '', webhookBody: '', wxpusherAppToken: '', wxpusherUids: '',
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '', wecomWebhookUrl: '',
+    dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '',
   };
 }
 
@@ -48,7 +52,7 @@ function parseSecrets(value: string): NotificationSettings['secrets'] {
   const source = decoded as Record<string, unknown>;
   const keys = [
     'webhookUrl', 'webhookHeaders', 'webhookBody', 'wxpusherAppToken', 'wxpusherUids',
-    'telegramBotToken', 'telegramChatId', 'telegramTopicId', 'wecomWebhookUrl',
+    'telegramBotToken', 'telegramChatId', 'telegramTopicId', 'wecomWebhookUrl', 'dingtalkWebhookUrl', 'dingtalkSecret', 'dingtalkAtMobiles',
   ] as const;
   if (keys.some((key) => source[key] !== undefined && typeof source[key] !== 'string')) {
     throw new AppError(503, '通知配置损坏，请重新保存通知设置', 'NOTIFICATION_CONFIG_CORRUPTED');
@@ -111,8 +115,10 @@ export function notificationSettingsView(settings: NotificationSettings) {
   const wxpusherConfigured = Boolean(secrets.wxpusherAppToken && secrets.wxpusherUids);
   const telegramConfigured = Boolean(secrets.telegramBotToken && secrets.telegramChatId);
   const wecomConfigured = Boolean(secrets.wecomWebhookUrl);
+  const dingtalkConfigured = Boolean(secrets.dingtalkWebhookUrl);
   return {
     url: '', headers: '', body: '', wxpusherAppToken: '', wxpusherUids: '', wecomWebhookUrl: '',
+    dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '',
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
     method: settings.method, contentType: settings.contentType,
     configured: webhookConfigured, webhookConfigured,
@@ -124,6 +130,9 @@ export function notificationSettingsView(settings: NotificationSettings) {
     telegramChatIdConfigured: Boolean(secrets.telegramChatId),
     telegramTopicIdConfigured: Boolean(secrets.telegramTopicId),
     wecomConfigured, wecomUrlConfigured: wecomConfigured,
+    dingtalkConfigured, dingtalkUrlConfigured: dingtalkConfigured,
+    dingtalkSecretConfigured: Boolean(secrets.dingtalkSecret),
+    dingtalkAtMobilesConfigured: Boolean(secrets.dingtalkAtMobiles),
   };
 }
 
@@ -147,6 +156,29 @@ export function normalizeWecomWebhookUrl(value: string): string {
     throw new AppError(400, '企业微信 Webhook URL 必须使用官方 HTTPS 机器人地址', 'INVALID_WECOM_WEBHOOK_URL');
   }
   return url.toString();
+}
+
+export function normalizeDingTalkWebhookUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new AppError(400, '钉钉 Webhook URL 无效', 'INVALID_DINGTALK_WEBHOOK_URL'); }
+  const entries = [...url.searchParams.entries()];
+  if (
+    url.protocol !== 'https:' || url.hostname !== 'oapi.dingtalk.com' || url.port ||
+    url.username || url.password || url.pathname !== '/robot/send' || url.hash ||
+    entries.length !== 1 || entries[0]![0] !== 'access_token' || !/^[A-Za-z0-9_-]{16,256}$/.test(entries[0]![1])
+  ) {
+    throw new AppError(400, '钉钉 Webhook URL 必须使用官方 HTTPS 机器人地址', 'INVALID_DINGTALK_WEBHOOK_URL');
+  }
+  return url.toString();
+}
+
+export function normalizeDingTalkAtMobiles(value: string): string {
+  const recipients = [...new Set(value.split(/[\s,，]+/).map((recipient) => recipient.trim()).filter(Boolean))];
+  if (recipients.length === 1 && recipients[0]!.toLowerCase() === 'all') return 'all';
+  if (recipients.length > 20 || recipients.some((recipient) => !/^\+?\d{5,20}$/.test(recipient))) {
+    throw new AppError(400, '钉钉 @用户须为手机号（最多 20 个），或填写 all', 'INVALID_DINGTALK_AT_MOBILES');
+  }
+  return recipients.join(',');
 }
 
 async function sendWxPusher(
@@ -222,6 +254,53 @@ async function sendWecom(
   }
 }
 
+function escapeDingTalkMarkdown(value: string): string {
+  const slash = String.fromCharCode(92);
+  const special = new Set([slash, '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|', '>', '~']);
+  return [...value].map((character) => special.has(character) ? `${slash}${character}` : character).join('');
+}
+
+async function signDingTalkUrl(url: URL, secret: string): Promise<URL> {
+  if (!secret) return url;
+  const timestamp = Date.now();
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signature = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(`${timestamp}\n${secret}`)));
+  const base64 = btoa(String.fromCharCode(...signature));
+  url.searchParams.set('timestamp', String(timestamp));
+  url.searchParams.set('sign', base64);
+  return url;
+}
+
+async function sendDingTalk(
+  webhookUrl: string, secret: string, atMobiles: string, title: string, content: string, fetchImpl: typeof fetch,
+): Promise<{ status: number; ok: boolean }> {
+  const url = await signDingTalkUrl(new URL(normalizeDingTalkWebhookUrl(webhookUrl)), secret);
+  const markdown = `### ${escapeDingTalkMarkdown(title)}\n${escapeDingTalkMarkdown(content)}`;
+  if (new TextEncoder().encode(markdown).byteLength > 20_000) return { status: 413, ok: false };
+  const payload: Record<string, unknown> = {
+    msgtype: 'markdown', markdown: { title, text: markdown },
+  };
+  if (atMobiles.toLowerCase() === 'all') payload.at = { isAtAll: true };
+  else if (atMobiles) payload.at = { atMobiles: atMobiles.split(','), isAtAll: false };
+  const response = await fetchImpl(url.toString(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=UTF-8' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15_000),
+    redirect: 'error',
+  });
+  if (!response.ok) return { status: response.status, ok: false };
+  const body = await response.text();
+  if (body.length > 4096) return { status: response.status, ok: false };
+  try {
+    const result = JSON.parse(body) as { errcode?: unknown; code?: unknown };
+    return { status: response.status, ok: result.errcode === 0 || result.code === 0 };
+  } catch {
+    return { status: response.status, ok: false };
+  }
+}
+
 export async function sendConfiguredNotifications(
   c: Context<AppEnv>, title: string, content: string,
 ): Promise<NotificationDelivery[]> {
@@ -269,6 +348,16 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'wecom', ...result });
     } catch {
       deliveries.push({ channel: 'wecom', ok: false, status: null });
+    }
+  }
+  if (config.secrets.dingtalkWebhookUrl) {
+    try {
+      const result = await sendDingTalk(
+        config.secrets.dingtalkWebhookUrl, config.secrets.dingtalkSecret, config.secrets.dingtalkAtMobiles, title, content, fetchImpl,
+      );
+      deliveries.push({ channel: 'dingtalk', ...result });
+    } catch {
+      deliveries.push({ channel: 'dingtalk', ok: false, status: null });
     }
   }
   return deliveries;
