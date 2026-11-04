@@ -4,7 +4,7 @@ import { ApiError, errorMessage, request, send, type Session } from './api';
 interface Domain {
   id: number; name: string; accountId: number; accountName: string; accountType: string;
   remark: string | null; recordCount: number; hidden: boolean; notice: boolean;
-  categoryId: number | null; categoryName: string | null;
+  categoryId: number | null; categoryName: string | null; expiresAt: number | null; checkStatus: number;
 }
 interface Account { id: number; name: string; type: string }
 interface Category { id: number; name: string; sort: number; domainCount: number }
@@ -16,6 +16,15 @@ interface Props {
 }
 
 const PAGE_SIZE = 20;
+
+function expirationText(domain: Domain): string {
+  if (domain.expiresAt === null || !Number.isFinite(domain.expiresAt)) {
+    return domain.checkStatus === 2 ? '查询失败' : '未记录';
+  }
+  const date = new Date(domain.expiresAt * 1000);
+  const label = date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return `${domain.expiresAt < Date.now() / 1000 ? '已过期' : '到期'} ${label}`;
+}
 
 export function DnsDomains({ session, navigate, onExpired }: Props) {
   const [domains, setDomains] = useState<Domain[]>([]);
@@ -221,7 +230,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
           : <div className="table-wrap"><table className="data-table">
             <thead><tr>
               <th><input type="checkbox" checked={allSelected} aria-label="全选" onChange={() => setSelected(allSelected ? [] : domains.map((domain) => domain.id))} /></th>
-              <th>域名</th><th>账户</th><th>分类</th><th>记录数</th><th>状态</th><th>操作</th>
+              <th>域名</th><th>账户</th><th>分类</th><th>记录数</th><th>到期时间</th><th>状态</th><th>操作</th>
             </tr></thead>
             <tbody>{domains.map((domain) => <tr key={domain.id}>
               <td><input type="checkbox" checked={selected.includes(domain.id)} aria-label={`选择 ${domain.name}`} onChange={() => toggleSelected(domain.id)} /></td>
@@ -235,6 +244,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
                 </select>
                 : domain.categoryName || '未分类'}</td>
               <td>{domain.recordCount}</td>
+              <td>{expirationText(domain)}</td>
               <td>{domain.hidden ? '已隐藏' : '正常'}{domain.notice ? <span className="value-detail">到期提醒</span> : null}</td>
               <td className="row-actions">
                 <a className="button button-secondary" href={`/record/${domain.id}`} onClick={(event) => { event.preventDefault(); navigate(`/record/${domain.id}`); }}>解析记录</a>
