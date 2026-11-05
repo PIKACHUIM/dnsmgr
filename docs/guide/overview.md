@@ -22,7 +22,7 @@ Hono 公共核心负责请求路由、认证和业务服务。DNS 驱动、域�
 - D1 和 Turso SQL 适配、版本迁移、协调租约和 fencing。
 - `map` 快照与 `key` 不可变实体、单键 CAS 写/删与分页索引；活动版本由 SQL 指针发布。
 - Cloudflare KV/R2、EdgeOne Blob、ESA EdgeKV 适配。平台适配测试使用本地替身，尚未连接真实云资源。
-- DNS 账户、域名同步与解析记录 CRUD，支持类型的只读公网 DNS 生效检查；域名到期支持单条手动刷新、管理员批量排队及 `/cron` 周期复查（-5 至 +30 天窗口、至少间隔 24 小时、每次最多一个查询）；管理员可配置到期提醒天数，`/cron` 在无 RDAP 查询工作时于配置时区 09:00 后按天分组发送，最多 10 个域名一组，域名级 20 小时冷却，发送到所有已配置的新 TS 通知渠道；22 个服务商驱动已全部实现（Cloudflare、阿里云、DNSPod、EdgeOne、阿里云 ESA、Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium）；凭据 AES-GCM 加密，写操作审计入库。驱动目前仅有本地请求构造单测，未经真实凭据冒烟。
+- DNS 账户、域名同步与解析记录 CRUD，提供单域名 Excel 首表预览导入和逐行写入结果，使用仓库内 SheetJS 0.20.3 parser；支持类型的只读公网 DNS 生效检查；域名到期支持单条手动刷新、管理员批量排队及 `/cron` 周期复查（-5 至 +30 天窗口、至少间隔 24 小时、每次最多一个查询）；管理员可配置到期提醒天数，`/cron` 在无 RDAP 查询工作时于配置时区 09:00 后按天分组发送，最多 10 个域名一组，域名级 20 小时冷却，发送到所有已配置的新 TS 通知渠道；22 个服务商驱动已全部实现（Cloudflare、阿里云、DNSPod、EdgeOne、阿里云 ESA、Route53、百度云、华为云、火山引擎、京东云、青云、NameSilo、Spaceship、西部数码、宝塔、DNSLA、DNSMGR、dynv6、GoEdge、HE.net、PowerDNS、Technitium）；凭据 AES-GCM 加密，写操作审计入库。驱动目前仅有本地请求构造单测，未经真实凭据冒烟。
 - 旧 PHP 路由、控制器分派、提供方注册与模板调用清单。
 
 尚未完成：旧版逐渠道到期提醒开关、Makers Node Function 的 KV bridge、格式/驱动导出导入和故障恢复/回收工具、验证码与快捷登录、证书签发与部署、CF 优选 IP、邮件/QQ 机器人、自托管执行器、其余业务界面；上游定期同步 CI 仍待完善。容灾当前仅支持公网 HTTP(S) 健康检查与 DNS 主备值切换，不包含 ICMP/TCP 探测，且尚未进行真实服务商/公网环境冒烟。

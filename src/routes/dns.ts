@@ -819,33 +819,54 @@ export function dnsRoutes() {
     let added = 0;
     let failed = 0;
     const errors: string[] = [];
-    for (const entry of records) {
-      let candidate: Record<string, unknown>;
+    const results: { index: number; ok: boolean; uncertain?: boolean; error?: string }[] = [];
+    for (const [index, entry] of records.entries()) {
+      let candidate: Record<string, unknown> | null = null;
+      let rowError: string | null = null;
       if (typeof entry === 'string') {
         const parts = entry.trim().split(/\s+/);
-        if (parts.length < 2) { failed++; if (errors.length < 5) errors.push(`无法解析：${entry.slice(0, 50)}`); continue; }
-        candidate = { name: parts[0], value: parts.slice(1).join(' ') };
-      } else if (entry && typeof entry === 'object') {
+        if (parts.length < 2) rowError = `无法解析：${entry.slice(0, 50)}`;
+        else candidate = { name: parts[0], value: parts.slice(1).join(' ') };
+      } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
         candidate = { ...(entry as Record<string, unknown>) };
       } else {
-        failed++; continue;
+        rowError = '记录格式无效';
+      }
+      if (!candidate) {
+        const message = rowError ?? '记录格式无效';
+        failed++;
+        if (errors.length < 5) errors.push(message);
+        results.push({ index, ok: false, error: message });
+        continue;
       }
       if (candidate.type === undefined || candidate.type === '') {
         candidate.type = body.type ?? guessRecordType(String(candidate.value ?? ''));
       }
       if (candidate.line === undefined) candidate.line = body.line ?? 'default';
       if (candidate.ttl === undefined) candidate.ttl = body.ttl ?? 600;
+      let data: DnsRecordInput;
       try {
-        const data = recordInput(candidate);
+        data = recordInput(candidate);
+      } catch (error) {
+        const message = error instanceof Error ? error.message.slice(0, 200) : '未知错误';
+        failed++;
+        if (errors.length < 5) errors.push(message);
+        results.push({ index, ok: false, error: message });
+        continue;
+      }
+      try {
         await provider.addRecord(target, data);
         added++;
+        results.push({ index, ok: true });
       } catch (error) {
+        const message = error instanceof Error ? error.message.slice(0, 200) : '未知错误';
         failed++;
-        if (errors.length < 5) errors.push(error instanceof Error ? error.message : '未知错误');
+        if (errors.length < 5) errors.push(message);
+        results.push({ index, ok: false, uncertain: true, error: message });
       }
     }
     if (added > 0) await audit(c, 'record.batch.add', domain.name, `${added} ok, ${failed} failed`);
-    return c.json({ code: 0, added, failed, errors });
+    return c.json({ code: 0, added, failed, errors, results });
   });
 
   routes.get('/api/v1/dns/domains/:id/record-logs', requireSession, async (c) => {

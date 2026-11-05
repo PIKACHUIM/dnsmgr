@@ -340,10 +340,36 @@ describe('DNS account, domain and record API', () => {
     }, headers);
     expect(await status.json()).toMatchObject({ code: 0, success: 2, failed: 0 });
 
-    const added = await post(`/api/v1/dns/domains/${domain!.id}/records/batch-add`, {
-      records: ['www 1.1.1.1', '@ 2001:db8::1', 'bad-line'],
-    }, headers);
-    expect(await added.json()).toMatchObject({ code: 0, added: 2, failed: 1 });
+    const batchPath = `/api/v1/dns/domains/${domain!.id}/records/batch-add`;
+    const records = [
+      'www 1.1.1.1',
+      '@ 2001:db8::1',
+      { name: 'mail', type: 'UNKNOWN', value: 'mail.example.com' },
+      'bad-line',
+    ];
+    expect((await post(batchPath, { records }, { cookie })).status).toBe(403);
+    const added = await post(batchPath, { records }, headers);
+    expect(await added.json()).toMatchObject({
+      code: 0, added: 2, failed: 2,
+      results: [
+        { index: 0, ok: true },
+        { index: 1, ok: true },
+        { index: 2, ok: false, error: '不支持的记录类型' },
+        { index: 3, ok: false, error: '无法解析：bad-line' },
+      ],
+    });
+
+    budget.fetch = async () => { throw new AppError(503, '上游请求超时', 'REQUEST_TIMEOUT'); };
+    const uncertain = await post(batchPath, { records: [{ name: 'delayed', type: 'A', value: '1.1.1.2' }] }, headers);
+    const uncertainPayload = await uncertain.json() as {
+      code: number; added: number; failed: number;
+      results: { index: number; ok: boolean; uncertain?: boolean; error?: string }[];
+    };
+    expect(uncertainPayload).toMatchObject({
+      code: 0, added: 0, failed: 1,
+      results: [{ index: 0, ok: false, uncertain: true }],
+    });
+    expect(uncertainPayload.results[0]!.error).toBeTruthy();
 
     const remoteLog = await (await request(`/api/v1/dns/domains/${domain!.id}/record-logs`, { headers: { cookie } })).json();
     expect(remoteLog).toMatchObject({ code: 0, supported: false, total: 0 });

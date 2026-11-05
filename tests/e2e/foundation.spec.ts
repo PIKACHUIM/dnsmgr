@@ -1,4 +1,29 @@
+import { readFileSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
+import { runInNewContext } from 'node:vm';
 import { expect, test } from '@playwright/test';
+
+interface SheetJsTestApi {
+  utils: {
+    book_new(): object;
+    aoa_to_sheet(rows: unknown[][]): object;
+    book_append_sheet(workbook: object, sheet: object, name: string): void;
+  };
+  write(workbook: object, options: { bookType: 'xlsx'; type: 'buffer' }): Buffer;
+}
+
+const sheetJsSource = readFileSync(new URL('../../public/static/js/xlsx.full.min.js', import.meta.url), 'utf8');
+const sheetJsContext: { Buffer: typeof Buffer; XLSX?: SheetJsTestApi } = { Buffer };
+runInNewContext(sheetJsSource, sheetJsContext);
+const testSheetJs = sheetJsContext.XLSX;
+if (!testSheetJs) throw new Error('Could not load the repository SheetJS parser');
+const importWorkbook = testSheetJs.utils.book_new();
+testSheetJs.utils.book_append_sheet(importWorkbook, testSheetJs.utils.aoa_to_sheet([
+  ['主机记录', '记录类型', '线路类型', '记录值', 'TTL', '权重', '备注'],
+  ['imported', 'A', '默认', '1.2.3.4', '600', '0', ''],
+  ['mail', 'MX', '默认', 'mx.example.com | 5', '600', '0', ''],
+]), 'Records');
+const importWorkbookBuffer = Buffer.from(testSheetJs.write(importWorkbook, { bookType: 'xlsx', type: 'buffer' }));
 
 test('initialization, login, session restore, responsive navigation and logout', async ({ page, context }, testInfo) => {
   const errors: string[] = [];
@@ -81,6 +106,18 @@ test('initialization, login, session restore, responsive navigation and logout',
     expect(route.request().postDataJSON()).toMatchObject({ name: 'www', type: 'A', value: '1.1.1.1' });
     await route.fulfill({ json: { code: 0, data: { status: 'mismatch', actual: ['<img src=x onerror=alert(1)>'], expected: '1.1.1.1' } } });
   });
+  await page.route(/xlsx\.full\.min.*\.js/, (route) => route.fulfill({
+    contentType: 'application/javascript', body: sheetJsSource,
+  }));
+  await page.route('**/api/v1/dns/domains/1000/records/batch-add', async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ records: [
+      { name: 'imported', type: 'A', value: '1.2.3.4', ttl: 600, line: 'default' },
+      { name: 'mail', type: 'MX', value: 'mx.example.com', mx: 5, ttl: 600, line: 'default' },
+    ] });
+    await route.fulfill({ json: { code: 0, added: 1, failed: 1, results: [
+      { index: 0, ok: true }, { index: 1, ok: false, uncertain: true, error: '上游超时' },
+    ] } });
+  });
   await page.goto('/record/1000');
   await expect(page.getByRole('heading', { name: '解析记录', exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole('link', { name: '返回域名列表' })).toBeVisible();
@@ -89,6 +126,20 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.getByText('解析值不一致')).toBeVisible();
   await expect(page.locator('.record-value').filter({ hasText: '<img src=x onerror=alert(1)>' })).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img[src="x"]')).toHaveCount(0);
+  await page.getByRole('link', { name: '表格导入' }).click();
+  await expect(page.getByRole('heading', { name: '导入解析记录', exact: true, level: 1 })).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'records.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: importWorkbookBuffer,
+  });
+  await expect(page.getByRole('heading', { name: '导入预览与结果' })).toBeVisible();
+  await expect(page.getByText('mx.example.com', { exact: true })).toBeVisible();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: '确认添加 2 条' }).click();
+  await expect(page.locator('tr').filter({ hasText: 'imported' })).toContainText('添加成功');
+  await expect(page.locator('tr').filter({ hasText: 'mail' })).toContainText('状态未知');
+  await expect(page.locator('tr').filter({ hasText: 'mail' })).toContainText('上游超时');
+  await expect(page.locator('input[type="file"]')).toBeDisabled();
+  await expect(page.locator('.notice[role="status"]')).toContainText('状态未知 1 条');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
