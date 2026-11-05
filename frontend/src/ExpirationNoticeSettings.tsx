@@ -64,8 +64,8 @@ export function ExpirationNoticeSettings({ session, onExpired }: Props) {
         </form>}
     </section>
     <section className="panel" aria-labelledby="expiration-notice-scope-title">
-      <div className="panel-heading"><div><h2 id="expiration-notice-scope-title">迁移范围</h2></div><span className="panel-meta">尚未发送通知</span></div>
-      <p>当前只保存提醒天数策略；cron 提醒触发、20 小时去重、09:00 发送门槛与通知渠道分发仍待迁移。保存设置不会立即发送通知。</p>
+      <div className="panel-heading"><div><h2 id="expiration-notice-scope-title">自动提醒规则</h2></div><span className="panel-meta">由 cron 触发</span></div>
+      <p>保存策略不会立即发送通知。cron 每分钟运行；没有到期查询工作时，才在配置时区 09:00 后按剩余天数分组发送，每次至多一组、最多 10 个域名。单域名发送后冷却 20 小时，发送失败也会冷却；尚未配置通知渠道时不会占用冷却。提醒会发往所有已配置的新通知渠道；旧版逐渠道开关、邮件和 QQ 机器人仍未迁移。</p>
     </section>
   </>;
 }

@@ -12,6 +12,7 @@ let failRecordUpdate = false;
 let rdapLookupStatus = 200;
 let rdapRequests: string[] = [];
 let wxpusherRequests: string[] = [];
+let wxpusherSuccess = true;
 
 function transport() {
   return vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -27,7 +28,7 @@ function transport() {
     }
     if (url.hostname === 'wxpusher.zjiecode.com') {
       wxpusherRequests.push(String(init.body ?? ''));
-      return json({ success: true });
+      return json({ success: wxpusherSuccess });
     }
     if (url.pathname === '/client/v4/zones') return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }] });
     if (/\/dns_records\/r\d+$/.test(url.pathname)) {
@@ -67,6 +68,7 @@ describe('schedule API', () => {
     rdapLookupStatus = 200;
     rdapRequests = [];
     wxpusherRequests = [];
+    wxpusherSuccess = true;
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const budget: RequestBudget = { consume: () => {}, remainingMs: () => 30_000, fetch: transport() };
@@ -112,6 +114,31 @@ describe('schedule API', () => {
        VALUES (?,?,?,?,?,?,?,?,?)`,
       [accounts[0]!.id, name, `zone-${name}`, 0, expiresAt, checkedAt, checkStatus, now, now],
     );
+  }
+
+  async function setExpirationNoticeConfig(days: string, localHour: number) {
+    const now = Math.floor(Date.now() / 1000);
+    const utc = new Date(now * 1000);
+    const utcMinutes = utc.getUTCHours() * 60 + utc.getUTCMinutes();
+    let offset = localHour * 60 - utcMinutes;
+    if (offset > 720) offset -= 1440;
+    if (offset < -720) offset += 1440;
+    await testDb.db.execute(
+      'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+      ['expire_noticedays', days, now],
+    );
+    await testDb.db.execute(
+      'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+      ['schedule_tz_offset', String(offset), now],
+    );
+  }
+
+  async function enableWxPusherNotices() {
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ wxpusherAppToken: 'AT_expiration-test', wxpusherUids: 'UID_expiration-test' }),
+    });
+    expect(saved.status).toBe(200);
   }
 
   it('stores expiration notice days with admin, CSRF and input validation', async () => {
@@ -370,5 +397,167 @@ describe('schedule API', () => {
       'SELECT expires_at, check_status, checked_at, updated_at FROM dns_domains WHERE name=?', ['example.com'],
     );
     expect(domains[0]).toEqual({ expires_at: priorExpiresAt, check_status: 2, checked_at: priorCheckedAt, updated_at: 100 });
+  });
+
+  it('sends a same-day reminder group after local 09:00 with a 20-hour cooldown', async () => {
+    await enableCron();
+    await enableWxPusherNotices();
+    const now = Math.floor(Date.now() / 1000);
+    const day = 86_400;
+    await setExpirationNoticeConfig('7,14', 9);
+    await testDb.db.execute('UPDATE dns_domains SET check_status=1, checked_at=?, expires_at=NULL WHERE name=?', [now, 'example.com']);
+    await addDomain('alpha.example.com', now + 7 * day + 10, now, 1);
+    await addDomain('beta.example.com', now + 7 * day + 20, now, 1);
+    await addDomain('later.example.com', now + 14 * day + 10, now, 1);
+    await addDomain('disabled.example.com', now + 7 * day + 1, now, 1);
+    await addDomain('cooldown.example.com', now + 7 * day + 2, now, 1);
+    await testDb.db.execute('UPDATE dns_domains SET notice=0 WHERE name=?', ['disabled.example.com']);
+    await testDb.db.execute('UPDATE dns_domains SET notice_attempted_at=? WHERE name=?', [now - 3_600, 'cooldown.example.com']);
+    await testDb.db.execute(
+      'UPDATE dns_domains SET notice=1 WHERE name IN (?,?,?)',
+      ['alpha.example.com', 'beta.example.com', 'later.example.com'],
+    );
+
+    await request('/cron?key=test-cron-key');
+
+    expect(wxpusherRequests).toHaveLength(1);
+    const first = JSON.parse(wxpusherRequests[0]!) as { summary: string; content: string };
+    expect(first.summary).toContain('7');
+    expect(first.content).toContain('alpha.example.com');
+    expect(first.content).toContain('beta.example.com');
+    expect(first.content).not.toContain('disabled.example.com');
+    expect(first.content).not.toContain('cooldown.example.com');
+    const firstGroup = await testDb.db.query<{ name: string; notice_attempted_at: number | null }>(
+      'SELECT name, notice_attempted_at FROM dns_domains WHERE name IN (?,?,?) ORDER BY name',
+      ['alpha.example.com', 'beta.example.com', 'later.example.com'],
+    );
+    expect(firstGroup.find((domain) => domain.name === 'alpha.example.com')!.notice_attempted_at).toBeGreaterThanOrEqual(now);
+    expect(firstGroup.find((domain) => domain.name === 'beta.example.com')!.notice_attempted_at).toBeGreaterThanOrEqual(now);
+    expect(firstGroup.find((domain) => domain.name === 'later.example.com')!.notice_attempted_at).toBeNull();
+    const firstAudit = await testDb.db.query<{ detail: string }>("SELECT detail FROM audit_logs WHERE action='domain.expiration.notice'");
+    expect(firstAudit[0]!.detail).toContain('wxpusher:ok:200');
+
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(2);
+    expect((JSON.parse(wxpusherRequests[1]!) as { summary: string }).summary).toContain('14');
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(2);
+  });
+
+  it('does not send expiry reminders with empty days or before local 09:00', async () => {
+    await enableCron();
+    await enableWxPusherNotices();
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute('UPDATE dns_domains SET check_status=1, checked_at=?, expires_at=NULL WHERE name=?', [now, 'example.com']);
+    await addDomain('notice.example.com', now + 7 * 86_400 + 60, now, 1);
+    await testDb.db.execute('UPDATE dns_domains SET notice=1 WHERE name=?', ['notice.example.com']);
+    await setExpirationNoticeConfig('', 9);
+    await request('/cron?key=test-cron-key');
+    await setExpirationNoticeConfig('7', 8);
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(0);
+
+    await setExpirationNoticeConfig('7', 9);
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(1);
+  });
+
+  it('prioritizes pending RDAP refresh work over expiry reminders', async () => {
+    await enableCron();
+    await enableWxPusherNotices();
+    const now = Math.floor(Date.now() / 1000);
+    await setExpirationNoticeConfig('7', 9);
+    await testDb.db.execute(
+      'UPDATE dns_domains SET check_status=1, checked_at=?, expires_at=? WHERE name=?',
+      [now - 86_401, now + 10 * 86_400, 'example.com'],
+    );
+    await addDomain('notice.example.com', now + 7 * 86_400 + 60, now, 1);
+    await testDb.db.execute('UPDATE dns_domains SET notice=1 WHERE name=?', ['notice.example.com']);
+
+    await request('/cron?key=test-cron-key');
+    expect(rdapRequests).toHaveLength(2);
+    expect(wxpusherRequests).toHaveLength(0);
+    let domains = await testDb.db.query<{ notice_attempted_at: number | null }>(
+      'SELECT notice_attempted_at FROM dns_domains WHERE name=?', ['notice.example.com'],
+    );
+    expect(domains[0]!.notice_attempted_at).toBeNull();
+
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(1);
+  });
+
+  it('releases reminder claims when no notification channel is configured', async () => {
+    await enableCron();
+    const now = Math.floor(Date.now() / 1000);
+    await setExpirationNoticeConfig('7', 9);
+    await testDb.db.execute('UPDATE dns_domains SET check_status=1, checked_at=?, expires_at=NULL WHERE name=?', [now, 'example.com']);
+    await addDomain('notice.example.com', now + 7 * 86_400 + 60, now, 1);
+    await testDb.db.execute('UPDATE dns_domains SET notice=1 WHERE name=?', ['notice.example.com']);
+
+    await request('/cron?key=test-cron-key');
+    let domains = await testDb.db.query<{ notice_attempted_at: number | null }>(
+      'SELECT notice_attempted_at FROM dns_domains WHERE name=?', ['notice.example.com'],
+    );
+    expect(domains[0]!.notice_attempted_at).toBeNull();
+    expect(wxpusherRequests).toHaveLength(0);
+
+    await enableWxPusherNotices();
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(1);
+    domains = await testDb.db.query<{ notice_attempted_at: number | null }>(
+      'SELECT notice_attempted_at FROM dns_domains WHERE name=?', ['notice.example.com'],
+    );
+    expect(domains[0]!.notice_attempted_at).toBeGreaterThanOrEqual(now);
+  });
+
+  it('keeps the 20-hour cooldown and audits failed notification delivery', async () => {
+    await enableCron();
+    await enableWxPusherNotices();
+    const now = Math.floor(Date.now() / 1000);
+    await setExpirationNoticeConfig('3', 9);
+    await testDb.db.execute('UPDATE dns_domains SET check_status=1, checked_at=?, expires_at=NULL WHERE name=?', [now, 'example.com']);
+    await addDomain('failed.example.com', now + 3 * 86_400 + 60, now, 1);
+    await testDb.db.execute('UPDATE dns_domains SET notice=1 WHERE name=?', ['failed.example.com']);
+    wxpusherSuccess = false;
+
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(1);
+    const domain = await testDb.db.query<{ notice_attempted_at: number | null }>(
+      'SELECT notice_attempted_at FROM dns_domains WHERE name=?', ['failed.example.com'],
+    );
+    expect(domain[0]!.notice_attempted_at).toBeGreaterThanOrEqual(now);
+    const logs = await testDb.db.query<{ detail: string }>("SELECT detail FROM audit_logs WHERE action='domain.expiration.notice'");
+    expect(logs[0]!.detail).toContain('wxpusher:failed:200');
+
+    wxpusherSuccess = true;
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(1);
+  });
+
+  it('limits expiry reminder claims to ten domains and prevents concurrent duplicate sends', async () => {
+    await enableCron();
+    await enableWxPusherNotices();
+    const now = Math.floor(Date.now() / 1000);
+    await setExpirationNoticeConfig('7', 9);
+    await testDb.db.execute('UPDATE dns_domains SET check_status=1, checked_at=?, expires_at=NULL WHERE name=?', [now, 'example.com']);
+    for (let index = 0; index < 12; index += 1) {
+      const name = `batch${String(index).padStart(2, '0')}.example.com`;
+      await addDomain(name, now + 7 * 86_400 + index * 60, now, 1);
+      await testDb.db.execute('UPDATE dns_domains SET notice=1 WHERE name=?', [name]);
+    }
+
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(1);
+    const claimedAfterFirst = await testDb.db.query<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM dns_domains WHERE name LIKE ? AND notice_attempted_at IS NOT NULL', ['batch%.example.com'],
+    );
+    expect(claimedAfterFirst[0]!.count).toBe(10);
+
+    await Promise.all([request('/cron?key=test-cron-key'), request('/cron?key=test-cron-key')]);
+    expect(wxpusherRequests).toHaveLength(2);
+    const claimedAfterConcurrentRun = await testDb.db.query<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM dns_domains WHERE name LIKE ? AND notice_attempted_at IS NOT NULL', ['batch%.example.com'],
+    );
+    expect(claimedAfterConcurrentRun[0]!.count).toBe(12);
   });
 });

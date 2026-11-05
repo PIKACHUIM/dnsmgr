@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { lookupDomainExpiration } from '../dns/expiration';
+import { sendConfiguredNotifications, type NotificationDelivery } from '../notify/settings';
 import { nowSeconds } from '../security/auth';
 import type { SqlDatabase } from '../storage/sql';
 
@@ -17,7 +18,15 @@ interface PeriodicDomain extends PendingDomain {
   updated_at: number;
 }
 
+interface NoticeDomain extends PendingDomain {
+  expires_at: number;
+  notice_attempted_at: number | null;
+  updated_at: number;
+}
+
 const DAY_SECONDS = 86_400;
+const NOTICE_COOLDOWN_SECONDS = 20 * 60 * 60;
+const MAX_NOTICE_DOMAINS = 10;
 
 function db(c: Context<AppEnv>): SqlDatabase {
   return c.get('db');
@@ -83,7 +92,7 @@ export async function executeInitialExpirationRefresh(c: Context<AppEnv>): Promi
   return true;
 }
 
-export async function executePeriodicExpirationRefresh(c: Context<AppEnv>): Promise<void> {
+export async function executePeriodicExpirationRefresh(c: Context<AppEnv>): Promise<boolean> {
   const startedAt = nowSeconds();
   const checkedBefore = startedAt - DAY_SECONDS;
   const expirationFrom = startedAt - 5 * DAY_SECONDS;
@@ -95,14 +104,14 @@ export async function executePeriodicExpirationRefresh(c: Context<AppEnv>): Prom
     [expirationFrom, expirationUntil, checkedBefore],
   );
   const domain = candidates[0];
-  if (!domain) return;
+  if (!domain) return false;
 
   const claim = await db(c).execute(
     `UPDATE dns_domains SET checked_at=?, updated_at=?
      WHERE id=? AND check_status=? AND checked_at=? AND expires_at=? AND checked_at <= ? AND expires_at BETWEEN ? AND ?`,
     [startedAt, startedAt, domain.id, domain.check_status, domain.checked_at, domain.expires_at, checkedBefore, expirationFrom, expirationUntil],
   );
-  if (claim.changes !== 1) return;
+  if (claim.changes !== 1) return false;
 
   let expiresAt: number;
   try {
@@ -113,7 +122,7 @@ export async function executePeriodicExpirationRefresh(c: Context<AppEnv>): Prom
         'UPDATE dns_domains SET checked_at=?, updated_at=? WHERE id=? AND check_status=? AND checked_at=? AND expires_at=?',
         [domain.checked_at, domain.updated_at, domain.id, domain.check_status, startedAt, domain.expires_at],
       );
-      return;
+      return true;
     }
     const finishedAt = nowSeconds();
     const failed = await db(c).execute(
@@ -121,7 +130,7 @@ export async function executePeriodicExpirationRefresh(c: Context<AppEnv>): Prom
       [finishedAt, finishedAt, domain.id, domain.check_status, startedAt, domain.expires_at],
     );
     if (failed.changes === 1) await audit(c, domain, 'failed', 'periodic lookup failed');
-    return;
+    return true;
   }
 
   const finishedAt = nowSeconds();
@@ -130,4 +139,81 @@ export async function executePeriodicExpirationRefresh(c: Context<AppEnv>): Prom
     [expiresAt, finishedAt, finishedAt, domain.id, domain.check_status, startedAt, domain.expires_at],
   );
   if (updated.changes === 1) await audit(c, domain, 'success', `expires_at=${expiresAt}`);
+  return true;
+}
+
+function parseNoticeDays(value: string | null): number[] {
+  const raw = value?.trim() ?? '';
+  if (!raw || raw.length > 256) return [];
+  const entries = raw.split(',').map((entry) => entry.trim());
+  if (entries.length > 32 || entries.some((entry) => !/^\d{1,4}$/.test(entry))) return [];
+  const days = [...new Set(entries.map(Number))];
+  if (days.some((day) => day > 3650)) return [];
+  return days.sort((left, right) => left - right);
+}
+
+async function auditNotice(c: Context<AppEnv>, day: number, detail: string): Promise<void> {
+  await db(c).execute(
+    'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
+    [0, 'domain.expiration.notice', `days=${day}`, detail.slice(0, 500), nowSeconds()],
+  );
+}
+
+export async function executeExpirationNotice(c: Context<AppEnv>, offsetMinutes: number): Promise<void> {
+  const settings = await db(c).query<{ value: string }>('SELECT value FROM app_settings WHERE key=?', ['expire_noticedays']);
+  const days = parseNoticeDays(settings[0]?.value ?? null);
+  if (days.length === 0) return;
+
+  const startedAt = nowSeconds();
+  const localHour = new Date((startedAt + offsetMinutes * 60) * 1000).getUTCHours();
+  if (localHour < 9) return;
+
+  const dayWindows = days.map(() => '(expires_at >= ? AND expires_at < ?)').join(' OR ');
+  const windowArgs = days.flatMap((day) => [startedAt + day * DAY_SECONDS, startedAt + (day + 1) * DAY_SECONDS]);
+  const cooldownBefore = startedAt - NOTICE_COOLDOWN_SECONDS;
+  const candidates = await db(c).query<NoticeDomain>(
+    `SELECT id, name, expires_at, notice_attempted_at, updated_at FROM dns_domains
+     WHERE notice=1 AND expires_at >= ? AND (${dayWindows}) AND (notice_attempted_at IS NULL OR notice_attempted_at <= ?)
+     ORDER BY expires_at ASC, id ASC LIMIT ?`,
+    [startedAt, ...windowArgs, cooldownBefore, MAX_NOTICE_DOMAINS],
+  );
+  const first = candidates[0];
+  if (!first) return;
+
+  const day = Math.floor((first.expires_at - startedAt) / DAY_SECONDS);
+  const dayFrom = startedAt + day * DAY_SECONDS;
+  const dayUntil = dayFrom + DAY_SECONDS;
+  const group = candidates.filter((candidate) => Math.floor((candidate.expires_at - startedAt) / DAY_SECONDS) === day);
+  const claimedResults = await db(c).batch(group.map((domain) => ({
+    sql: `UPDATE dns_domains SET notice_attempted_at=?, updated_at=?
+          WHERE id=? AND notice=1 AND expires_at=? AND expires_at>=? AND expires_at<?
+            AND (notice_attempted_at IS NULL OR notice_attempted_at<=?) AND notice_attempted_at IS ?`,
+    args: [startedAt, startedAt, domain.id, domain.expires_at, dayFrom, dayUntil, cooldownBefore, domain.notice_attempted_at],
+  })));
+  const claimed = group.filter((_, index) => claimedResults[index]?.changes === 1);
+  if (claimed.length === 0) return;
+
+  const title = `DNSMGR 域名到期提醒：${day} 天后到期`;
+  const content = `以下 ${claimed.length} 个域名将在 ${day} 天后到期：\n${claimed.map((domain) =>
+    `- ${domain.name}（${new Date(domain.expires_at * 1000).toISOString()}）`,
+  ).join('\n')}`;
+  let deliveries: NotificationDelivery[];
+  try {
+    deliveries = await sendConfiguredNotifications(c, title, content);
+  } catch {
+    await auditNotice(c, day, `days=${day} domains=${claimed.length} deliveries=error`);
+    return;
+  }
+
+  if (deliveries.length === 0) {
+    await db(c).batch(claimed.map((domain) => ({
+      sql: 'UPDATE dns_domains SET notice_attempted_at=?, updated_at=? WHERE id=? AND notice_attempted_at=?',
+      args: [domain.notice_attempted_at, domain.updated_at, domain.id, startedAt],
+    })));
+    return;
+  }
+  const deliverySummary = deliveries.map((delivery) =>
+    `${delivery.channel}:${delivery.ok ? 'ok' : 'failed'}:${delivery.status ?? 'null'}`,
+  ).join(',');
+  await auditNotice(c, day, `days=${day} domains=${claimed.length} deliveries=${deliverySummary}`);
 }

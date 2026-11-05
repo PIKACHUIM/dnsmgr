@@ -4,7 +4,7 @@ import type { SqlDatabase, SqlResult, SqlValue } from '../../src/storage/sql.js'
 
 export function createTestDatabase(): { db: SqlDatabase; close: () => void } {
   const sqlite = new DatabaseSync(':memory:');
-  for (const migration of ['0001_core.sql', '0002_dns.sql', '0003_dns_aliases.sql', '0004_schedule.sql', '0005_failover.sql', '0006_domain_expiration_queue.sql', '0007_domain_periodic_expiration_queue.sql']) {
+  for (const migration of ['0001_core.sql', '0002_dns.sql', '0003_dns_aliases.sql', '0004_schedule.sql', '0005_failover.sql', '0006_domain_expiration_queue.sql', '0007_domain_periodic_expiration_queue.sql', '0008_domain_expiration_notices.sql']) {
     sqlite.exec(readFileSync(new URL(`../../migrations/${migration}`, import.meta.url), 'utf8'));
   }
   const execute = (sql: string, args: SqlValue[] = []): SqlResult<Record<string, unknown>> => {
