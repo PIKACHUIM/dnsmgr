@@ -28,6 +28,7 @@ export interface Bindings {
   APP_KEY?: string;
   SETUP_TOKEN?: string;
   PUBLIC_ORIGIN?: string;
+  CLIENT_IP?: string;
   EXECUTOR_URL?: string;
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }

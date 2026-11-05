@@ -26,8 +26,17 @@ GitHub Actions 的 `Verify` 工作流（`.github/workflows/verify.yml`）会在 
 
 ## Cloudflare Workers 发布
 
+首次升级到登录验证码版本时，先备份 D1 并确认 `login_captcha_challenges` 尚不存在，再应用新增迁移；它为缺省配置启用验证码，但保留已有 `vcode` 设置，不修改用户、密码或会话：
+
 ```bash
-npx wrangler d1 migrations list dnsmgrui-data --remote
+npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='login_captcha_challenges'"
+npx wrangler d1 execute dnsmgrui-data --remote --file migrations/0009_login_captcha.sql
+```
+
+如果表已存在，不要重复执行该 SQL 文件。手动执行 SQL 不会登记到 Wrangler migration history；迁移完成后用表结构查询确认，再部署 Worker：
+
+```bash
+npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='login_captcha_challenges'"
 npx wrangler deploy
 npx wrangler deployments list
 ```
@@ -70,7 +79,9 @@ npx wrangler d1 execute dnsmgrui-data --remote --command "PRAGMA foreign_keys = 
 
 ## EdgeOne Makers 与阿里云 ESA
 
-两者不回退 Cloudflare Worker，而是重新部署上一份构建产物：
+首次升级到登录验证码版本前，先备份各自配置的 Turso/libSQL 数据库，将 `migrations/0009_login_captcha.sql` 应用一次，再部署新构建。该迁移默认开启验证码并保留已存在的 `vcode` 值；如果 `login_captcha_challenges` 表已存在，不要重放建表 SQL。各平台使用数据库的受控 SQL 工具执行，不要把凭据或生产备份提交到仓库。
+
+回滚代码时，两者不回退 Cloudflare Worker，而是重新部署上一份构建产物：
 
 1. 在本地检出上一个已验证的提交，执行对应 `npm run build:edgeone` 或 `npm run build:esa`。
 2. 按平台控制台重新上传 `cloud-functions/_worker.mjs` 或 `dist/esa/worker.mjs`，并同步静态目录。

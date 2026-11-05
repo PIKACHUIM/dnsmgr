@@ -33,7 +33,7 @@ const pagePatterns = [
   /^\/cert\/(account|order|deploy)\/(add|edit|import|show|download)$/,
   /^\/schedule\/stask(?:\/(add|edit))?$/, /^\/system\/(loginset|noticeset|proxyset|cronset|update)$/,
 ];
-const databasePaths = /^(\/api\/v1\/|\/cron(?:\?|$)|\/(install|login|auth\/totp|logout|setpwd|totp\/))/;
+const databasePaths = /^(\/api\/v1\/|\/cron(?:\?|$)|\/(verifycode|install|login|auth\/totp|logout|setpwd|totp\/))/;
 
 export function createApp(options: { database?: SqlDatabase; shell?: string } = {}) {
   const app = new Hono<AppEnv>();

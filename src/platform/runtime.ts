@@ -65,6 +65,7 @@ export function environment(bindings: Bindings, platform: Platform) {
     APP_KEY: bindings.APP_KEY,
     SETUP_TOKEN: bindings.SETUP_TOKEN,
     PUBLIC_ORIGIN: bindings.PUBLIC_ORIGIN,
+    CLIENT_IP: bindings.CLIENT_IP,
     EXECUTOR_URL: bindings.EXECUTOR_URL,
     ASSETS: bindings.ASSETS,
     RUNTIME: policy,

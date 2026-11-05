@@ -17,6 +17,14 @@ const bindings: Bindings = {
   APP_KEY: btoa('12345678901234567890123456789012'), SETUP_TOKEN: 'test-install-token-32-characters!!',
 };
 
+async function solveCaptcha(token: string, answerHash: string): Promise<string> {
+  for (let value = 0; value < 10_000; value += 1) {
+    const candidate = String(value).padStart(4, '0');
+    if (await sha256(`${token}:${candidate}`) === answerHash) return candidate;
+  }
+  throw new Error('Unable to decode test CAPTCHA');
+}
+
 describe('authentication with a real transactional SQLite database', () => {
   let testDb: ReturnType<typeof createTestDatabase>;
   let app: ReturnType<typeof createApp>;
@@ -44,6 +52,202 @@ describe('authentication with a real transactional SQLite database', () => {
     expect(users[0]!.level).toBe(2);
     expect(users[0]!.password_hash).toMatch(/^\$2[aby]\$12\$/);
     expect(users[0]!.password_hash).not.toBe(credentials.password);
+  });
+  it('defaults login CAPTCHA to enabled without changing initialization state', async () => {
+    const fresh = createTestDatabase({ captchaEnabled: true });
+    try {
+      expect(await fresh.db.query('SELECT value FROM app_settings WHERE key=?', ['vcode'])).toEqual([{ value: '1' }]);
+      expect(await fresh.db.query('SELECT initialized FROM system_state WHERE id=1')).toEqual([{ initialized: 0 }]);
+    } finally {
+      fresh.close();
+    }
+  });
+  it('uses trusted IP metadata from Cloudflare, EdgeOne and ESA without trusting X-Forwarded-For', async () => {
+    await install();
+    await testDb.db.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
+    const cloudflareIp = '203.0.113.10';
+    const cloudflareResponse = await app.request('https://panel.example/verifycode', {
+      headers: { 'CF-Connecting-IP': cloudflareIp, 'X-Forwarded-For': '198.51.100.99' },
+    }, environment(bindings, 'cloudflare'));
+    expect(cloudflareResponse.status).toBe(200);
+    for (let index = 1; index < 10; index += 1) {
+      expect((await app.request('https://panel.example/verifycode', {
+        headers: { 'CF-Connecting-IP': cloudflareIp, 'X-Forwarded-For': `198.51.100.${index}` },
+      }, environment(bindings, 'cloudflare'))).status).toBe(200);
+    }
+    const ipLimited = await app.request('https://panel.example/verifycode', {
+      headers: { 'CF-Connecting-IP': cloudflareIp, 'X-Forwarded-For': '203.0.113.200' },
+    }, environment(bindings, 'cloudflare'));
+    expect(ipLimited.status).toBe(429);
+
+    const missingTrustedIp = await app.request('https://panel.example/verifycode', {
+      headers: { 'X-Forwarded-For': '198.51.100.99' },
+    }, environment(bindings, 'cloudflare'));
+    expect(missingTrustedIp.status).toBe(503);
+    expect(await missingTrustedIp.json()).toMatchObject({ reason: 'CLIENT_IP_UNAVAILABLE' });
+
+    const edgeRequest = await app.request('https://panel.example/verifycode', {
+      headers: { 'X-Forwarded-For': '198.51.100.99' },
+    }, environment({ ...bindings, CLIENT_IP: '198.51.100.10' }, 'edgeone'));
+    expect(edgeRequest.status).toBe(200);
+    expect((await app.request('https://panel.example/verifycode', {}, environment({ ...bindings, CLIENT_IP: '192.0.2.10' }, 'esa'))).status).toBe(200);
+
+    const keys = await testDb.db.query<{ key: string }>("SELECT key FROM rate_limits WHERE key LIKE 'captcha:issue-ip:%' ORDER BY key");
+    expect(keys.map((row) => row.key)).toEqual([
+      `captcha:issue-ip:${await sha256('192.0.2.10')}`,
+      `captcha:issue-ip:${await sha256('198.51.100.10')}`,
+      `captcha:issue-ip:${await sha256(cloudflareIp)}`,
+    ].sort());
+  });
+  it('serves a no-store SVG login CAPTCHA with an HttpOnly one-use challenge cookie', async () => {
+    await install();
+    await testDb.db.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
+    const response = await request('/verifycode');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('image/svg+xml');
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(response.headers.get('x-captcha-enabled')).toBe('1');
+    expect(response.headers.get('set-cookie')).toMatch(/login_captcha=/);
+    expect(response.headers.get('set-cookie')).toMatch(/HttpOnly/);
+    expect(response.headers.get('set-cookie')).toMatch(/SameSite=Strict/);
+    const svg = await response.text();
+    expect(svg).toContain('<svg');
+    expect(svg).not.toContain('<text');
+    expect(await testDb.db.query('SELECT token_hash FROM login_captcha_challenges')).toHaveLength(1);
+  });
+  it('requires a valid CAPTCHA before counting or checking login credentials', async () => {
+    await install();
+    await testDb.db.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
+    const response = await post('/login', credentials);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ reason: 'INVALID_CAPTCHA' });
+    expect(await testDb.db.query('SELECT * FROM users WHERE id=1 AND permission_version=1')).toHaveLength(1);
+    expect(await testDb.db.query("SELECT key FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([]);
+    expect(await testDb.db.query('SELECT * FROM sessions')).toEqual([]);
+  });
+  it('limits unauthenticated CAPTCHA issuance and login requests globally', async () => {
+    await install();
+    await testDb.db.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute('INSERT INTO rate_limits(key,window_start,count) VALUES(?,?,?)', ['login-captcha:issue', now, 120]);
+    const issuance = await request('/verifycode');
+    expect(issuance.status).toBe(429);
+    expect(await issuance.json()).toMatchObject({ reason: 'RATE_LIMITED' });
+
+    await testDb.db.execute('INSERT INTO rate_limits(key,window_start,count) VALUES(?,?,?)', ['captcha:login-requests', now, 300]);
+    const loginAttempt = await post('/login', credentials);
+    expect(loginAttempt.status).toBe(429);
+    expect(await loginAttempt.json()).toMatchObject({ reason: 'RATE_LIMITED' });
+    expect(await testDb.db.query("SELECT key FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([]);
+  });
+  it('accepts one correct CAPTCHA after a rejected answer without charging the username login limit', async () => {
+    await install();
+    await testDb.db.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
+    const captcha = await request('/verifycode');
+    const cookie = captcha.headers.get('set-cookie')!.split(';')[0]!;
+    const token = cookie.slice('login_captcha='.length);
+    const row = await testDb.db.query<{ answer_hash: string }>(
+      'SELECT answer_hash FROM login_captcha_challenges WHERE token_hash=?', [await sha256(token)],
+    );
+    const answer = await solveCaptcha(token, row[0]!.answer_hash);
+    const wrong = String((Number(answer) + 1) % 10_000).padStart(4, '0');
+
+    const rejected = await post('/login', { ...credentials, code: wrong }, { cookie });
+    expect(rejected.status).toBe(401);
+    expect(await rejected.json()).toMatchObject({ reason: 'INVALID_CAPTCHA' });
+    expect(await testDb.db.query("SELECT key FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([]);
+
+    const accepted = await post('/login', { ...credentials, code: answer }, { cookie });
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({ code: 0, user: { username: 'admin' } });
+
+    const replay = await post('/login', { ...credentials, code: answer }, { cookie });
+    expect(replay.status).toBe(401);
+    expect(await replay.json()).toMatchObject({ reason: 'INVALID_CAPTCHA' });
+    expect(await testDb.db.query("SELECT key FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([]);
+  });
+  it('allows only one concurrent login for a single CAPTCHA challenge', async () => {
+    await install();
+    await testDb.db.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
+    const captcha = await request('/verifycode');
+    const cookie = captcha.headers.get('set-cookie')!.split(';')[0]!;
+    const token = cookie.slice('login_captcha='.length);
+    const row = await testDb.db.query<{ answer_hash: string }>(
+      'SELECT answer_hash FROM login_captcha_challenges WHERE token_hash=?', [await sha256(token)],
+    );
+    const answer = await solveCaptcha(token, row[0]!.answer_hash);
+    const attempts = await Promise.all([
+      post('/login', { ...credentials, code: answer }, { cookie }),
+      post('/login', { ...credentials, code: answer }, { cookie }),
+    ]);
+    expect(attempts.map((response) => response.status).sort()).toEqual([200, 401]);
+    expect(await testDb.db.query('SELECT token_hash FROM sessions')).toHaveLength(1);
+  });
+  it('expires CAPTCHA tickets and discards them after four wrong answers', async () => {
+    await install();
+    await testDb.db.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
+    const expired = await request('/verifycode');
+    const firstCookie = expired.headers.get('set-cookie')!.split(';')[0]!;
+    const firstToken = firstCookie.slice('login_captcha='.length);
+    await testDb.db.execute('UPDATE login_captcha_challenges SET expires_at=? WHERE token_hash=?', [Math.floor(Date.now() / 1000) - 1, await sha256(firstToken)]);
+    const expiredLogin = await post('/login', { ...credentials, code: '0000' }, { cookie: firstCookie });
+    expect(expiredLogin.status).toBe(401);
+    expect(await expiredLogin.json()).toMatchObject({ reason: 'INVALID_CAPTCHA' });
+
+    const refreshed = await request('/verifycode', { headers: { cookie: firstCookie } });
+    const cookie = refreshed.headers.get('set-cookie')!.split(';')[0]!;
+    const token = cookie.slice('login_captcha='.length);
+    const row = await testDb.db.query<{ answer_hash: string }>(
+      'SELECT answer_hash FROM login_captcha_challenges WHERE token_hash=?', [await sha256(token)],
+    );
+    const answer = await solveCaptcha(token, row[0]!.answer_hash);
+    const wrong = String((Number(answer) + 1) % 10_000).padStart(4, '0');
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const response = await post('/login', { ...credentials, code: wrong }, { cookie });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ reason: 'INVALID_CAPTCHA' });
+    }
+    expect(await testDb.db.query('SELECT token_hash FROM login_captcha_challenges')).toEqual([]);
+    expect(await testDb.db.query("SELECT key FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([]);
+  });
+  it('protects login CAPTCHA settings with admin and CSRF checks and invalidates pending challenges on disable', async () => {
+    await install();
+    const { cookie, body } = await login();
+    expect((await request('/api/v1/system/login-captcha')).status).toBe(401);
+    const current = await request('/api/v1/system/login-captcha', { headers: { cookie } });
+    expect(await current.json()).toMatchObject({ code: 0, vcode: '2', enabled: false });
+
+    const missingCsrf = await request('/api/v1/system/login-captcha', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ vcode: '1' }),
+    });
+    expect(missingCsrf.status).toBe(403);
+    const invalid = await request('/api/v1/system/login-captcha', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': body.csrfToken },
+      body: JSON.stringify({ vcode: '0' }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const enabled = await request('/api/v1/system/login-captcha', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': body.csrfToken },
+      body: JSON.stringify({ vcode: '1' }),
+    });
+    expect(await enabled.json()).toMatchObject({ code: 0, vcode: '1', enabled: true });
+    expect((await request('/verifycode')).status).toBe(200);
+    expect(await testDb.db.query('SELECT token_hash FROM login_captcha_challenges')).toHaveLength(1);
+
+    const disabled = await request('/api/v1/system/login-captcha', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': body.csrfToken },
+      body: JSON.stringify({ vcode: '2' }),
+    });
+    expect(await disabled.json()).toMatchObject({ code: 0, vcode: '2', enabled: false });
+    expect(await testDb.db.query('SELECT token_hash FROM login_captcha_challenges')).toEqual([]);
+    const noCaptcha = await request('/verifycode');
+    expect(noCaptcha.status).toBe(204);
+    expect(noCaptcha.headers.get('x-captcha-enabled')).toBe('0');
+    expect((await post('/login', credentials)).status).toBe(200);
+
+    await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
+    expect((await request('/api/v1/system/login-captcha', { headers: { cookie } })).status).toBe(403);
   });
   it('creates an HttpOnly Secure Strict cookie, stores only a hash and restores the same csrf', async () => {
     await install();
@@ -134,8 +338,19 @@ describe('authentication with a real transactional SQLite database', () => {
     expect(operations).toBe(4);
     operations = 0;
     expect((await request('/api/v1/session', { headers: { cookie } })).status).toBe(401);
+    await original.execute("UPDATE app_settings SET value='1' WHERE key='vcode'");
     operations = 0;
-    const prelogin = await post('/login', credentials);
+    const captcha = await request('/verifycode');
+    expect(operations).toBe(4);
+    const captchaCookie = captcha.headers.get('set-cookie')!.split(';')[0]!;
+    const captchaToken = captchaCookie.slice('login_captcha='.length);
+    const captchaRows = await original.query<{ answer_hash: string }>(
+      'SELECT answer_hash FROM login_captcha_challenges WHERE token_hash=?', [await sha256(captchaToken)],
+    );
+    const captchaCode = await solveCaptcha(captchaToken, captchaRows[0]!.answer_hash);
+    operations = 0;
+    const prelogin = await post('/login', { ...credentials, code: captchaCode }, { cookie: captchaCookie });
+    expect(prelogin.status).toBe(200);
     expect(operations).toBe(4);
     const challenge = (await prelogin.json() as { challenge: string }).challenge;
     operations = 0;
@@ -164,6 +379,45 @@ describe('authentication with a real transactional SQLite database', () => {
     expect(rows.map((row) => row.token_hash)).toContain(await sha256(challenge));
     expect(rows.map((row) => row.token_hash)).not.toContain('expired-enrollment');
   });
+  it('counts failed passwords only and clears the per-user lock after successful authentication', async () => {
+    await install();
+    expect((await post('/login', { ...credentials, password: 'wrong-password!' })).status).toBe(401);
+    expect(await testDb.db.query<{ count: number }>("SELECT count FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([{ count: 1 }]);
+    expect((await post('/login', credentials)).status).toBe(200);
+    expect(await testDb.db.query("SELECT key FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([]);
+  });
+  it('prunes expired rate-limit keys in bounded batches', async () => {
+    await install();
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.batch(Array.from({ length: 205 }, (_, index) => ({
+      sql: 'INSERT INTO rate_limits(key,window_start,count) VALUES(?,?,1)',
+      args: [`stale:${index}`, now - 121],
+    })));
+    expect((await post('/login', { ...credentials, password: 'wrong-password!' })).status).toBe(401);
+    expect((await post('/login', { ...credentials, password: 'wrong-password!' })).status).toBe(401);
+    const remaining = await testDb.db.query<{ count: number }>("SELECT COUNT(*) AS count FROM rate_limits WHERE key LIKE 'stale:%'");
+    expect(remaining[0]!.count).toBe(5);
+  });
+  it('does not let case-variant usernames lock a distinct case-sensitive account', async () => {
+    await install();
+    await testDb.db.execute('UPDATE users SET username=? WHERE id=1', ['Alice']);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((await post('/login', { username: 'alice', password: 'wrong-password!' })).status).toBe(401);
+    }
+    expect(await testDb.db.query("SELECT key FROM rate_limits WHERE key LIKE 'login:%'")).toEqual([]);
+    const correct = await post('/login', { username: 'Alice', password: credentials.password });
+    expect(correct.status).toBe(200);
+    expect(await testDb.db.query<{ count: number }>('SELECT count FROM rate_limits WHERE key=?', [`login:${await sha256('Alice')}`])).toEqual([]);
+  });
+  it('atomically reserves password attempt slots under concurrent logins', async () => {
+    await install();
+    const attempts = await Promise.all(Array.from({ length: 10 }, () =>
+      post('/login', { ...credentials, password: 'wrong-password!' }),
+    ));
+    expect(attempts.filter((response) => response.status === 401)).toHaveLength(5);
+    expect(attempts.filter((response) => response.status === 429)).toHaveLength(5);
+    expect(await testDb.db.query<{ count: number }>('SELECT count FROM rate_limits WHERE key=?', [`login:${await sha256(credentials.username)}`])).toEqual([{ count: 5 }]);
+  });
   it('enforces a persistent login rate limit', async () => {
     await install();
     for (let attempt = 0; attempt < 5; attempt++) expect((await post('/login', { ...credentials, password: 'wrong-password!' })).status).toBe(401);
@@ -174,6 +428,77 @@ describe('authentication with a real transactional SQLite database', () => {
     const response = await app.request('https://panel.example/api/v1/install/status', {}, environment({ ...bindings, DB_FORMAT: 'map' }, 'local'));
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ reason: 'STORAGE_IDENTITY_MISMATCH' });
+  });
+  it('limits repeated invalid TOTP challenges by client IP before unbounded challenge lookups', async () => {
+    await install();
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await post('/auth/totp', { challenge: 'not-a-real-challenge', code: '000000' });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ reason: 'CHALLENGE_EXPIRED' });
+    }
+    const limited = await post('/auth/totp', { challenge: 'not-a-real-challenge', code: '000000' });
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({ reason: 'RATE_LIMITED' });
+    expect(await testDb.db.query<{ count: number }>('SELECT count FROM rate_limits WHERE key=?', [`totp:ip:${await sha256('127.0.0.1')}`])).toEqual([{ count: 31 }]);
+  });
+  it('enforces the global TOTP request limit before consuming a challenge', async () => {
+    await install();
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute('INSERT INTO rate_limits(key,window_start,count) VALUES(?,?,?)', ['totp:requests', now, 300]);
+    const limited = await post('/auth/totp', { challenge: 'not-a-real-challenge', code: '000000' });
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({ reason: 'RATE_LIMITED' });
+    expect(await testDb.db.query<{ count: number }>('SELECT count FROM rate_limits WHERE key=?', ['totp:requests'])).toEqual([{ count: 301 }]);
+  });
+  it('atomically reserves TOTP failure attempts under parallel verification', async () => {
+    await install();
+    const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+    await testDb.db.execute('UPDATE users SET totp_cipher=?', [await encrypt(secret, bindings.APP_KEY, 'totp')]);
+    const currentCounter = Math.floor(Date.now() / 30_000);
+    const validCodes = new Set(await Promise.all([-1, 0, 1].map((offset) => totpCode(secret, currentCounter + offset))));
+    let wrongCode = '000000';
+    while (validCodes.has(wrongCode)) wrongCode = String((Number(wrongCode) + 1) % 1_000_000).padStart(6, '0');
+    const challenges: string[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      const response = await post('/login', credentials);
+      expect(response.status).toBe(200);
+      challenges.push((await response.json() as { challenge: string }).challenge);
+    }
+    const attempts = await Promise.all(challenges.map((challenge) => post('/auth/totp', { challenge, code: wrongCode })));
+    expect(attempts.filter((response) => response.status === 401)).toHaveLength(5);
+    expect(attempts.filter((response) => response.status === 429)).toHaveLength(5);
+    expect(await testDb.db.query<{ count: number }>('SELECT count FROM rate_limits WHERE key=?', ['totp:1'])).toEqual([{ count: 5 }]);
+  });
+  it('limits failed TOTP guesses and clears the account lock after a successful code', async () => {
+    await install();
+    const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+    await testDb.db.execute('UPDATE users SET totp_cipher=?', [await encrypt(secret, bindings.APP_KEY, 'totp')]);
+    const currentCounter = Math.floor(Date.now() / 30_000);
+    const validCodes = new Set(await Promise.all([-1, 0, 1].map((offset) => totpCode(secret, currentCounter + offset))));
+    let wrongCode = '000000';
+    while (validCodes.has(wrongCode)) wrongCode = String((Number(wrongCode) + 1) % 1_000_000).padStart(6, '0');
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const loginResponse = await post('/login', credentials);
+      const challenge = (await loginResponse.json() as { challenge: string }).challenge;
+      const rejected = await post('/auth/totp', { challenge, code: wrongCode });
+      expect(rejected.status).toBe(401);
+      expect(await rejected.json()).toMatchObject({ reason: 'INVALID_TOTP' });
+    }
+    expect(await testDb.db.query<{ count: number }>('SELECT count FROM rate_limits WHERE key=?', ['totp:1'])).toEqual([{ count: 5 }]);
+
+    const blockedLogin = await post('/login', credentials);
+    const blockedChallenge = (await blockedLogin.json() as { challenge: string }).challenge;
+    const blocked = await post('/auth/totp', { challenge: blockedChallenge, code: await totpCode(secret, currentCounter) });
+    expect(blocked.status).toBe(429);
+    expect(await blocked.json()).toMatchObject({ reason: 'RATE_LIMITED' });
+
+    await testDb.db.execute('UPDATE rate_limits SET window_start=? WHERE key=?', [Math.floor(Date.now() / 1000) - 121, 'totp:1']);
+    const retryLogin = await post('/login', credentials);
+    const retryChallenge = (await retryLogin.json() as { challenge: string }).challenge;
+    const retry = await post('/auth/totp', { challenge: retryChallenge, code: await totpCode(secret, Math.floor(Date.now() / 30_000)) });
+    expect(retry.status).toBe(200);
+    expect(await testDb.db.query('SELECT key FROM rate_limits WHERE key=?', ['totp:1'])).toEqual([]);
   });
   it('requires both password and a one-use TOTP challenge, exposes only the enabled flag, and closes with a fresh code', async () => {
     await install();

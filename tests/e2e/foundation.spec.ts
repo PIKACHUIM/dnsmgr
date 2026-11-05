@@ -120,6 +120,43 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload();
   await expect(page.getByLabel('Telegram')).not.toBeChecked();
+  await page.getByRole('link', { name: '登录设置' }).click();
+  await expect(page.getByRole('heading', { name: '登录安全设置' })).toBeVisible();
+  const captchaToggle = page.getByLabel('启用图形验证码');
+  await expect(captchaToggle).not.toBeChecked();
+  await captchaToggle.check();
+  await page.getByRole('button', { name: '保存登录设置' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('登录设置已保存');
+  await page.reload();
+  await expect(page.getByLabel('启用图形验证码')).toBeChecked();
+  await page.setViewportSize({ width: 375, height: 900 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const mobileCaptchaToggle = page.getByLabel('启用图形验证码');
+  await expect(mobileCaptchaToggle).toBeVisible();
+  await mobileCaptchaToggle.focus();
+  await page.keyboard.press('Space');
+  await expect(mobileCaptchaToggle).not.toBeChecked();
+  await page.keyboard.press('Space');
+  await expect(mobileCaptchaToggle).toBeChecked();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mobileCaptchaToggle.uncheck();
+  let abortCaptchaSave = true;
+  await page.route('**/api/v1/system/login-captcha', async (route) => {
+    if (abortCaptchaSave && route.request().method() === 'PUT') {
+      abortCaptchaSave = false;
+      await route.abort('failed');
+      return;
+    }
+    await route.fallback();
+  });
+  await page.getByRole('button', { name: '保存登录设置' }).click();
+  await expect(page.getByRole('alert')).toContainText('无法连接服务');
+  await expect(mobileCaptchaToggle).toBeChecked();
+  await page.unroute('**/api/v1/system/login-captcha');
+  await mobileCaptchaToggle.uncheck();
+  await page.getByRole('button', { name: '保存登录设置' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('登录设置已保存');
+  await expect(mobileCaptchaToggle).not.toBeChecked();
   await page.goto('/account');
   await expect(page.getByRole('heading', { name: '添加 DNS 账户' })).toBeVisible();
   await page.route(/\/api\/v1\/dns\/domains\?/, (route) => route.fulfill({ json: {
@@ -228,7 +265,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await totpPanel.getByLabel('认证器中的 6 位动态口令').fill('123456');
   await totpPanel.getByRole('button', { name: '完成绑定' }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
-  await expect(page.getByRole('status')).toContainText('动态口令已启用');
+  await expect(page.getByText('动态口令已启用，请重新登录', { exact: true })).toBeVisible();
   await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
@@ -260,7 +297,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   page.once('dialog', (dialog) => dialog.accept());
   await totpPanel.getByRole('button', { name: '关闭动态口令' }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
-  await expect(page.getByRole('status')).toContainText('动态口令已关闭');
+  await expect(page.getByText('动态口令已关闭，请重新登录', { exact: true })).toBeVisible();
   await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
@@ -318,7 +355,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByRole('button', { name: '更新密码' }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole('status')).toContainText('密码已更新，请重新登录');
+  await expect(page.getByText('密码已更新，请重新登录', { exact: true })).toBeVisible();
   expect(passwordChangePayload).toEqual({ currentPassword: 'browser-test-password-2026', password: newPasswordValue });
   await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
@@ -327,9 +364,39 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByLabel('密码', { exact: true }).fill(newPasswordValue);
   await page.getByRole('button', { name: '登录控制台' }).click();
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '登录设置' }).click();
+  await captchaToggle.uncheck();
+  await page.getByRole('button', { name: '保存登录设置' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('登录设置已保存');
+  let mockCaptchaEnabled = false;
+  let rejectLoginForCaptcha = false;
+  await page.route('**/verifycode', async (route) => {
+    if (!mockCaptchaEnabled) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({ status: 200, headers: { 'content-type': 'image/svg+xml', 'x-captcha-enabled': '1' }, body: '<svg xmlns="http://www.w3.org/2000/svg" width="140" height="48"><path d="M1 1L2 2"/></svg>' });
+  });
+  await page.route('**/login', async (route) => {
+    if (rejectLoginForCaptcha && route.request().method() === 'POST') {
+      rejectLoginForCaptcha = false;
+      await route.fulfill({ status: 401, contentType: 'application/json', json: { code: -1, msg: '验证码错误或已过期，请刷新后重试', reason: 'INVALID_CAPTCHA' } });
+      return;
+    }
+    await route.fallback();
+  });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
+  await expect(page.getByLabel('图形验证码')).toHaveCount(0);
+  mockCaptchaEnabled = true;
+  rejectLoginForCaptcha = true;
+  await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
+  await page.getByLabel('密码', { exact: true }).fill(newPasswordValue);
+  await page.getByRole('button', { name: '登录控制台' }).click();
+  await expect(page.getByRole('alert')).toContainText('验证码错误或已过期');
+  await expect(page.getByLabel('图形验证码')).toBeVisible();
+  await expect(page.locator('img[alt="登录验证码"]')).toBeVisible();
   expect((await context.request.get('/api/v1/session')).status()).toBe(401);
   expect((await context.request.get('/quicklogin')).status()).toBe(404);
   expect(errors).toEqual([]);

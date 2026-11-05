@@ -7,20 +7,23 @@ const app = createApp();
 
 type EdgeKvConstructor = new (options: { namespace: string }) => EsaEdgeKvClient;
 
-function esaBindings(bindings: Bindings): Bindings {
-  if (bindings.DB_DRIVER !== 'kv') return bindings;
-  const namespace = bindings.ESA_KV_NAMESPACE;
+function esaBindings(bindings: Bindings, context: unknown): Bindings {
+  const info = context && typeof context === 'object' ? (context as { info?: unknown }).info : undefined;
+  const remoteAddr = info && typeof info === 'object' ? (info as { remote_addr?: unknown }).remote_addr : undefined;
+  const withClientIp = typeof remoteAddr === 'string' ? { ...bindings, CLIENT_IP: remoteAddr } : bindings;
+  if (withClientIp.DB_DRIVER !== 'kv') return withClientIp;
+  const namespace = withClientIp.ESA_KV_NAMESPACE;
   const EdgeKV = (globalThis as typeof globalThis & { EdgeKV?: EdgeKvConstructor }).EdgeKV;
-  if (!namespace || !EdgeKV) return bindings;
+  if (!namespace || !EdgeKV) return withClientIp;
   return {
-    ...bindings,
+    ...withClientIp,
     KV: createEsaEdgeKvBinding(new EdgeKV({ namespace })),
-    PAYLOAD_STORE_ID: bindings.PAYLOAD_STORE_ID ?? `edgekv:${namespace}`,
+    PAYLOAD_STORE_ID: withClientIp.PAYLOAD_STORE_ID ?? `edgekv:${namespace}`,
   };
 }
 
 export default {
-  fetch(request: Request, _context: unknown, bindings: Bindings): Promise<Response> {
-    return Promise.resolve(app.fetch(request, environment(esaBindings(bindings ?? {}), 'esa')));
+  fetch(request: Request, context: unknown, bindings: Bindings): Promise<Response> {
+    return Promise.resolve(app.fetch(request, environment(esaBindings(bindings ?? {}, context), 'esa')));
   },
 };

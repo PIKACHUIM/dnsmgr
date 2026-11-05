@@ -8,6 +8,21 @@ import { constantTimeEqual, decrypt, sha256 } from './crypto';
 
 export function nowSeconds(): number { return Math.floor(Date.now() / 1000); }
 
+function validClientIp(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const ip = value.trim();
+  return ip && ip.length <= 128 && !/[\s,]/.test(ip) ? ip : null;
+}
+
+export function trustedClientIp(c: Context<AppEnv>): string | null {
+  switch (c.env.RUNTIME.platform) {
+    case 'local': return '127.0.0.1';
+    case 'cloudflare': return validClientIp(c.req.header('CF-Connecting-IP'));
+    case 'edgeone': return validClientIp(c.env.CLIENT_IP);
+    case 'esa': return validClientIp(c.env.CLIENT_IP);
+  }
+}
+
 export function assertActive(user: UserRow): void {
   if (user.status !== 1 || (user.expires_at !== null && user.expires_at <= nowSeconds())) {
     throw new AppError(403, '账户已禁用或过期', 'USER_INACTIVE');
@@ -82,12 +97,22 @@ export const requireLegacyApi: MiddlewareHandler<AppEnv> = async (c, next) => {
 
 export async function consumeRateLimit(c: Context<AppEnv>, key: string, limit: number, windowSeconds: number): Promise<void> {
   const now = nowSeconds();
-  const rows = await c.get('db').query<{ count: number }>(
-    `INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
-     ON CONFLICT(key) DO UPDATE SET
-       count = CASE WHEN window_start <= ? THEN 1 ELSE count + 1 END,
-       window_start = CASE WHEN window_start <= ? THEN excluded.window_start ELSE window_start END
-     RETURNING count`, [key, now, now - windowSeconds, now - windowSeconds],
-  );
-  if (!rows[0] || rows[0].count > limit) throw new AppError(429, '请求过于频繁，请稍后重试', 'RATE_LIMITED');
+  const results = await c.get('db').batch([
+    {
+      sql: `DELETE FROM rate_limits WHERE key IN (
+        SELECT key FROM rate_limits WHERE window_start <= ? ORDER BY window_start LIMIT 100
+      )`,
+      args: [now - 120],
+    },
+    {
+      sql: `INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
+            ON CONFLICT(key) DO UPDATE SET
+              count = CASE WHEN window_start <= ? THEN 1 ELSE count + 1 END,
+              window_start = CASE WHEN window_start <= ? THEN excluded.window_start ELSE window_start END
+            RETURNING count`,
+      args: [key, now, now - windowSeconds, now - windowSeconds],
+    },
+  ]);
+  const count = results[1]?.rows[0]?.count;
+  if (typeof count !== 'number' || count > limit) throw new AppError(429, '请求过于频繁，请稍后重试', 'RATE_LIMITED');
 }

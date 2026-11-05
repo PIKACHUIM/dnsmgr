@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
+import { sha256 } from '../src/security/crypto';
 import cf from '../src/platform/cloudflare';
 import esa from '../src/platform/esa';
-import { onRequest } from '../src/platform/edgeone';
+import { clientIpFromMakersContext, onRequest } from '../src/platform/edgeone';
 import { budgetedFetch, environment, runtime } from '../src/platform/runtime';
+import type { Bindings } from '../src/core/types';
 import type { D1Binding, D1Result, D1Statement, SqlDatabase, SqlValue } from '../src/storage/sql';
 import { createTestDatabase } from './helpers/sqlite';
 
@@ -44,6 +46,45 @@ describe('platform routing and isolation', () => {
     const response = platform === 'cloudflare' ? await cf.fetch(request, {}) : platform === 'esa' ? await esa.fetch(request, {}, {}) : await onRequest({ request, env: {} });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ service: 'dnsmgr-serverless', stage: 'foundation' });
+  });
+  it('uses the trusted EdgeOne Node Function context IP, not request forwarding headers', () => {
+    const request = new Request('https://panel.example/verifycode', { headers: { 'X-Forwarded-For': '198.51.100.99' } });
+    expect(clientIpFromMakersContext({ request, clientIp: '203.0.113.20' })).toBe('203.0.113.20');
+    expect(clientIpFromMakersContext({ request })).toBeUndefined();
+    expect(clientIpFromMakersContext({ request, clientIp: '203.0.113.20, 198.51.100.99' })).toBeUndefined();
+  });
+  it('forwards trusted client IP through the Cloudflare, EdgeOne and ESA entrypoints', async () => {
+    const testDb = createTestDatabase({ captchaEnabled: true });
+    try {
+      const bindings: Bindings = {
+        DB_DRIVER: 'd1', DB_FORMAT: 'sql', COORDINATOR_ID: 'trusted-ip-test', DB: d1Binding(testDb.db),
+      };
+      const cloudflareIp = '203.0.113.10';
+      const cloudflare = await cf.fetch(new Request('https://panel.example/verifycode', {
+        headers: { 'CF-Connecting-IP': cloudflareIp, 'X-Forwarded-For': '198.51.100.99' },
+      }), bindings);
+      expect(cloudflare.status).toBe(200);
+
+      const edgeone = await onRequest({
+        request: new Request('https://panel.example/verifycode', { headers: { 'X-Forwarded-For': '198.51.100.99' } }),
+        clientIp: '198.51.100.10', env: bindings,
+      });
+      expect(edgeone.status).toBe(200);
+
+      const esaResponse = await esa.fetch(
+        new Request('https://panel.example/verifycode', { headers: { 'X-Forwarded-For': '198.51.100.99' } }),
+        { info: { remote_addr: '192.0.2.10' } }, bindings,
+      );
+      expect(esaResponse.status).toBe(200);
+      const keys = await testDb.db.query<{ key: string }>("SELECT key FROM rate_limits WHERE key LIKE 'captcha:issue-ip:%' ORDER BY key");
+      expect(keys.map((row) => row.key)).toEqual([
+        `captcha:issue-ip:${await sha256(cloudflareIp)}`,
+        `captcha:issue-ip:${await sha256('198.51.100.10')}`,
+        `captcha:issue-ip:${await sha256('192.0.2.10')}`,
+      ].sort());
+    } finally {
+      testDb.close();
+    }
   });
   it('connects CF KV and ESA EdgeKV to their SQL coordinator without implicit fallbacks', async () => {
     const kvDatabase = createTestDatabase();

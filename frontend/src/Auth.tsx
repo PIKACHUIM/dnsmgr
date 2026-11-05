@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, post, readSession, type Session } from './api';
 import { Brand, Icon } from './icons';
 
@@ -16,6 +16,11 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
   const [confirmation, setConfirmation] = useState('');
   const [setupToken, setSetupToken] = useState('');
   const [code, setCode] = useState('');
+  const [captchaCode, setCaptchaCode] = useState('');
+  const [captchaEnabled, setCaptchaEnabled] = useState(true);
+  const [captchaImage, setCaptchaImage] = useState('');
+  const [captchaLoading, setCaptchaLoading] = useState(true);
+  const [captchaError, setCaptchaError] = useState('');
   const [challenge, setChallenge] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [pending, setPending] = useState(false);
@@ -24,6 +29,38 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
   const codeInput = useRef<HTMLInputElement>(null);
   const usernameInput = useRef<HTMLInputElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+
+  const loadCaptcha = useCallback(async (signal: AbortSignal) => {
+    setCaptchaLoading(true);
+    setCaptchaError('');
+    setCaptchaCode('');
+    try {
+      const response = await fetch('/verifycode', {
+        method: 'GET', credentials: 'same-origin', cache: 'no-store', signal,
+        headers: { Accept: 'image/svg+xml' },
+      });
+      if (signal.aborted) return;
+      if (response.status === 204 && response.headers.get('x-captcha-enabled') === '0') {
+        setCaptchaEnabled(false);
+        setCaptchaImage('');
+        return;
+      }
+      const svg = await response.text();
+      if (!response.ok || response.headers.get('x-captcha-enabled') !== '1' || svg.length > 8192 || !svg.trimStart().startsWith('<svg')) {
+        throw new ApiError('验证码服务暂不可用。', response.status);
+      }
+      setCaptchaEnabled(true);
+      setCaptchaImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+    } catch {
+      if (!signal.aborted) {
+        setCaptchaEnabled(true);
+        setCaptchaImage('');
+        setCaptchaError('验证码加载失败，请点击“刷新验证码”重试。');
+      }
+    } finally {
+      if (!signal.aborted) setCaptchaLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -38,6 +75,13 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
   useEffect(() => {
     if (error) errorRef.current?.focus();
   }, [error]);
+
+  useEffect(() => {
+    if (installing || challenge) return;
+    const abort = new AbortController();
+    void loadCaptcha(abort.signal);
+    return () => abort.abort();
+  }, [challenge, installing, loadCaptcha]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -61,6 +105,14 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
         setError(installing ? '密码需要 12–72 个 UTF-8 字节，中文等字符会占用多个字节。' : '密码不能超过 72 个 UTF-8 字节。');
         return;
       }
+      if (!installing && captchaEnabled && (!captchaImage || captchaLoading)) {
+        setCaptchaError('请等待验证码加载完成，或点击刷新验证码重试。');
+        return;
+      }
+      if (!installing && captchaEnabled && !/^\d{4}$/.test(captchaCode)) {
+        setError('请输入图中 4 位数字验证码。');
+        return;
+      }
     }
     const signal = controller.current!.signal;
     setPending(true);
@@ -71,13 +123,22 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
       } else {
         const result = challenge
           ? await post<Session>('/auth/totp', { challenge, code }, signal)
-          : await post<Session>('/login', { username: username.trim(), password }, signal);
+          : await post<Session>('/login', {
+            username: username.trim(), password, ...(captchaEnabled ? { code: captchaCode } : {}),
+          }, signal);
         if (!signal.aborted) onSignedIn(readSession(result));
       }
     } catch (failure) {
       if (signal.aborted) return;
-      if (!installing && failure instanceof ApiError && failure.body.vcode === 2 && typeof failure.body.challenge === 'string') {
-        setChallenge(failure.body.challenge);
+      const totpChallenge = !installing && failure instanceof ApiError
+        && failure.body.vcode === 2 && typeof failure.body.challenge === 'string';
+      const captchaRejected = failure instanceof ApiError && failure.body.reason === 'INVALID_CAPTCHA';
+      if (!installing && !challenge && (captchaEnabled || captchaRejected) && !totpChallenge) {
+        setCaptchaCode('');
+        void loadCaptcha(signal);
+      }
+      if (totpChallenge) {
+        setChallenge((failure as ApiError).body.challenge as string);
         setCode('');
         setPassword('');
       } else if (challenge && failure instanceof ApiError && failure.status === 401) {
@@ -95,6 +156,7 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
   function restartLogin() {
     setChallenge(null);
     setCode('');
+    setCaptchaCode('');
     setError('');
     requestAnimationFrame(() => usernameInput.current?.focus());
   }
@@ -119,9 +181,10 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
       <div className="auth-form-wrap">
         <div className="auth-eyebrow"><span className="status-dot" />{installing ? '首次安装' : '身份验证'}</div>
         <h1 id="auth-title">{title}</h1>
-        <p className="auth-description">{installing ? '使用部署时配置的安装令牌授权初始化。此步骤只能执行一次。' : challenge ? '请输入验证器应用中的 6 位动态口令。若验证已过期，请返回重新登录。' : '使用系统账户登录。已启用动态口令的账户会进入第二步验证。'}</p>
+        <p className="auth-description">{installing ? '使用部署时配置的安装令牌授权初始化。此步骤只能执行一次。' : challenge ? '请输入验证器应用中的 6 位动态口令。若验证已过期，请返回重新登录。' : '输入系统账户和图形验证码。已启用动态口令的账户会进入第二步验证。'}</p>
         {notice && <div className="notice" role="status">{notice}</div>}
         {error && <div className="notice notice-error" role="alert" tabIndex={-1} ref={errorRef}><strong>操作未完成</strong><span>{error}</span></div>}
+        {captchaError && <div className="notice notice-error" role="alert">{captchaError}</div>}
         <form onSubmit={submit} aria-busy={pending}>
           <fieldset disabled={pending}>
             {challenge ? <div className="form-field">
@@ -147,12 +210,23 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
                 </div>
                 {installing && <small id="password-help">12–72 个 UTF-8 字节；中文通常占 3 字节。建议使用唯一的长密码。</small>}
               </div>
+              {!installing && !challenge && captchaEnabled && <div className="form-field captcha-field">
+                <label htmlFor="captcha">图形验证码</label>
+                <div className="captcha-control">
+                  <div className="captcha-image-frame">
+                    {captchaImage ? <img src={captchaImage} alt="登录验证码" /> : <span role="status">{captchaLoading ? '正在加载验证码…' : '验证码不可用'}</span>}
+                  </div>
+                  <button className="button button-secondary captcha-refresh" type="button" disabled={pending || captchaLoading} onClick={() => void loadCaptcha(controller.current!.signal)}>刷新验证码</button>
+                </div>
+                <input id="captcha" name="captcha" className="code-input captcha-code-input" type="text" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" minLength={4} maxLength={4} required value={captchaCode} onChange={(event) => setCaptchaCode(event.target.value.replace(/\D/g, '').slice(0, 4))} aria-describedby="captcha-help" />
+                <small id="captcha-help">输入图中 4 位数字；每次登录尝试后验证码会刷新。</small>
+              </div>}
               {installing && <div className="form-field">
                 <label htmlFor="confirmation">确认密码</label>
                 <input id="confirmation" name="confirmation" type={showPassword ? 'text' : 'password'} autoComplete="new-password" minLength={1} maxLength={72} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
               </div>}
             </>}
-            <button type="submit" className="button button-primary auth-submit">{pending ? <><span className="spinner" />{installing ? '正在初始化…' : '正在验证…'}</> : <>{installing ? '初始化并创建账户' : challenge ? '验证并登录' : '登录控制台'}<Icon name="arrow" /></>}</button>
+            <button type="submit" className="button button-primary auth-submit" disabled={pending || (!installing && !challenge && captchaEnabled && (captchaLoading || !captchaImage))}>{pending ? <><span className="spinner" />{installing ? '正在初始化…' : '正在验证…'}</> : <>{installing ? '初始化并创建账户' : challenge ? '验证并登录' : '登录控制台'}<Icon name="arrow" /></>}</button>
             {challenge && <button type="button" className="button button-quiet restart-login" onClick={restartLogin}>返回重新登录</button>}
           </fieldset>
         </form>

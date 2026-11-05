@@ -15,6 +15,7 @@ import { ScheduleTasks } from './ScheduleTasks';
 import { CronSettings } from './CronSettings';
 import { NotifySettings } from './NotifySettings';
 import { ExpirationNoticeSettings } from './ExpirationNoticeSettings';
+import { LoginCaptchaSettings } from './LoginCaptchaSettings';
 import { DnsFailover } from './DnsFailover';
 import { SetPassword } from './SetPassword';
 
@@ -198,8 +199,9 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                 : path === '/dmonitor/overview' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} overview />
                   : path === '/dmonitor/task' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} />
                     : path === '/schedule/stask' && level === 2 ? <ScheduleTasks session={session} onExpired={onExpired} />
-                  : path === '/system/cronset' && level === 2 ? <CronSettings session={session} onExpired={onExpired} />
-                    : path === '/system/noticeset' && level === 2 ? <NotifySettings session={session} onExpired={onExpired} />
+                    : path === '/system/loginset' && level === 2 ? <LoginCaptchaSettings session={session} onExpired={onExpired} />
+                    : path === '/system/cronset' && level === 2 ? <CronSettings session={session} onExpired={onExpired} />
+                  : path === '/system/noticeset' && level === 2 ? <NotifySettings session={session} onExpired={onExpired} />
                       : path === '/domain/expirenotice' && level === 2 ? <ExpirationNoticeSettings session={session} onExpired={onExpired} />
                     : path === '/setpwd' ? <SetPassword session={session} onExpired={onExpired} onLoggedOut={onLoggedOut} />
                     : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />

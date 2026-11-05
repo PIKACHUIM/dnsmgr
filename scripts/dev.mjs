@@ -27,7 +27,7 @@ const version = Number(sqlite.prepare('PRAGMA user_version').get().user_version)
 const migrations = [
   '0001_core.sql', '0002_dns.sql', '0003_dns_aliases.sql', '0004_schedule.sql',
   '0005_failover.sql', '0006_domain_expiration_queue.sql', '0007_domain_periodic_expiration_queue.sql',
-  '0008_domain_expiration_notices.sql',
+  '0008_domain_expiration_notices.sql', '0009_login_captcha.sql',
 ];
 if (version > migrations.length) throw new Error('Local schema version is newer than this application');
 for (const [index, migration] of migrations.entries()) {
@@ -43,6 +43,7 @@ for (const [index, migration] of migrations.entries()) {
     throw error;
   }
 }
+if (process.env.LOCAL_EPHEMERAL === '1') sqlite.prepare('UPDATE app_settings SET value=? WHERE key=?').run('2', 'vcode');
 const execute = (sql, args = []) => {
   const rows = sqlite.prepare(sql).all(...args);
   const changes = /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql) ? Number(sqlite.prepare('SELECT changes() AS changes').get().changes) : 0;

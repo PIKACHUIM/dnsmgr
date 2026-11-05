@@ -42,7 +42,7 @@ export const navigation: NavigationGroup[] = [
   ] },
   { label: '系统设置', adminOnly: true, items: [
     { path: '/system/cronset', label: '计划任务', scope: '计划任务与运行器设置', capability: 'tasks', implemented: true },
-    { path: '/system/loginset', label: '登录设置', scope: '登录策略与动态口令配置' },
+    { path: '/system/loginset', label: '登录设置', scope: '图形验证码登录策略', implemented: true },
     { path: '/system/noticeset', label: '通知设置', scope: '通知渠道与消息模板', implemented: true },
     { path: '/domain/expirenotice', label: '到期提醒设置', scope: '域名到期通知提前天数策略', implemented: true },
     { path: '/system/proxyset', label: '代理设置', scope: '外部请求代理配置' },
