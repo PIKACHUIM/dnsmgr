@@ -68,6 +68,20 @@ interface LegacyDomainDetailRow extends DomainRow {
   owner_updated_at: number;
 }
 
+interface LegacyRecordDomainRow extends Record<string, unknown> {
+  id: number;
+  account_id: number;
+  name: string;
+  third_id: string | null;
+  owner_id: number;
+  owner_type: string;
+  owner_name: string;
+  owner_config_cipher: string;
+  owner_remark: string | null;
+  owner_created_at: number;
+  owner_updated_at: number;
+}
+
 const LEGACY_PROVIDER_NAMES: Record<string, string> = {
   aliyun: '阿里云', dnspod: '腾讯云', huawei: '华为云', baidu: '百度云', west: '西部数码',
   huoshan: '火山引擎', jdcloud: '京东云', dnsla: 'DNSLA', qingcloud: '青云', bt: '宝塔域名',
@@ -84,6 +98,8 @@ const LEGACY_PROVIDER_ICONS: Record<string, string> = {
 };
 const LEGACY_ALIAS_RECORD_TYPES = new Set(['aliyun', 'henet', 'powerdns', 'spaceship']);
 const LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS = new Set(['goedge', 'huoshan']);
+const LEGACY_CLIENT_PAGINATION_PROVIDERS = new Set(['aws', 'baidu', 'henet', 'namesilo', 'powerdns', 'technitium']);
+const LEGACY_RECORD_SORT_COLUMNS = new Set(['Name', 'Type', 'LineName', 'Value', 'UpdateTime']);
 
 function legacyText(body: Record<string, unknown>, key: string, maxLength = 256): string {
   const value = body[key];
@@ -558,6 +574,82 @@ export function dnsRoutes() {
       },
       recordLine, minTTL,
     } });
+  });
+
+  routes.post('/api/record/data/:id', requireLegacyApi, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    const principal = c.get('principal');
+    const permission = principal.user.level === 2 ? '' : `AND EXISTS (
+      SELECT 1 FROM permissions p WHERE p.user_id=? AND p.domain_id=CAST(d.id AS TEXT)
+    )`;
+    const args: (string | number)[] = [domainId];
+    if (permission) args.push(principal.user.id);
+    const domains = await db(c).query<LegacyRecordDomainRow>(
+      `SELECT d.id, d.account_id, d.name, d.third_id, a.id AS owner_id, a.type AS owner_type,
+        a.name AS owner_name, a.config_cipher AS owner_config_cipher, a.remark AS owner_remark,
+        a.created_at AS owner_created_at, a.updated_at AS owner_updated_at
+       FROM dns_domains d JOIN dns_accounts a ON a.id=d.account_id
+       WHERE d.id=? ${permission}`,
+      args,
+    );
+    const domain = domains[0];
+    if (!domain) return c.json({ total: 0, rows: [] });
+
+    const body = c.get('legacyApiBody');
+    const offset = legacyInteger(legacyText(body, 'offset', 16), 'offset', 0, 0, 1_000_000);
+    const pageSize = legacyInteger(legacyText(body, 'limit', 16), 'limit', 10, 1, 100);
+    if (offset % pageSize !== 0) throw new AppError(400, 'offset 必须是 limit 的整数倍', 'INVALID_LEGACY_API_PARAMETER');
+    const sortName = legacyText(body, 'sortName', 32);
+    if (sortName && !LEGACY_RECORD_SORT_COLUMNS.has(sortName)) {
+      throw new AppError(400, '排序字段无效', 'INVALID_LEGACY_API_PARAMETER');
+    }
+    if (sortName) throw new AppError(501, '旧签名解析记录排序尚未迁移', 'LEGACY_RECORD_SORT_UNSUPPORTED');
+
+    const keyword = legacyText(body, 'keyword', 128);
+    const name = legacyText(body, 'subdomain', 128);
+    const value = legacyText(body, 'value', 255);
+    const type = legacyText(body, 'type', 16).toUpperCase();
+    const line = legacyText(body, 'line', 64);
+    const status = legacyText(body, 'status', 8);
+    if (status && status !== '0' && status !== '1') {
+      throw new AppError(400, 'status 格式无效', 'INVALID_LEGACY_API_PARAMETER');
+    }
+    if (status && domain.owner_type === 'cloudflare') {
+      throw new AppError(501, 'Cloudflare 旧签名记录列表暂不支持状态筛选', 'LEGACY_RECORD_FILTER_UNSUPPORTED');
+    }
+    if (LEGACY_CLIENT_PAGINATION_PROVIDERS.has(domain.owner_type)) {
+      throw new AppError(501, '旧版客户端分页服务商的完整记录列表尚未迁移', 'LEGACY_RECORD_CLIENT_PAGINATION_UNSUPPORTED');
+    }
+    if (c.env.RUNTIME.platform === 'esa' && domain.owner_type === 'qingcloud' && !name) {
+      throw new AppError(501, '当前 ESA 请求预算无法读取青云全部主机组记录', 'LEGACY_RECORD_BUDGET_UNSUPPORTED');
+    }
+
+    const owner: AccountRow = {
+      id: domain.owner_id, type: domain.owner_type, name: domain.owner_name,
+      config_cipher: domain.owner_config_cipher, remark: domain.owner_remark,
+      created_at: domain.owner_created_at, updated_at: domain.owner_updated_at,
+    };
+    let records;
+    try {
+      const provider = await providerFor(c, owner);
+      records = await provider.listRecords(toDnsDomain(domain), {
+        page: offset / pageSize + 1, pageSize,
+        ...(keyword ? { keyword } : {}), ...(name ? { name } : {}), ...(value ? { value } : {}),
+        ...(type ? { type } : {}), ...(line ? { line } : {}),
+        ...(status ? { status: status as '0' | '1' } : {}),
+      });
+    } catch (error) { providerError(error); }
+    if (!records) return c.json({ total: 0, rows: [] });
+
+    return c.json({
+      total: Number(records.total),
+      rows: records.items.map((record) => ({
+        RecordId: record.id, Domain: domain.name, Name: record.name, Type: record.type, Value: record.value,
+        Line: record.line, LineName: record.line, TTL: record.ttl, MX: record.mx, Weight: record.weight,
+        Remark: record.remark, Status: record.status, UpdateTime: record.updatedAt,
+      })),
+    });
   });
 
   routes.post('/api/domain', requireLegacyApi, async (c) => {

@@ -12,6 +12,8 @@ const appKey = btoa('12345678901234567890123456789012');
 let rdapLookupStatus = 200;
 let dohPayload: unknown = { Status: 0, Answer: [{ type: 1, data: '1.1.1.1' }] };
 let dohQueries: URL[] = [];
+let cloudflareRecords: Record<string, unknown>[] = [];
+let cloudflareRecordTotal = 0;
 
 function cloudflareFetch() {
   let nextRecord = 1;
@@ -34,8 +36,8 @@ function cloudflareFetch() {
     if (/\/dns_records\/r\d+$/.test(url.pathname)) {
       return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
     }
-    if (url.pathname === '/client/v4/zones/zone-1/dns_records' && url.search.endsWith('') === false) {
-      return json({ success: true, result: [], result_info: { total_count: 0 } });
+    if (url.pathname === '/client/v4/zones/zone-1/dns_records' && url.search !== '') {
+      return json({ success: true, result: cloudflareRecords, result_info: { total_count: cloudflareRecordTotal } });
     }
     if (url.pathname.endsWith('/dns_records') && url.search === '') {
       return json({ success: true, result: { id: `remote-${nextRecord++}` } });
@@ -54,6 +56,8 @@ describe('DNS account, domain and record API', () => {
     rdapLookupStatus = 200;
     dohPayload = { Status: 0, Answer: [{ type: 1, data: '1.1.1.1' }] };
     dohQueries = [];
+    cloudflareRecords = [];
+    cloudflareRecordTotal = 0;
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const transport = cloudflareFetch();
@@ -261,6 +265,81 @@ describe('DNS account, domain and record API', () => {
       expect(await unsupported.json()).toMatchObject({ reason: 'LEGACY_DETAIL_BUDGET_UNSUPPORTED' });
     }
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+  });
+
+  it('serves signed read-only record pages with legacy rows and bounded fallbacks', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'record-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    await testDb.db.execute('UPDATE dns_domains SET record_count=7 WHERE id=?', [domain!.id]);
+    cloudflareRecords = [{
+      id: 'record-1', name: 'www.example.com', type: 'A', content: '192.0.2.8', ttl: 300,
+      proxied: false, comment: 'primary', modified_on: '2026-01-02T03:04:05Z',
+    }];
+    cloudflareRecordTotal = 9;
+    const before = await testDb.db.query<{ record_count: number }>('SELECT record_count FROM dns_domains WHERE id=?', [domain!.id]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    async function signedRecords(
+      idValue: number | string = domain!.id, params: Record<string, string> = {},
+      platform: 'local' | 'esa' = 'local', overrides: Partial<Bindings> = {},
+    ) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const form = new URLSearchParams({ uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), ...params });
+      return app.request(`https://panel.example/api/record/data/${idValue}`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      }, environment({ ...bindings, ...overrides }, platform));
+    }
+
+    const response = await signedRecords(domain!.id, { offset: '0', limit: '10', subdomain: 'www', line: '0' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ total: 9, rows: [{
+      RecordId: 'record-1', Domain: 'example.com', Name: 'www', Type: 'A', Value: '192.0.2.8',
+      Line: '0', LineName: '0', TTL: 300, MX: null, Weight: null, Remark: 'primary', Status: 1,
+      UpdateTime: '2026-01-02T03:04:05Z',
+    }] });
+    const providerRequest = new URL(String((budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]));
+    expect(providerRequest.searchParams.get('name')).toBe('www.example.com');
+    expect(providerRequest.searchParams.get('proxied')).toBe('false');
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+    expect(await testDb.db.query<{ record_count: number }>('SELECT record_count FROM dns_domains WHERE id=?', [domain!.id])).toEqual(before);
+
+    const sorted = await signedRecords(domain!.id, { sortName: 'Name', sortOrder: 'asc' });
+    expect(sorted.status).toBe(501);
+    expect(await sorted.json()).toMatchObject({ reason: 'LEGACY_RECORD_SORT_UNSUPPORTED' });
+    const invalidSort = await signedRecords(domain!.id, { sortName: 'constructor' });
+    expect(invalidSort.status).toBe(400);
+    expect(await invalidSort.json()).toMatchObject({ reason: 'INVALID_LEGACY_API_PARAMETER' });
+    const unsupportedStatusFilter = await signedRecords(domain!.id, { status: '1' });
+    expect(unsupportedStatusFilter.status).toBe(501);
+    expect(await unsupportedStatusFilter.json()).toMatchObject({ reason: 'LEGACY_RECORD_FILTER_UNSUPPORTED' });
+    expect((await signedRecords(domain!.id, { limit: '0' })).status).toBe(400);
+    expect((await signedRecords(domain!.id, { offset: '1', limit: '10' })).status).toBe(400);
+    const mismatch = await signedRecords(domain!.id, {}, 'local', { DB_FORMAT: 'map' });
+    expect(mismatch.status).toBe(503);
+    expect(await mismatch.json()).toMatchObject({ reason: 'STORAGE_IDENTITY_MISMATCH' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+
+    await testDb.db.execute('UPDATE users SET level=0 WHERE id=1');
+    expect(await (await signedRecords(domain!.id)).json()).toEqual({ total: 0, rows: [] });
+    expect(await (await signedRecords(domain!.id, { sortName: 'Name', limit: '0' })).json()).toEqual({ total: 0, rows: [] });
+    expect(await (await signedRecords(999_999)).json()).toEqual({ total: 0, rows: [] });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+
+    await testDb.db.execute('UPDATE users SET level=2 WHERE id=1');
+    const owner = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domain!.id]);
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['aws', owner[0]!.account_id]);
+    const clientPaged = await signedRecords(domain!.id, { limit: '10' });
+    expect(clientPaged.status).toBe(501);
+    expect(await clientPaged.json()).toMatchObject({ reason: 'LEGACY_RECORD_CLIENT_PAGINATION_UNSUPPORTED' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['qingcloud', owner[0]!.account_id]);
+    const esaFanout = await signedRecords(domain!.id, {}, 'esa');
+    expect(esaFanout.status).toBe(501);
+    expect(await esaFanout.json()).toMatchObject({ reason: 'LEGACY_RECORD_BUDGET_UNSUPPORTED' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
   });
 
   it('rejects unknown providers before touching storage', async () => {
