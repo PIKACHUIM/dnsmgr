@@ -28,7 +28,7 @@ describe('authentication with a real transactional SQLite database', () => {
   async function login() {
     const response = await post('/login', credentials);
     expect(response.status).toBe(200);
-    return { cookie: response.headers.get('set-cookie')!.split(';')[0]!, body: await response.json() as { csrfToken: string; user: { id: number } } };
+    return { cookie: response.headers.get('set-cookie')!.split(';')[0]!, body: await response.json() as { csrfToken: string; totpEnabled: boolean; user: { id: number } } };
   }
 
   it('rejects missing install authorization and weak passwords without creating a user', async () => {
@@ -51,7 +51,8 @@ describe('authentication with a real transactional SQLite database', () => {
     expect(response.headers.get('set-cookie')).toMatch(/HttpOnly/);
     expect(response.headers.get('set-cookie')).toMatch(/Secure/);
     expect(response.headers.get('set-cookie')).toMatch(/SameSite=Strict/);
-    const data = await response.json() as { csrfToken: string; user: { id: number } };
+    const data = await response.json() as { csrfToken: string; totpEnabled: boolean; user: { id: number } };
+    expect(data.totpEnabled).toBe(false);
     const cookie = response.headers.get('set-cookie')!.split(';')[0]!;
     const session = await request('/api/v1/session', { headers: { cookie } });
     expect(await session.json()).toMatchObject(data);
@@ -132,6 +133,8 @@ describe('authentication with a real transactional SQLite database', () => {
     expect(bound.status).toBe(200);
     expect(operations).toBe(4);
     operations = 0;
+    expect((await request('/api/v1/session', { headers: { cookie } })).status).toBe(401);
+    operations = 0;
     const prelogin = await post('/login', credentials);
     expect(operations).toBe(4);
     const challenge = (await prelogin.json() as { challenge: string }).challenge;
@@ -139,6 +142,27 @@ describe('authentication with a real transactional SQLite database', () => {
     const verified = await post('/auth/totp', { challenge, code: await totpCode(binding.secret, counter + 1) });
     expect(verified.status).toBe(200);
     expect(operations).toBe(4);
+  });
+  it('prunes expired one-use TOTP challenges when creating a new challenge', async () => {
+    await install();
+    const { cookie, body } = await login();
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      'INSERT INTO security_challenges(token_hash,purpose,user_id,secret_cipher,permission_version,expires_at,created_at) VALUES(?,?,?,?,?,?,?)',
+      ['expired-enrollment', 'totp-bind', 1, 'expired-ciphertext', 1, now - 1, now - 181],
+    );
+    await testDb.db.execute(
+      'INSERT INTO security_challenges(token_hash,purpose,user_id,secret_cipher,permission_version,expires_at,created_at) VALUES(?,?,?,?,?,?,?)',
+      ['active-login', 'totp-login', 1, null, 1, now + 180, now],
+    );
+    const generated = await post('/totp/generate', { password: credentials.password }, { cookie, 'X-CSRF-Token': body.csrfToken });
+    expect(generated.status).toBe(200);
+    const challenge = (await generated.json() as { challenge: string }).challenge;
+    const rows = await testDb.db.query<{ token_hash: string }>('SELECT token_hash FROM security_challenges ORDER BY token_hash');
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.token_hash)).toContain('active-login');
+    expect(rows.map((row) => row.token_hash)).toContain(await sha256(challenge));
+    expect(rows.map((row) => row.token_hash)).not.toContain('expired-enrollment');
   });
   it('enforces a persistent login rate limit', async () => {
     await install();
@@ -151,25 +175,38 @@ describe('authentication with a real transactional SQLite database', () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ reason: 'STORAGE_IDENTITY_MISMATCH' });
   });
-  it('requires both password and a one-use TOTP challenge and rejects replay', async () => {
+  it('requires both password and a one-use TOTP challenge, exposes only the enabled flag, and closes with a fresh code', async () => {
     await install();
     const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
     await testDb.db.execute('UPDATE users SET totp_cipher = ?', [await encrypt(secret, bindings.APP_KEY, 'totp')]);
     const response = await post('/login', credentials);
     const challenge = (await response.json() as { challenge: string; vcode: number }).challenge;
     expect(response.headers.get('set-cookie')).toBeNull();
-    const code = await totpCode(secret, Math.floor(Date.now() / 30_000));
+    const loginCounter = Math.floor(Date.now() / 30_000);
+    const code = await totpCode(secret, loginCounter);
     const session = await post('/auth/totp', { challenge, code });
     expect(session.status).toBe(200);
     const sessionCookie = session.headers.get('set-cookie')!.split(';')[0]!;
-    const sessionData = await session.json() as { csrfToken: string };
+    const sessionData = await session.json() as { csrfToken: string; totpEnabled: boolean };
+    expect(sessionData.totpEnabled).toBe(true);
+    expect(JSON.stringify(sessionData)).not.toContain(secret);
     const replay = await post('/totp/close', { password: credentials.password, code }, { cookie: sessionCookie, 'X-CSRF-Token': sessionData.csrfToken });
     expect(replay.status).toBe(401);
-    expect((await request('/api/v1/session', { headers: { cookie: sessionCookie } })).status).toBe(200);
+    const activeSession = await request('/api/v1/session', { headers: { cookie: sessionCookie } });
+    expect(activeSession.status).toBe(200);
+    expect(await activeSession.json()).toMatchObject({ totpEnabled: true });
     expect((await post('/auth/totp', { challenge, code })).status).toBe(401);
     const second = await post('/login', credentials);
     const next = await second.json() as { challenge: string };
     expect((await post('/auth/totp', { challenge: next.challenge, code })).status).toBe(401);
+    const closeCounter = Math.max(Math.floor(Date.now() / 30_000), loginCounter + 1);
+    const closed = await post('/totp/close', { password: credentials.password, code: await totpCode(secret, closeCounter) }, { cookie: sessionCookie, 'X-CSRF-Token': sessionData.csrfToken });
+    expect(closed.status).toBe(200);
+    expect(await closed.json()).toMatchObject({ code: 0, msg: '动态口令已关闭，请重新登录' });
+    expect((await request('/api/v1/session', { headers: { cookie: sessionCookie } })).status).toBe(401);
+    const loggedIn = await post('/login', credentials);
+    expect(loggedIn.status).toBe(200);
+    expect(await loggedIn.json()).toMatchObject({ totpEnabled: false });
   });
   it('preserves password whitespace instead of trimming it', async () => {
     const password = '  space-password-2026  ';

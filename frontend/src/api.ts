@@ -7,6 +7,7 @@ export interface User {
 export interface Session {
   code: 0;
   csrfToken: string;
+  totpEnabled: boolean;
   user: User;
 }
 
@@ -72,7 +73,7 @@ export function send<T>(path: string, method: string, body: unknown, signal: Abo
 
 export function readSession(value: Session): Session {
   if (!value.user || typeof value.user.username !== 'string' || typeof value.user.level !== 'number'
-    || typeof value.user.id !== 'number' || typeof value.csrfToken !== 'string' || !value.csrfToken) {
+    || typeof value.user.id !== 'number' || typeof value.csrfToken !== 'string' || !value.csrfToken || typeof value.totpEnabled !== 'boolean') {
     throw new ApiError('会话响应不完整，请重试或检查后端服务。', 502);
   }
   return value;

@@ -371,3 +371,27 @@ a.button:hover { text-decoration: none; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 6px; white-space: nowrap; }
 .pagination { display: flex; align-items: center; gap: 12px; margin-top: 14px; color: var(--color-muted); font-size: var(--font-xs); }
 .page-tools { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; color: var(--color-muted); font-size: var(--font-sm); }
+.totp-state { display: flex; align-items: center; gap: 9px; padding: 16px 24px 4px; color: var(--color-success); font-size: var(--font-sm); }
+.totp-state .status-dot { background: currentColor; }
+.totp-enrollment { display: grid; justify-items: center; gap: 16px; padding: 20px 24px 8px; }
+.totp-enrollment > p { width: 100%; color: var(--color-muted); font-size: var(--font-sm); }
+.totp-qr { --color-qr-foreground: #182230; --color-qr-background: #ffffff; display: grid; place-items: center; width: 210px; height: 210px; padding: 14px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-qr-background); }
+.totp-qr > div { display: grid; place-items: center; }
+.totp-qr canvas, .totp-qr img { display: block; max-width: 100%; height: auto; }
+.totp-qr-error { color: var(--color-error) !important; }
+.totp-secret { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-subtle); }
+.totp-secret > span { grid-column: 1 / -1; color: var(--color-muted); font-size: var(--font-xs); }
+.totp-secret code { min-width: 0; overflow-wrap: anywhere; }
+.totp-secret .button { min-height: 38px; padding: 7px 11px; font-size: var(--font-xs); }
+@media (max-width: 650px) {
+  .totp-state { padding: 16px 16px 4px; }
+  .totp-enrollment { padding: 20px 16px 8px; }
+  .totp-secret { grid-template-columns: minmax(0, 1fr); }
+  .totp-secret > span, .totp-secret .button { grid-column: auto; }
+  .totp-secret .button { justify-self: start; }
+}
+.totp-unknown { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; }
+.totp-unknown p { color: var(--color-muted); font-size: var(--font-sm); }
+@media (max-width: 650px) {
+  .totp-unknown { align-items: stretch; flex-direction: column; padding: 16px; }
+}

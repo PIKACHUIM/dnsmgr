@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, send, type Session } from './api';
+import { TotpSettings } from './TotpSettings';
 
 interface Props {
   session: Session;
@@ -44,21 +45,24 @@ export function SetPassword({ session, onExpired, onLoggedOut }: Props) {
     }
   }
 
-  return <section className="panel" aria-labelledby="set-password-title">
-    <div className="panel-heading"><div><h2 id="set-password-title">修改当前账户密码</h2></div><span className="panel-meta">本人账户</span></div>
-    <form className="dns-form" onSubmit={submit} aria-busy={busy}>
-      <label className="form-field"><span>当前密码</span>
-        <input type="password" autoComplete="current-password" maxLength={72} required disabled={busy} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
-      </label>
-      <label className="form-field"><span>新密码</span>
-        <input type="password" autoComplete="new-password" maxLength={72} required disabled={busy} value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="set-password-help" />
-      </label>
-      <label className="form-field"><span>确认新密码</span>
-        <input type="password" autoComplete="new-password" maxLength={72} required disabled={busy} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
-      </label>
-      <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在更新…' : '更新密码'}</button></div>
-    </form>
-    <div className="panel-footnote" id="set-password-help">新密码须为 12–72 个 UTF-8 字节；空格会按原样保留。更新后所有现有会话都会失效，需要重新登录。</div>
-    {error && <div className="notice notice-error" role="alert" aria-live="assertive">{error}</div>}
-  </section>;
+  return <>
+    <section className="panel" aria-labelledby="set-password-title">
+      <div className="panel-heading"><div><h2 id="set-password-title">修改当前账户密码</h2></div><span className="panel-meta">本人账户</span></div>
+      <form className="dns-form" onSubmit={submit} aria-busy={busy}>
+        <label className="form-field"><span>当前密码</span>
+          <input type="password" autoComplete="current-password" maxLength={72} required disabled={busy} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
+        </label>
+        <label className="form-field"><span>新密码</span>
+          <input type="password" autoComplete="new-password" maxLength={72} required disabled={busy} value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="set-password-help" />
+        </label>
+        <label className="form-field"><span>确认新密码</span>
+          <input type="password" autoComplete="new-password" maxLength={72} required disabled={busy} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+        </label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在更新…' : '更新密码'}</button></div>
+      </form>
+      <div className="panel-footnote" id="set-password-help">新密码须为 12–72 个 UTF-8 字节；空格会按原样保留。更新后所有现有会话都会失效，需要重新登录。</div>
+      {error && <div className="notice notice-error" role="alert" aria-live="assertive">{error}</div>}
+    </section>
+    <TotpSettings session={session} onExpired={onExpired} onLoggedOut={onLoggedOut} />
+  </>;
 }

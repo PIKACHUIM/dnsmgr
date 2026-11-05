@@ -18,6 +18,7 @@ interface ChallengeRow extends Record<string, unknown> {
 }
 
 const sessionSeconds = 12 * 60 * 60;
+const expiredChallengePruneLimit = 100;
 
 function password(body: Record<string, unknown>, key = 'password'): string {
   const value = text(body, key, 72);
@@ -49,19 +50,27 @@ async function createSession(c: Context<AppEnv>, user: UserRow, counter?: SqlSta
   if (counter && results[0]?.changes !== 1) throw new AppError(401, '动态口令已使用，请等待下一个口令', 'TOTP_REPLAY');
   if (results.at(-1)?.changes !== 1) throw new AppError(401, '账户状态已变更，请重新登录', 'SESSION_REVOKED');
   setSessionCookie(c, token);
-  return c.json({ code: 0, csrfToken: csrf, user: publicUser(user) });
+  return c.json({ code: 0, csrfToken: csrf, user: publicUser(user), totpEnabled: Boolean(user.totp_cipher) });
 }
 
 async function createChallenge(c: Context<AppEnv>, user: UserRow, purpose: string, secretCipher: string | null = null): Promise<string> {
   const token = randomToken();
   const now = nowSeconds();
-  const result = await c.get('db').execute(
-    `INSERT INTO security_challenges (token_hash, purpose, user_id, secret_cipher, permission_version, expires_at, created_at)
-     SELECT ?, ?, id, ?, permission_version, ?, ? FROM users
-     WHERE id = ? AND status = 1 AND permission_version = ? AND (expires_at IS NULL OR expires_at > ?)`,
-    [await sha256(token), purpose, secretCipher, now + 180, now, user.id, user.permission_version, now],
-  );
-  if (result.changes !== 1) throw new AppError(401, '账户状态已变更，请重新登录', 'SESSION_REVOKED');
+  const results = await c.get('db').batch([
+    {
+      sql: `DELETE FROM security_challenges WHERE token_hash IN (
+        SELECT token_hash FROM security_challenges WHERE expires_at <= ? ORDER BY expires_at LIMIT ?
+      )`,
+      args: [now, expiredChallengePruneLimit],
+    },
+    {
+      sql: `INSERT INTO security_challenges (token_hash, purpose, user_id, secret_cipher, permission_version, expires_at, created_at)
+       SELECT ?, ?, id, ?, permission_version, ?, ? FROM users
+       WHERE id = ? AND status = 1 AND permission_version = ? AND (expires_at IS NULL OR expires_at > ?)`,
+      args: [await sha256(token), purpose, secretCipher, now + 180, now, user.id, user.permission_version, now],
+    },
+  ]);
+  if (results[1]?.changes !== 1) throw new AppError(401, '账户状态已变更，请重新登录', 'SESSION_REVOKED');
   return token;
 }
 
@@ -146,11 +155,15 @@ export function authRoutes() {
     return createSession(c, user, counter);
   });
 
-  routes.get('/api/v1/session', requireSession, async (c) => c.json({
-    code: 0,
-    user: publicUser(c.get('principal').user),
-    csrfToken: await csrfToken(getCookie(c, 'user_token')!),
-  }));
+  routes.get('/api/v1/session', requireSession, async (c) => {
+    const user = c.get('principal').user;
+    return c.json({
+      code: 0,
+      user: publicUser(user),
+      totpEnabled: Boolean(user.totp_cipher),
+      csrfToken: await csrfToken(getCookie(c, 'user_token')!),
+    });
+  });
 
   routes.post('/logout', requireSession, requireCsrf, async (c) => {
     await c.get('db').execute('DELETE FROM sessions WHERE token_hash = ?', [c.get('principal').sessionHash!]);

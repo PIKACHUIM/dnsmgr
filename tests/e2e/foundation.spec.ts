@@ -28,9 +28,13 @@ const importWorkbookBuffer = Buffer.from(testSheetJs.write(importWorkbook, { boo
 test('initialization, login, session restore, responsive navigation and logout', async ({ page, context }, testInfo) => {
   const errors: string[] = [];
   let passwordChangePayload: unknown;
+  let reportedTotpEnabled = false;
+  let failNextTotpBind = false;
+  let malformedTotpBindResponse = false;
+  let failNextTotpClose = false;
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname === '/setpwd') passwordChangePayload = request.postDataJSON();
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/setpwd') passwordChangePayload = request.postDataJSON();
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/install');
@@ -42,6 +46,32 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.screenshot({ path: testInfo.outputPath('install-1440.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button', { name: '初始化并创建账户' }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
+  await page.route('**/login', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    if (!response.ok()) {
+      await route.fulfill({ response });
+      return;
+    }
+    const body = await response.json() as Record<string, unknown>;
+    await route.fulfill({ response, json: { ...body, totpEnabled: reportedTotpEnabled } });
+  });
+  await page.route('**/api/v1/session', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    if (!response.ok()) {
+      await route.fulfill({ response });
+      return;
+    }
+    const body = await response.json() as Record<string, unknown>;
+    await route.fulfill({ response, json: { ...body, totpEnabled: reportedTotpEnabled } });
+  });
   await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
@@ -146,14 +176,112 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.locator('.notice[role="status"]')).toContainText('状态未知 1 条');
   await page.getByRole('link', { name: '修改密码' }).click();
   await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
+  const totpPanel = page.locator('section[aria-labelledby="totp-title"]');
+  await page.route('**/totp/generate', async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ password: 'browser-test-password-2026' });
+    expect(route.request().headers()['x-csrf-token']).toBeTruthy();
+    await route.fulfill({ json: {
+      code: 0, secret: 'JBSWY3DPEHPK3PXP', challenge: 'e2e-totp-challenge',
+      uri: 'otpauth://totp/DnsMgr%3Abrowser-admin?secret=JBSWY3DPEHPK3PXP&issuer=DnsMgr&algorithm=SHA1&digits=6&period=30',
+    } });
+  });
+  await page.route('**/totp/bind', async (route) => {
+    if (failNextTotpBind) {
+      failNextTotpBind = false;
+      await route.abort('failed');
+      return;
+    }
+    if (malformedTotpBindResponse) {
+      malformedTotpBindResponse = false;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"code":0,' });
+      return;
+    }
+    expect(route.request().postDataJSON()).toEqual({ challenge: 'e2e-totp-challenge', code: '123456' });
+    expect(route.request().headers()['x-csrf-token']).toBeTruthy();
+    reportedTotpEnabled = true;
+    await route.fulfill({ json: { code: 0, msg: '动态口令已启用，请重新登录' } });
+  });
+  await totpPanel.getByLabel('当前密码').fill('browser-test-password-2026');
+  await totpPanel.getByRole('button', { name: '开启动态口令' }).click();
+  await expect(totpPanel.getByText('JBSWY3DPEHPK3PXP')).toBeVisible();
+  await expect(totpPanel.locator('canvas')).toBeVisible();
   for (const width of [768, 375]) {
     await page.setViewportSize({ width, height: 1000 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
-  const currentPassword = page.getByLabel('当前密码');
-  const newPassword = page.getByLabel('新密码', { exact: true });
-  const confirmPassword = page.getByLabel('确认新密码');
+  await totpPanel.getByLabel('认证器中的 6 位动态口令').fill('123456');
+  await totpPanel.getByRole('button', { name: '完成绑定' }).click();
+  await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('动态口令已启用');
+  await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
+  await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
+  await page.getByRole('button', { name: '登录控制台' }).click();
+  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '修改密码' }).click();
+  await expect(totpPanel.getByText('动态口令已开启')).toBeVisible();
+  await page.route('**/totp/close', async (route) => {
+    if (failNextTotpClose) {
+      failNextTotpClose = false;
+      await route.abort('failed');
+      return;
+    }
+    expect(route.request().postDataJSON()).toEqual({ password: 'browser-test-password-2026', code: '654321' });
+    expect(route.request().headers()['x-csrf-token']).toBeTruthy();
+    reportedTotpEnabled = false;
+    await route.fulfill({ json: { code: 0, msg: '动态口令已关闭，请重新登录' } });
+  });
+  failNextTotpClose = true;
+  await totpPanel.getByLabel('当前密码').fill('browser-test-password-2026');
+  await totpPanel.getByLabel('当前动态口令').fill('654321');
+  page.once('dialog', (dialog) => dialog.accept());
+  await totpPanel.getByRole('button', { name: '关闭动态口令' }).click();
+  await expect(totpPanel.getByRole('alert')).toContainText('关闭结果未确认');
+  await expect(totpPanel.getByRole('button', { name: '重新检查动态口令状态' })).toBeFocused();
+  await page.reload();
+  await expect(totpPanel.getByText('动态口令已开启')).toBeVisible();
+  await totpPanel.getByLabel('当前密码').fill('browser-test-password-2026');
+  await totpPanel.getByLabel('当前动态口令').fill('654321');
+  page.once('dialog', (dialog) => dialog.accept());
+  await totpPanel.getByRole('button', { name: '关闭动态口令' }).click();
+  await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('动态口令已关闭');
+  await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
+  await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
+  await page.getByRole('button', { name: '登录控制台' }).click();
+  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '修改密码' }).click();
+  await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
+  failNextTotpBind = true;
+  await totpPanel.getByLabel('当前密码').fill('browser-test-password-2026');
+  await totpPanel.getByRole('button', { name: '开启动态口令' }).click();
+  await totpPanel.getByLabel('认证器中的 6 位动态口令').fill('123456');
+  await totpPanel.getByRole('button', { name: '完成绑定' }).click();
+  await expect(totpPanel.getByRole('alert')).toContainText('绑定结果未确认');
+  await expect(totpPanel.getByRole('button', { name: '重新检查动态口令状态' })).toBeVisible();
+  await expect(totpPanel.getByRole('button', { name: '完成绑定' })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
+  await expect(totpPanel.getByRole('button', { name: '开启动态口令' })).toBeVisible();
+  malformedTotpBindResponse = true;
+  await totpPanel.getByLabel('当前密码').fill('browser-test-password-2026');
+  await totpPanel.getByRole('button', { name: '开启动态口令' }).click();
+  await totpPanel.getByLabel('认证器中的 6 位动态口令').fill('123456');
+  await totpPanel.getByRole('button', { name: '完成绑定' }).click();
+  await expect(totpPanel.getByRole('alert')).toContainText('绑定结果未确认');
+  await expect(totpPanel.getByRole('button', { name: '重新检查动态口令状态' })).toBeFocused();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
+  await expect(totpPanel.getByRole('button', { name: '开启动态口令' })).toBeVisible();
+  for (const width of [768, 375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const passwordPanel = page.locator('section[aria-labelledby="set-password-title"]');
+  const currentPassword = passwordPanel.getByLabel('当前密码');
+  const newPassword = passwordPanel.getByLabel('新密码', { exact: true });
+  const confirmPassword = passwordPanel.getByLabel('确认新密码');
   const newPasswordValue = '  browser-new-password-2026!  ';
   await currentPassword.fill('incorrect-password-2026');
   await newPassword.fill('short');
