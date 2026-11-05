@@ -65,6 +65,23 @@ function safeEqual(left: string, right: string): boolean {
   return diff === 0;
 }
 
+function normalizeExpirationNoticeDays(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 256) {
+    throw new AppError(400, '到期提醒天数格式无效', 'INVALID_EXPIRATION_NOTICE_DAYS');
+  }
+  const rawDays = value.trim();
+  if (!rawDays) return '';
+  const entries = rawDays.split(',').map((entry) => entry.trim());
+  if (entries.length > 32 || entries.some((entry) => !/^\d{1,4}$/.test(entry))) {
+    throw new AppError(400, '请用英文逗号分隔 0–3650 之间的提醒天数（最多 32 项）', 'INVALID_EXPIRATION_NOTICE_DAYS');
+  }
+  const days = [...new Set(entries.map(Number))];
+  if (days.some((day) => day > 3650)) {
+    throw new AppError(400, '提醒天数必须在 0–3650 之间', 'INVALID_EXPIRATION_NOTICE_DAYS');
+  }
+  return days.sort((left, right) => left - right).join(',');
+}
+
 async function audit(c: Context<AppEnv>, action: string, target: string, detail: string): Promise<void> {
   const principal = c.get('principal') as { user?: { id: number } } | undefined;
   await db(c).execute(
@@ -222,6 +239,23 @@ export function scheduleRoutes() {
     await executeDue(c);
     if (!await executeInitialExpirationRefresh(c)) await executePeriodicExpirationRefresh(c);
     return c.text('success!');
+  });
+
+  routes.get('/api/v1/system/expiration-notice', requireSession, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const stored = await getSetting(c, 'expire_noticedays');
+    return c.json({ code: 0, days: normalizeExpirationNoticeDays(stored ?? '') });
+  });
+
+  routes.put('/api/v1/system/expiration-notice', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    const days = normalizeExpirationNoticeDays(body.days);
+    await putSetting(c, 'expire_noticedays', days);
+    await audit(c, 'expiration-notice.settings', 'system', days ? `days=${days}` : 'disabled');
+    return c.json({ code: 0, days });
   });
 
   routes.get('/api/v1/system/cron', requireSession, async (c) => {

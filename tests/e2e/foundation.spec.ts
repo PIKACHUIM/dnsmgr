@@ -37,6 +37,15 @@ test('initialization, login, session restore, responsive navigation and logout',
       await expect(open).toBeFocused();
     }
   }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('link', { name: '到期提醒设置' }).click();
+  await expect(page.getByRole('heading', { name: '域名到期提醒设置' })).toBeVisible();
+  const noticeDays = page.getByLabel('到期提前提醒天数');
+  await expect(noticeDays).toHaveValue('');
+  await noticeDays.fill('14,7');
+  await page.getByRole('button', { name: '保存设置' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('到期提醒策略已保存');
+  await expect(noticeDays).toHaveValue('7,14');
   await page.goto('/account');
   await expect(page.getByRole('heading', { name: '添加 DNS 账户' })).toBeVisible();
   await page.route(/\/api\/v1\/dns\/domains\?/, (route) => route.fulfill({ json: {

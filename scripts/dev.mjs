@@ -24,10 +24,23 @@ await stat(join(root, 'runtime'));
 const sqlite = new DatabaseSync(process.env.LOCAL_EPHEMERAL === '1' ? ':memory:' : join(root, 'runtime/serverless.sqlite'));
 sqlite.exec('PRAGMA foreign_keys=ON');
 const version = Number(sqlite.prepare('PRAGMA user_version').get().user_version);
-if (version === 0) {
+const migrations = [
+  '0001_core.sql', '0002_dns.sql', '0003_dns_aliases.sql', '0004_schedule.sql',
+  '0005_failover.sql', '0006_domain_expiration_queue.sql', '0007_domain_periodic_expiration_queue.sql',
+];
+if (version > migrations.length) throw new Error('Local schema version is newer than this application');
+for (const [index, migration] of migrations.entries()) {
+  const nextVersion = index + 1;
+  if (nextVersion <= version) continue;
   sqlite.exec('BEGIN IMMEDIATE');
-  try { sqlite.exec(await readFile(join(root, 'migrations/0001_core.sql'), 'utf8')); sqlite.exec('PRAGMA user_version=1'); sqlite.exec('COMMIT'); }
-  catch (error) { sqlite.exec('ROLLBACK'); throw error; }
+  try {
+    sqlite.exec(await readFile(join(root, 'migrations', migration), 'utf8'));
+    sqlite.exec(`PRAGMA user_version=${nextVersion}`);
+    sqlite.exec('COMMIT');
+  } catch (error) {
+    sqlite.exec('ROLLBACK');
+    throw error;
+  }
 }
 const execute = (sql, args = []) => {
   const rows = sqlite.prepare(sql).all(...args);

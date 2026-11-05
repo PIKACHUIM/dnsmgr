@@ -114,6 +114,47 @@ describe('schedule API', () => {
     );
   }
 
+  it('stores expiration notice days with admin, CSRF and input validation', async () => {
+    const unauthorized = await request('/api/v1/system/expiration-notice');
+    expect(unauthorized.status).toBe(401);
+
+    const current = await request('/api/v1/system/expiration-notice', { headers: { cookie } });
+    expect(await current.json()).toMatchObject({ code: 0, days: '' });
+
+    const missingCsrf = await request('/api/v1/system/expiration-notice', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ days: '7' }),
+    });
+    expect(missingCsrf.status).toBe(403);
+
+    const saved = await request('/api/v1/system/expiration-notice', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ days: '14, 7,14' }),
+    });
+    expect(await saved.json()).toMatchObject({ code: 0, days: '7,14' });
+    const reloaded = await request('/api/v1/system/expiration-notice', { headers: { cookie } });
+    expect(await reloaded.json()).toMatchObject({ code: 0, days: '7,14' });
+    const stored = await testDb.db.query<{ value: string }>('SELECT value FROM app_settings WHERE key=?', ['expire_noticedays']);
+    expect(stored[0]!.value).toBe('7,14');
+
+    for (const days of ['7,,14', '3651', '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33', 7]) {
+      const invalid = await request('/api/v1/system/expiration-notice', {
+        method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+        body: JSON.stringify({ days }),
+      });
+      expect(invalid.status).toBe(400);
+    }
+
+    const disabled = await request('/api/v1/system/expiration-notice', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ days: '' }),
+    });
+    expect(await disabled.json()).toMatchObject({ code: 0, days: '' });
+
+    await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
+    const nonAdmin = await request('/api/v1/system/expiration-notice', { headers: { cookie } });
+    expect(nonAdmin.status).toBe(403);
+  });
+
   it('creates tasks, exposes cron settings and executes due work', async () => {
     const settings = await request('/api/v1/system/cron', { headers: { cookie } });
     const config = await settings.json() as { key: string; enabled: boolean };
