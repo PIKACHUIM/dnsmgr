@@ -119,14 +119,14 @@ export function createCloudflareProvider(config: CloudflareConfig, fetchImpl: ty
     };
   }
 
-  function recordBody(domain: DnsDomain, input: DnsRecordInput, enabled: boolean): Record<string, unknown> {
+  function recordBody(domain: DnsDomain, input: DnsRecordInput, enabled: boolean, includeEmptyRemark = false): Record<string, unknown> {
     const body: Record<string, unknown> = {
       name: encodeName(domain, input.name, enabled),
       type: convertType(input.type),
       ttl: input.ttl,
       proxied: input.line === '1',
     };
-    if (input.remark) body.comment = input.remark;
+    if (input.remark || includeEmptyRemark) body.comment = input.remark ?? '';
     const structured = convertData(input.type, input.value);
     if (structured) body.data = structured;
     else body.content = input.value;
@@ -181,8 +181,11 @@ export function createCloudflareProvider(config: CloudflareConfig, fetchImpl: ty
       return String(row.id ?? '');
     },
 
-    async updateRecord(domain, recordId, input) {
-      await call('PATCH', `/zones/${zone(domain)}/dns_records/${encodeURIComponent(recordId)}`, recordBody(domain, input, true));
+    async updateRecord(domain, recordId, input, options) {
+      await call(
+        'PATCH', `/zones/${zone(domain)}/dns_records/${encodeURIComponent(recordId)}`,
+        recordBody(domain, input, true, options?.clearRemark === true),
+      );
     },
 
     async deleteRecord(domain, recordId) {

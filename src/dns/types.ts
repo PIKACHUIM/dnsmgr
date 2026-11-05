@@ -65,7 +65,7 @@ export interface DnsProvider {
   addDomain(name: string): Promise<DnsDomain>;
   listRecords(domain: DnsDomain, query: RecordQuery): Promise<PageResult<DnsRecord>>;
   addRecord(domain: DnsDomain, input: DnsRecordInput): Promise<string>;
-  updateRecord(domain: DnsDomain, recordId: string, input: DnsRecordInput): Promise<void>;
+  updateRecord(domain: DnsDomain, recordId: string, input: DnsRecordInput, options?: { clearRemark?: boolean }): Promise<void>;
   deleteRecord(domain: DnsDomain, recordId: string): Promise<void>;
   setRecordStatus(domain: DnsDomain, recordId: string, enabled: boolean): Promise<void>;
   setRecordRemark(domain: DnsDomain, recordId: string, remark: string | null): Promise<void>;

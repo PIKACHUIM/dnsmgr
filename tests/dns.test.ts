@@ -79,6 +79,27 @@ describe('Cloudflare provider', () => {
     expect(JSON.parse(String(patch.init.body))).toEqual({ name: 'www.example.com_pause' });
   });
 
+  it('clears comments only when requested and preserves explicit zero MX priority', async () => {
+    const { implementation, calls } = fakeFetch(() => ({ success: true, result: {} }));
+    const provider = createCloudflareProvider({ apikey: 'token' }, implementation);
+    const input = {
+      name: 'mail', type: 'MX', value: 'mx.example.com', line: '0', ttl: 600,
+      mx: 0, weight: 0, remark: null,
+    };
+    await provider.updateRecord(zone, 'r1', input);
+    await provider.updateRecord(zone, 'r1', input, { clearRemark: true });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.init.method).toBe('PATCH');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      name: 'mail.example.com', type: 'MX', ttl: 600, proxied: false,
+      content: 'mx.example.com', priority: 0,
+    });
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({
+      name: 'mail.example.com', type: 'MX', ttl: 600, proxied: false,
+      comment: '', content: 'mx.example.com', priority: 0,
+    });
+  });
+
   it('surfaces provider errors instead of returning success', async () => {
     const failing = (async () => new Response(JSON.stringify({
       success: false, errors: [{ message: 'Invalid API Token' }], result: null,

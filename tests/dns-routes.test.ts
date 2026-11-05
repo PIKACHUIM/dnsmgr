@@ -17,6 +17,7 @@ let cloudflareRecords: Record<string, unknown>[] = [];
 let cloudflareRecordTotal = 0;
 let cloudflareRemarkFailure = false;
 let cloudflareDeleteFailure = false;
+let cloudflareUpdateFailure = false;
 
 function cloudflareFetch() {
   let nextRecord = 1;
@@ -39,7 +40,7 @@ function cloudflareFetch() {
     if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method !== 'PATCH' && init?.method !== 'DELETE') {
       return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
     }
-    if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method === 'PATCH' && cloudflareRemarkFailure) {
+    if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method === 'PATCH' && (cloudflareRemarkFailure || cloudflareUpdateFailure)) {
       throw new Error('upstream connection lost after dispatch');
     }
     if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method === 'DELETE' && cloudflareDeleteFailure) {
@@ -69,6 +70,7 @@ describe('DNS account, domain and record API', () => {
     cloudflareRecordTotal = 0;
     cloudflareRemarkFailure = false;
     cloudflareDeleteFailure = false;
+    cloudflareUpdateFailure = false;
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const transport = cloudflareFetch();
@@ -646,6 +648,113 @@ describe('DNS account, domain and record API', () => {
     }
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
     expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.delete'")).toEqual([]);
+  });
+
+  it('updates signed Cloudflare records with legacy defaults within the ESA fetch limit', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'update-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=?,level=1 WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    await testDb.db.execute('UPDATE dns_domains SET record_count=6 WHERE id=?', [domain!.id]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    async function signedUpdate(
+      params: Record<string, string> = {}, platform: 'local' | 'esa' = 'local',
+      updateApp = app, overrides: Partial<Bindings> = {},
+    ) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const form = new URLSearchParams({
+        uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1',
+        name: 'mail', type: 'MX', value: 'mx.example.com', ...params,
+      });
+      return updateApp.request(`https://panel.example/api/record/update/${domain!.id}`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      }, environment({ ...bindings, ...overrides }, platform));
+    }
+
+    const invalidSignature = await signedUpdate({ sign: '0'.repeat(32) });
+    expect(invalidSignature.status).toBe(403);
+    const mismatch = await signedUpdate({}, 'local', app, { DB_FORMAT: 'map' });
+    expect(mismatch.status).toBe(503);
+    expect(await mismatch.json()).toMatchObject({ reason: 'STORAGE_IDENTITY_MISMATCH' });
+    await testDb.db.execute('UPDATE users SET level=0 WHERE id=1');
+    expect((await signedUpdate()).status).toBe(403);
+    await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
+    const denied = await signedUpdate();
+    expect(denied.status).toBe(404);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+    await testDb.db.execute('INSERT INTO permissions(user_id,domain_id) VALUES(1,?)', [String(domain!.id)]);
+    expect((await signedUpdate({ name: '' })).status).toBe(400);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+
+    let spent = 0;
+    const consume = () => {
+      spent += 1;
+      if (spent > 4) throw new AppError(503, 'ESA fetch budget exhausted', 'REQUEST_BUDGET_EXCEEDED');
+    };
+    const transport = cloudflareFetch();
+    const esaBudget: RequestBudget = {
+      consume, remainingMs: () => 8_000,
+      fetch: async (input, init) => { consume(); return transport(input, init); },
+    };
+    const budgetDatabase: SqlDatabase = {
+      async query<T extends Record<string, unknown>>(sql: string, args: SqlValue[] = []) {
+        consume(); return testDb.db.query<T>(sql, args);
+      },
+      async execute(sql: string, args: SqlValue[] = []) {
+        consume(); return testDb.db.execute(sql, args);
+      },
+      async batch(statements: SqlStatement[]) {
+        consume(); return testDb.db.batch(statements);
+      },
+    };
+    const esaApp = createApp({ database: budgetDatabase });
+    const response = await signedUpdate({ remark: '   ', recordinfo: '{"Name":"old"}' }, 'esa', esaApp, { BUDGET: esaBudget });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ code: 0, msg: '修改解析记录成功！' });
+    expect(spent).toBe(4);
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [request, init] = (transport as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(new URL(String(request)).pathname).toBe('/client/v4/zones/zone-1/dns_records/r1');
+    expect(init).toMatchObject({ method: 'PATCH' });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: 'mail.example.com', type: 'MX', ttl: 600, proxied: false,
+      comment: '', content: 'mx.example.com', priority: 1,
+    });
+    expect(await testDb.db.query<{ action: string; detail: string }>(
+      "SELECT action,detail FROM audit_logs WHERE action='record.update'",
+    )).toEqual([{ action: 'record.update', detail: 'r1 MX mail' }]);
+    expect(await testDb.db.query<{ record_count: number }>(
+      'SELECT record_count FROM dns_domains WHERE id=?', [domain!.id],
+    )).toEqual([{ record_count: 6 }]);
+
+    const owner = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domain!.id]);
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['aliyun', owner[0]!.account_id]);
+    const unsupported = await signedUpdate({}, 'local', app);
+    expect(unsupported.status).toBe(501);
+    expect(await unsupported.json()).toMatchObject({ reason: 'LEGACY_RECORD_UPDATE_UNSUPPORTED' });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an unknown outcome for a signed update after Cloudflare connection loss', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'update-unknown-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    cloudflareUpdateFailure = true;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const form = new URLSearchParams({
+      uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1',
+      name: 'www', type: 'A', value: '192.0.2.8',
+    });
+    const response = await app.request(`https://panel.example/api/record/update/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment(bindings, 'local'));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'DNS_WRITE_OUTCOME_UNKNOWN' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+    expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.update'")).toEqual([]);
   });
 
   it('rejects unknown providers before touching storage', async () => {

@@ -685,6 +685,64 @@ export function dnsRoutes() {
     return c.json({ code: 0, msg: '删除解析记录成功！' });
   });
 
+  routes.post('/api/record/update/:id', requireLegacyApi, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    const principal = c.get('principal');
+    if (principal.user.level !== 2 && principal.user.level < 1) {
+      throw new AppError(403, '只读 API 用户无法修改解析', 'PERMISSION_DENIED');
+    }
+    const permission = principal.user.level === 2 ? '' : `AND EXISTS (
+      SELECT 1 FROM permissions p WHERE p.user_id=? AND p.domain_id=CAST(d.id AS TEXT)
+    )`;
+    const args: (string | number)[] = [domainId];
+    if (permission) args.push(principal.user.id);
+    const rows = await db(c).query<LegacyRecordDomainRow>(
+      `SELECT d.id, d.account_id, d.name, d.third_id, a.id AS owner_id, a.type AS owner_type,
+        a.name AS owner_name, a.config_cipher AS owner_config_cipher, a.remark AS owner_remark,
+        a.created_at AS owner_created_at, a.updated_at AS owner_updated_at
+       FROM dns_domains d JOIN dns_accounts a ON a.id=d.account_id
+       WHERE d.id=? ${permission}`,
+      args,
+    );
+    const domain = rows[0];
+    if (!domain) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
+    if (domain.owner_type !== 'cloudflare') {
+      throw new AppError(501, '旧签名记录更新目前仅支持 Cloudflare', 'LEGACY_RECORD_UPDATE_UNSUPPORTED');
+    }
+
+    const body = c.get('legacyApiBody');
+    const recordId = typeof body.recordid === 'string' ? body.recordid.trim() : '';
+    if (!/^[A-Za-z0-9_.|@:*\\-]{1,255}$/.test(recordId)) {
+      throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+    }
+    const inputData = recordInput({
+      ...body,
+      ttl: body.ttl === undefined ? 600 : body.ttl,
+      mx: body.mx === undefined || body.mx === '' ? 1 : body.mx,
+      weight: body.weight === undefined || body.weight === '' ? 0 : body.weight,
+    });
+    const owner: AccountRow = {
+      id: domain.owner_id, type: domain.owner_type, name: domain.owner_name,
+      config_cipher: domain.owner_config_cipher, remark: domain.owner_remark,
+      created_at: domain.owner_created_at, updated_at: domain.owner_updated_at,
+    };
+    const provider = await providerFor(c, owner);
+    try {
+      await provider.updateRecord(toDnsDomain(domain), recordId, inputData, { clearRemark: inputData.remark === null });
+    } catch (error) {
+      if (error instanceof AppError && ['REQUEST_BUDGET_EXCEEDED', 'REQUEST_TIMEOUT'].includes(error.reason)) throw error;
+      if (error instanceof DnsError && [400, 401, 403, 404, 409, 429, 501].includes(error.status)) providerError(error);
+      throw new AppError(503, 'DNS 更新结果未知，请核对服务商记录后重试', 'DNS_WRITE_OUTCOME_UNKNOWN');
+    }
+    try {
+      await audit(c, 'record.update', domain.name, `${recordId} ${inputData.type} ${inputData.name}`);
+    } catch {
+      throw new AppError(503, 'DNS 记录已提交更新，但审计记录未确认；请核对服务商当前记录', 'DNS_WRITE_OUTCOME_UNKNOWN');
+    }
+    return c.json({ code: 0, msg: '修改解析记录成功！' });
+  });
+
   routes.post('/api/record/data/:id', requireLegacyApi, async (c) => {
     requireSql(c);
     const domainId = id(c.req.param('id'));
