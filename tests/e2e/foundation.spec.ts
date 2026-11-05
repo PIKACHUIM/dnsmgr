@@ -181,12 +181,17 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.route('**/api/v1/dns/domains/1000', (route) => route.fulfill({ json: {
     code: 0, domain: { id: 1000, name: 'example.com', accountName: 'test', accountType: 'cloudflare' },
   } }));
-  await page.route(/\/api\/v1\/dns\/domains\/1000\/records\?/, (route) => route.fulfill({ json: {
-    code: 0, page: 1, pageSize: 20, total: 2, items: [
-      { id: 'a-record', name: 'www', type: 'A', value: '1.1.1.1', line: 'default', ttl: 600, mx: null, weight: null, remark: null, status: 1 },
-      { id: 'url-record', name: 'web', type: 'URL', value: 'https://example.com', line: 'default', ttl: 600, mx: null, weight: null, remark: null, status: 1 },
-    ],
-  } }));
+  const recordItems = [
+    { id: 'a-record', name: 'www', type: 'A', value: '1.1.1.1', line: 'default', ttl: 600, mx: null, weight: null, remark: null, status: 1 },
+    { id: 'url-record', name: 'web', type: 'URL', value: 'https://example.com', line: 'default', ttl: 600, mx: null, weight: null, remark: null, status: 1 },
+  ];
+  const recordQueries: string[] = [];
+  await page.route(/\/api\/v1\/dns\/domains\/1000\/records\?/, async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    recordQueries.push(params.get('name') ?? '');
+    const items = params.get('name') === 'web' ? recordItems.filter((record) => record.name === 'web') : recordItems;
+    await route.fulfill({ json: { code: 0, page: Number(params.get('page')), pageSize: 20, total: items.length, items } });
+  });
   await page.route('**/api/v1/dns/domains/1000/lines', (route) => route.fulfill({ json: { code: 0, lines: null, minTtl: null } }));
   await page.route('**/api/v1/dns/domains/1000/records/check', async (route) => {
     expect(route.request().postDataJSON()).toMatchObject({ name: 'www', type: 'A', value: '1.1.1.1' });
@@ -207,6 +212,15 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.goto('/record/1000');
   await expect(page.getByRole('heading', { name: '解析记录', exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole('link', { name: '返回域名列表' })).toBeVisible();
+  await page.getByLabel('主机名筛选').fill('web');
+  await page.getByRole('button', { name: '筛选记录' }).click();
+  await expect(page.locator('.data-table tbody tr')).toHaveCount(1);
+  await expect(page.getByText('web', { exact: true })).toBeVisible();
+  await expect(page.getByText('www', { exact: true })).toHaveCount(0);
+  expect(recordQueries.at(-1)).toBe('web');
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await expect(page.locator('.data-table tbody tr')).toHaveCount(2);
+  expect(recordQueries.at(-1)).toBe('');
   await expect(page.getByRole('button', { name: '检测解析' })).toHaveCount(1);
   await page.getByRole('button', { name: '检测解析' }).click();
   await expect(page.getByText('解析值不一致')).toBeVisible();

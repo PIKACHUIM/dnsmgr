@@ -34,6 +34,8 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   const [lines, setLines] = useState<DnsLine[] | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameFilter, setNameFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -59,9 +61,11 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     setLoading(true);
     setError('');
     try {
+      const params = new URLSearchParams({ page: String(currentPage), pageSize: String(PAGE_SIZE) });
+      if (nameFilter) params.set('name', nameFilter);
       const [info, list, lineInfo] = await Promise.all([
         request<{ code: 0; domain: DomainInfo }>(`/api/v1/dns/domains/${domainId}`, { signal }),
-        request<{ code: 0; total: number; items: Record[] }>(`/api/v1/dns/domains/${domainId}/records?page=${currentPage}&pageSize=${PAGE_SIZE}`, { signal }),
+        request<{ code: 0; total: number; items: Record[] }>(`/api/v1/dns/domains/${domainId}/records?${params}`, { signal }),
         request<{ code: 0; lines: DnsLine[] | null; minTtl: number | null }>(`/api/v1/dns/domains/${domainId}/lines`, { signal }),
       ]);
       if (signal.aborted) return;
@@ -77,7 +81,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [domainId, handle]);
+  }, [domainId, handle, nameFilter]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -87,6 +91,22 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
 
   function update(key: keyof FormState, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function filterRecords(event: React.FormEvent) {
+    event.preventDefault();
+    setNameFilter(nameDraft.trim());
+    setPage(1);
+    setSelected([]);
+    setRecordChecks({});
+  }
+
+  function clearNameFilter() {
+    setNameDraft('');
+    setNameFilter('');
+    setPage(1);
+    setSelected([]);
+    setRecordChecks({});
   }
 
   async function submit(event: React.FormEvent) {
@@ -259,6 +279,11 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     </section>
     <section className="panel" aria-labelledby="record-list-title">
       <div className="panel-heading"><div><h2 id="record-list-title">解析记录</h2></div><span className="panel-meta">共 {total} 条 · 检查使用 AliDNS 公网 DNS，只读不修改记录</span></div>
+      <form className="dns-search" onSubmit={filterRecords}>
+        <input aria-label="主机名筛选" type="search" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} maxLength={128} placeholder="主机名，例如 www 或 @" />
+        <button className="button button-secondary" type="submit" disabled={loading || busy}>筛选记录</button>
+        {(nameDraft || nameFilter) && <button className="button button-quiet" type="button" disabled={loading || busy} onClick={clearNameFilter}>清除筛选</button>}
+      </form>
       {selected.length > 0 && <div className="dns-batch">
         <span className="mono">已选 {selected.length} 条</span>
         <select value={batchAction} onChange={(event) => setBatchAction(event.target.value)} aria-label="批量操作">
