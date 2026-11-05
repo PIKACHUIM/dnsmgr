@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { input, text } from '../core/request';
-import { requireSession, requireCsrf, requireAdmin, requireDomain, requireLegacyApi, nowSeconds, consumeRateLimit } from '../security/auth';
+import { requireSession, requireCsrf, requireAdmin, requireDomain, requireLegacyApi, requireLegacyApiDomain, nowSeconds, consumeRateLimit } from '../security/auth';
 import { decrypt, encrypt } from '../security/crypto';
 import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecordInput } from '../dns/types';
 import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../dns/registry';
@@ -683,6 +683,42 @@ export function dnsRoutes() {
       throw new AppError(503, 'DNS 记录已提交删除，但审计记录未确认；请核对服务商当前记录', 'DNS_WRITE_OUTCOME_UNKNOWN');
     }
     return c.json({ code: 0, msg: '删除解析记录成功！' });
+  });
+
+  routes.post('/api/record/status/:id', requireLegacyApiDomain, async (c) => {
+    requireSql(c);
+    const principal = c.get('principal');
+    const domain = c.get('legacyApiDomain') as LegacyRecordDomainRow;
+    if (domain.owner_type !== 'cloudflare') {
+      throw new AppError(501, '旧签名记录状态切换目前仅支持 Cloudflare', 'LEGACY_RECORD_STATUS_UNSUPPORTED');
+    }
+    const body = c.get('legacyApiBody');
+    const recordId = typeof body.recordid === 'string' ? body.recordid.trim() : '';
+    if (!/^[A-Za-z0-9_.|@:*\\-]{1,255}$/.test(recordId)) {
+      throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+    }
+    const status = typeof body.status === 'string' ? body.status.trim() : '';
+    if (status !== '0' && status !== '1') throw new AppError(400, '状态参数无效', 'INVALID_STATUS');
+    const owner: AccountRow = {
+      id: domain.owner_id, type: domain.owner_type, name: domain.owner_name,
+      config_cipher: domain.owner_config_cipher, remark: domain.owner_remark,
+      created_at: domain.owner_created_at, updated_at: domain.owner_updated_at,
+    };
+    const provider = await providerFor(c, owner);
+    try {
+      await provider.setRecordStatus(toDnsDomain(domain), recordId, status === '1');
+    } catch (error) {
+      if (error instanceof AppError && ['REQUEST_BUDGET_EXCEEDED', 'REQUEST_TIMEOUT'].includes(error.reason)) throw error;
+      if (error instanceof DnsError && [400, 401, 403, 404, 409, 429, 501].includes(error.status)) providerError(error);
+      throw new AppError(503, 'DNS 状态切换结果未知，请核对服务商记录后重试', 'DNS_WRITE_OUTCOME_UNKNOWN');
+    }
+    const action = status === '1' ? 'enable' : 'disable';
+    try {
+      await audit(c, 'record.status', domain.name, `${recordId} ${action}`);
+    } catch {
+      throw new AppError(503, 'DNS 状态已提交服务商，但审计记录未确认；请核对服务商当前记录', 'DNS_WRITE_OUTCOME_UNKNOWN');
+    }
+    return c.json({ code: 0, msg: '操作成功！' });
   });
 
   routes.post('/api/record/update/:id', requireLegacyApi, async (c) => {

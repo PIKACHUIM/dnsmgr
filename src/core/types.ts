@@ -67,5 +67,6 @@ export interface AppEnv {
     storage: Pick<StorageRuntime, 'config' | 'db' | 'snapshots'>;
     principal: Principal;
     legacyApiBody: Record<string, unknown>;
+    legacyApiDomain?: Record<string, unknown>;
   };
 }

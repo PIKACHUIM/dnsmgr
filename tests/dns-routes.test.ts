@@ -736,6 +736,95 @@ describe('DNS account, domain and record API', () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
+  it('sets signed Cloudflare record status with the merged ESA fetch budget', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'status-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=?,level=1 WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const form = new URLSearchParams({
+      uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1', status: '0',
+    });
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    const url = `https://panel.example/api/record/status/${domain!.id}`;
+    const noPermission = await app.request(url, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment(bindings, 'local'));
+    expect(noPermission.status).toBe(404);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+    await testDb.db.execute('INSERT INTO permissions(user_id,domain_id) VALUES(1,?)', [String(domain!.id)]);
+    const invalidStatusForm = new URLSearchParams(form);
+    invalidStatusForm.set('status', '2');
+    const invalidStatus = await app.request(url, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: invalidStatusForm.toString(),
+    }, environment(bindings, 'local'));
+    expect(invalidStatus.status).toBe(400);
+    const mismatch = await app.request(url, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment({ ...bindings, TURSO_DATABASE_URL: 'https://other.invalid' }, 'local'));
+    expect(mismatch.status).toBe(503);
+    expect(await mismatch.json()).toMatchObject({ reason: 'STORAGE_IDENTITY_MISMATCH' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+
+    let spent = 0;
+    const consume = () => {
+      spent += 1;
+      if (spent > 4) throw new AppError(503, 'ESA fetch budget exhausted', 'REQUEST_BUDGET_EXCEEDED');
+    };
+    const transport = cloudflareFetch();
+    const esaBudget: RequestBudget = {
+      consume, remainingMs: () => 8_000,
+      fetch: async (input, init) => { consume(); return transport(input, init); },
+    };
+    const budgetDatabase: SqlDatabase = {
+      async query<T extends Record<string, unknown>>(sql: string, args: SqlValue[] = []) {
+        consume(); return testDb.db.query<T>(sql, args);
+      },
+      async execute(sql: string, args: SqlValue[] = []) {
+        consume(); return testDb.db.execute(sql, args);
+      },
+      async batch(statements: SqlStatement[]) {
+        consume(); return testDb.db.batch(statements);
+      },
+    };
+    const esaApp = createApp({ database: budgetDatabase });
+    const response = await esaApp.request(`https://panel.example/api/record/status/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment({ ...bindings, BUDGET: esaBudget }, 'esa'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ code: 0, msg: '操作成功！' });
+    expect(spent).toBe(4);
+    expect(transport).toHaveBeenCalledTimes(2);
+    const [getCall, patchCall] = (transport as ReturnType<typeof vi.fn>).mock.calls;
+    expect(new URL(String(getCall?.[0])).pathname).toBe('/client/v4/zones/zone-1/dns_records/r1');
+    expect(getCall?.[1]).toMatchObject({ method: 'GET' });
+    expect(new URL(String(patchCall?.[0])).pathname).toBe('/client/v4/zones/zone-1/dns_records/r1');
+    expect(patchCall?.[1]).toMatchObject({ method: 'PATCH', body: JSON.stringify({ name: 'www.example.com_pause' }) });
+    expect(await testDb.db.query<{ action: string; detail: string }>(
+      "SELECT action,detail FROM audit_logs WHERE action='record.status'",
+    )).toEqual([{ action: 'record.status', detail: 'r1 disable' }]);
+  });
+
+  it('returns an unknown outcome for signed status if Cloudflare disconnects after dispatch', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'status-unknown-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    cloudflareUpdateFailure = true;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const form = new URLSearchParams({
+      uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1', status: '0',
+    });
+    const response = await app.request(`https://panel.example/api/record/status/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment(bindings, 'local'));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'DNS_WRITE_OUTCOME_UNKNOWN' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
+    expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.status'")).toEqual([]);
+  });
+
   it('returns an unknown outcome for a signed update after Cloudflare connection loss', async () => {
     const { cookie, csrf } = await session();
     const [domain] = await seedDomain(cookie, csrf);
