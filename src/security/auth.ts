@@ -92,6 +92,7 @@ export const requireLegacyApi: MiddlewareHandler<AppEnv> = async (c, next) => {
   const apikey = await decrypt(user.apikey_cipher, c.env.APP_KEY, 'api-key');
   if (!constantTimeEqual(md5(uid + timestamp + apikey), signature)) throw new AppError(403, 'API 签名错误', 'INVALID_API_SIGNATURE');
   c.set('principal', { user, mode: 'api' });
+  c.set('legacyApiBody', body);
   await next();
 };
 

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
+import { md5 } from 'js-md5';
 import { AppError } from '../src/core/errors';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { environment } from '../src/platform/runtime';
+import { encrypt } from '../src/security/crypto';
 import { createTestDatabase } from './helpers/sqlite';
 
 const credentials = { username: 'admin', password: 'test-password-2026!' };
@@ -124,6 +126,78 @@ describe('DNS account, domain and record API', () => {
     const payload = await domains.json() as { total: number; items: { id: number; name: string; thirdId: string }[] };
     expect(payload.total).toBe(1);
     expect(payload.items[0]).toMatchObject({ name: 'example.com', thirdId: 'zone-1' });
+  });
+
+  it('serves the read-only legacy signed domain list with old row names and current permissions', async () => {
+    const { cookie, csrf } = await session();
+    const account = await (await post('/api/v1/dns/accounts', {
+      type: 'cloudflare', name: 'legacy-api', config: { apikey: 'token' }, remark: 'account remark',
+    }, { cookie, 'X-CSRF-Token': csrf })).json() as { id: number };
+    const synced = await post(`/api/v1/dns/accounts/${account.id}/sync`, {
+      domains: [
+        { id: 'zone-shop', name: 'shop.example.com', recordCount: 8 },
+        { id: 'zone-hidden', name: 'hidden.example.com', recordCount: 2 },
+        { id: 'zone-expired', name: 'expired.example.net', recordCount: 1 },
+      ],
+    }, { cookie, 'X-CSRF-Token': csrf });
+    expect(synced.status).toBe(200);
+
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute('INSERT INTO dns_domain_categories(name,sort,created_at) VALUES(?,?,?)', ['Favorites', 1, now]);
+    const category = await testDb.db.query<{ id: number }>('SELECT id FROM dns_domain_categories WHERE name=?', ['Favorites']);
+    await testDb.db.execute(
+      'UPDATE dns_domains SET remark=?,notice=1,category_id=?,expires_at=?,checked_at=?,check_status=1 WHERE name=?',
+      ['shop memo', category[0]!.id, now + 7 * 86_400, now - 60, 'shop.example.com'],
+    );
+    await testDb.db.execute('UPDATE dns_domains SET hidden=1 WHERE name=?', ['hidden.example.com']);
+    await testDb.db.execute('UPDATE dns_domains SET expires_at=?,check_status=1 WHERE name=?', [now - 60, 'expired.example.net']);
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt('legacy-api-key', bindings.APP_KEY, 'api-key')]);
+
+    async function signedList(params: Record<string, string> = {}) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const form = new URLSearchParams({
+        uid: '1', timestamp, sign: md5(`1${timestamp}legacy-api-key`), ...params,
+      });
+      return request('/api/domain', {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      });
+    }
+
+    const before = await testDb.db.query<{ id: number; record_count: number; updated_at: number }>(
+      'SELECT id,record_count,updated_at FROM dns_domains ORDER BY id',
+    );
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    const listed = await signedList({ limit: '20', sortName: 'name', sortOrder: 'asc' });
+    expect(listed.status).toBe(200);
+    const result = await listed.json() as { total: number; rows: Record<string, unknown>[] };
+    expect(result.total).toBe(3);
+    expect(result.rows.map((row) => row.name)).toEqual(['expired.example.net', 'hidden.example.com', 'shop.example.com']);
+    expect(result.rows.find((row) => row.name === 'shop.example.com')).toMatchObject({
+      aid: account.id, cid: category[0]!.id, thirdid: 'zone-shop', is_hide: 0, is_sso: 0,
+      recordcount: 8, remark: 'shop memo', is_notice: 1, regtime: null,
+      checkstatus: 1, type: 'cloudflare', aremark: 'account remark', typename: 'Cloudflare',
+      icon: 'cloudflare.ico', category_name: 'Favorites',
+    });
+    expect(result.rows.find((row) => row.name === 'shop.example.com')!.expiretime).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    await expect((await signedList({ kw: 'shop memo' })).json()).resolves.toMatchObject({ total: 1 });
+    await expect((await signedList({ status: '1' })).json()).resolves.toMatchObject({ total: 1 });
+    await expect((await signedList({ status: '2' })).json()).resolves.toMatchObject({ total: 1 });
+    await expect((await signedList({ status: '10' })).json()).resolves.toMatchObject({ total: 3 });
+    await expect((await signedList({ aid: String(account.id) })).json()).resolves.toMatchObject({ total: 3 });
+    await expect((await signedList({ type: 'cloud' })).json()).resolves.toMatchObject({ total: 3 });
+    await expect((await signedList({ cid: String(category[0]!.id) })).json()).resolves.toMatchObject({ total: 1 });
+    await expect((await signedList({ id: String(result.rows.find((row) => row.name === 'shop.example.com')!.id), kw: 'expired' })).json()).resolves.toMatchObject({ total: 1, rows: [{ name: 'shop.example.com' }] });
+    await expect((await signedList({ offset: '1', limit: '1', sortName: 'name', sortOrder: 'asc' })).json()).resolves.toMatchObject({ total: 3, rows: [{ name: 'hidden.example.com' }] });
+    expect(await (await signedList({ sortName: 'constructor' })).json()).toMatchObject({ total: 3 });
+
+    await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
+    await testDb.db.execute('INSERT INTO permissions(user_id,domain_id) VALUES(1,?)', [String(result.rows.find((row) => row.name === 'shop.example.com')!.id)]);
+    const scoped = await signedList();
+    expect(await scoped.json()).toMatchObject({ total: 1, rows: [{ name: 'shop.example.com' }] });
+    await testDb.db.execute('UPDATE users SET level=3 WHERE id=1');
+    expect(await (await signedList()).json()).toEqual({ total: 0, rows: [] });
+    expect(await testDb.db.query('SELECT id,record_count,updated_at FROM dns_domains ORDER BY id')).toEqual(before);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
   });
 
   it('rejects unknown providers before touching storage', async () => {

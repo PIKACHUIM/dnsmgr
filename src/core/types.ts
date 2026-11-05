@@ -66,5 +66,6 @@ export interface AppEnv {
     db: SqlDatabase;
     storage: Pick<StorageRuntime, 'config' | 'db' | 'snapshots'>;
     principal: Principal;
+    legacyApiBody: Record<string, unknown>;
   };
 }

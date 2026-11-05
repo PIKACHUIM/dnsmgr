@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { input, text } from '../core/request';
-import { requireSession, requireCsrf, requireAdmin, requireDomain, nowSeconds, consumeRateLimit } from '../security/auth';
+import { requireSession, requireCsrf, requireAdmin, requireDomain, requireLegacyApi, nowSeconds, consumeRateLimit } from '../security/auth';
 import { decrypt, encrypt } from '../security/crypto';
 import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecordInput } from '../dns/types';
 import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../dns/registry';
@@ -34,6 +34,70 @@ interface DomainRow extends Record<string, unknown> {
   checked_at: number | null;
   check_status: number;
   category_name?: string | null;
+}
+
+interface LegacyDomainRow extends Record<string, unknown> {
+  id: number;
+  account_id: number;
+  name: string;
+  third_id: string | null;
+  category_id: number | null;
+  hidden: number;
+  notice: number;
+  remark: string | null;
+  record_count: number;
+  expires_at: number | null;
+  checked_at: number | null;
+  notice_attempted_at: number | null;
+  check_status: number;
+  created_at: number;
+  account_type: string;
+  account_remark: string | null;
+  category_name: string | null;
+}
+
+const LEGACY_PROVIDER_NAMES: Record<string, string> = {
+  aliyun: '阿里云', dnspod: '腾讯云', huawei: '华为云', baidu: '百度云', west: '西部数码',
+  huoshan: '火山引擎', jdcloud: '京东云', dnsla: 'DNSLA', qingcloud: '青云', bt: '宝塔域名',
+  cloudflare: 'Cloudflare', aws: 'AWS Route 53', namesilo: 'NameSilo', henet: 'HE DNS', spaceship: 'Spaceship',
+  powerdns: 'PowerDNS', technitium: 'Technitium', aliyunesa: '阿里云ESA', tencenteo: '腾讯云EO',
+  dnsmgr: '同系统对接', goedge: 'GoEdge智能DNS', dynv6: 'dynv6',
+};
+const LEGACY_PROVIDER_ICONS: Record<string, string> = {
+  aliyun: 'aliyun.png', dnspod: 'dnspod.ico', huawei: 'huawei.ico', baidu: 'baidu.ico', west: 'west.ico',
+  huoshan: 'huoshan.ico', jdcloud: 'jdcloud.ico', dnsla: 'dnsla.ico', qingcloud: 'qingcloud.ico', bt: 'bt.png',
+  cloudflare: 'cloudflare.ico', aws: 'aws.png', namesilo: 'namesilo.ico', henet: 'he.ico', spaceship: 'spaceship.ico',
+  powerdns: 'powerdns.ico', technitium: 'technitium.png', aliyunesa: 'aliyun.png', tencenteo: 'tencent.png',
+  dnsmgr: 'logo.png', goedge: 'logo.png', dynv6: 'dynv6.ico',
+};
+
+function legacyText(body: Record<string, unknown>, key: string, maxLength = 256): string {
+  const value = body[key];
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string' && (typeof value !== 'number' || !Number.isSafeInteger(value))) {
+    throw new AppError(400, `${key} 格式无效`, 'INVALID_LEGACY_API_PARAMETER');
+  }
+  return String(value).trim().slice(0, maxLength);
+}
+
+function legacyInteger(value: string, key: string, fallback: number, min: number, max: number): number {
+  if (!value) return fallback;
+  if (!/^\d+$/.test(value)) throw new AppError(400, `${key} 格式无效`, 'INVALID_LEGACY_API_PARAMETER');
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new AppError(400, `${key} 超出允许范围`, 'INVALID_LEGACY_API_PARAMETER');
+  }
+  return parsed;
+}
+
+function legacyDateTime(value: number | null): string | null {
+  if (value === null) return null;
+  const date = new Date((value + 8 * 60 * 60) * 1000).toISOString();
+  return `${date.slice(0, 10)} ${date.slice(11, 19)}`;
+}
+
+function legacyProviderName(type: string): string {
+  return LEGACY_PROVIDER_NAMES[type] ?? (type || '未知');
 }
 
 const DOMAIN_NAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
@@ -424,6 +488,73 @@ export function dnsRoutes() {
       if (result.changes === 1) imported++;
     }
     await audit(c, 'domain.sync', current.name, `${domains.length} requested, ${imported} imported`);    return c.json({ code: 0, imported, skipped: domains.length - imported });
+  });
+
+  routes.post('/api/domain', requireLegacyApi, async (c) => {
+    requireSql(c);
+    const principal = c.get('principal');
+    if (principal.user.level !== 1 && principal.user.level !== 2) return c.json({ total: 0, rows: [] });
+    const body = c.get('legacyApiBody');
+    const idValue = legacyText(body, 'id', 20);
+    const domainId = idValue && idValue !== '0' ? legacyInteger(idValue, 'id', 0, 1, 9_999_999_999) : null;
+    const keyword = legacyText(body, 'kw', 255);
+    const accountValue = legacyText(body, 'aid', 20);
+    const accountId = accountValue && accountValue !== '0' ? legacyInteger(accountValue, 'aid', 0, 1, 9_999_999_999) : null;
+    const type = legacyText(body, 'type', 32);
+    const categoryValue = legacyText(body, 'cid', 20);
+    const categoryId = categoryValue ? legacyInteger(categoryValue, 'cid', 0, 0, 9_999_999_999) : null;
+    const status = legacyText(body, 'status', 8);
+    const offset = legacyInteger(legacyText(body, 'offset', 16), 'offset', 0, 0, 1_000_000);
+    const limit = legacyInteger(legacyText(body, 'limit', 16), 'limit', 10, 1, 100);
+    const sortName = legacyText(body, 'sortName', 32);
+    const sortOrder = legacyText(body, 'sortOrder', 8).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    const sortColumns: Record<string, string> = {
+      id: 'd.id', name: 'd.name', recordcount: 'd.record_count', addtime: 'd.created_at',
+      regtime: 'd.id', expiretime: 'd.expires_at', is_notice: 'd.notice',
+      is_hide: 'd.hidden', is_sso: 'd.id', typename: 'a.type', category_name: 'd.category_id', remark: 'd.remark',
+    };
+    const sortColumn = Object.prototype.hasOwnProperty.call(sortColumns, sortName) ? sortColumns[sortName]! : 'd.id';
+    const where = ['1=1'];
+    const args: (string | number)[] = [];
+    if (domainId !== null) { where.push('d.id=?'); args.push(domainId); }
+    else if (keyword) {
+      where.push("(d.name LIKE ? ESCAPE '\\' OR COALESCE(d.remark,'') LIKE ? ESCAPE '\\')");
+      const pattern = `%${keyword.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+      args.push(pattern, pattern);
+    }
+    if (accountId !== null) { where.push('d.account_id=?'); args.push(accountId); }
+    if (type) { where.push('a.type LIKE ?'); args.push(`%${type}%`); }
+    if (categoryId !== null) {
+      if (categoryId === 0) where.push('(d.category_id IS NULL OR d.category_id=0)');
+      else { where.push('d.category_id=?'); args.push(categoryId); }
+    }
+    if (principal.user.level === 1) {
+      where.push('d.hidden=0');
+      where.push('EXISTS (SELECT 1 FROM permissions p WHERE p.user_id=? AND p.domain_id=CAST(d.id AS TEXT))');
+      args.push(principal.user.id);
+    }
+    const now = nowSeconds();
+    if (status === '1') { where.push('d.expires_at>? AND d.expires_at<=?'); args.push(now, now + 30 * 86_400); }
+    else if (status === '2') { where.push('d.expires_at IS NOT NULL AND d.expires_at<=?'); args.push(now); }
+    const from = `FROM dns_domains d JOIN dns_accounts a ON a.id=d.account_id LEFT JOIN dns_domain_categories cc ON cc.id=d.category_id WHERE ${where.join(' AND ')}`;
+    const totals = await db(c).query<{ total: number }>(`SELECT COUNT(*) AS total ${from}`, args);
+    const rows = await db(c).query<LegacyDomainRow>(
+      `SELECT d.*, a.type AS account_type, a.remark AS account_remark, cc.name AS category_name ${from}
+       ORDER BY ${sortColumn} ${sortOrder}${sortColumn === 'd.id' ? '' : ', d.id DESC'} LIMIT ? OFFSET ?`,
+      [...args, limit, offset],
+    );
+    return c.json({
+      total: Number(totals[0]?.total ?? 0),
+      rows: rows.map((row) => ({
+        id: row.id, aid: row.account_id, cid: row.category_id ?? 0, name: row.name, thirdid: row.third_id,
+        addtime: legacyDateTime(row.created_at), is_hide: row.hidden, is_sso: 0, recordcount: row.record_count,
+        remark: row.remark, is_notice: row.notice, regtime: null, expiretime: legacyDateTime(row.expires_at),
+        checktime: legacyDateTime(row.checked_at), noticetime: legacyDateTime(row.notice_attempted_at),
+        checkstatus: row.check_status, type: row.account_type, aremark: row.account_remark,
+        typename: legacyProviderName(row.account_type), icon: LEGACY_PROVIDER_ICONS[row.account_type] ?? '',
+        category_name: row.category_name ?? '',
+      })),
+    });
   });
 
   routes.get('/api/v1/dns/domains', requireSession, async (c) => {
