@@ -298,9 +298,11 @@ describe('DNS account, domain and record API', () => {
     const rows = await testDb.db.query<{ id: number; expires_at: number; checked_at: number | null; check_status: number; updated_at: number }>(
       'SELECT id, expires_at, checked_at, check_status, updated_at FROM dns_domains ORDER BY id',
     );
-    expect(rows[0]).toMatchObject({ expires_at: 1_900_000_000, checked_at: null, check_status: 0 });
-    expect(rows[0]!.updated_at).toBeGreaterThan(100);
-    expect(rows[1]).toEqual({ id: domains[1]!.id, expires_at: 1_910_000_000, checked_at: 456, check_status: 3, updated_at: 100 });
+    const queued = rows.find((row) => row.id === domains[0]!.id);
+    const activeClaim = rows.find((row) => row.id === domains[1]!.id);
+    expect(queued).toMatchObject({ expires_at: 1_900_000_000, checked_at: null, check_status: 0 });
+    expect(queued!.updated_at).toBeGreaterThan(100);
+    expect(activeClaim).toEqual({ id: domains[1]!.id, expires_at: 1_910_000_000, checked_at: 456, check_status: 3, updated_at: 100 });
     expect((await testDb.db.query<{ action: string; detail: string }>(
       "SELECT action, detail FROM audit_logs WHERE action='domain.batch.expiration-refresh'",
     ))[0]).toEqual({ action: 'domain.batch.expiration-refresh', detail: 'affected=1' });
