@@ -1,3 +1,4 @@
+import { AppError } from '../core/errors';
 import { DnsError } from './types';
 
 export interface HttpResponse {
@@ -18,6 +19,7 @@ export async function sendJson(
   try {
     response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   } catch (error) {
+    if (error instanceof AppError && ['REQUEST_BUDGET_EXCEEDED', 'REQUEST_TIMEOUT'].includes(error.reason)) throw error;
     if (error instanceof Error && error.name === 'TimeoutError') {
       throw new DnsError('DNS 服务商接口响应超时', 504, 'DNS_TIMEOUT');
     }
@@ -53,6 +55,7 @@ export async function sendText(
   try {
     response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   } catch (error) {
+    if (error instanceof AppError && ['REQUEST_BUDGET_EXCEEDED', 'REQUEST_TIMEOUT'].includes(error.reason)) throw error;
     if (error instanceof Error && error.name === 'TimeoutError') {
       throw new DnsError('DNS 服务商接口响应超时', 504, 'DNS_TIMEOUT');
     }

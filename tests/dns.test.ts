@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DnsError } from '../src/dns/types';
+import { AppError } from '../src/core/errors';
+import { sendJson, sendText } from '../src/dns/http';
 import { lookupDomainExpiration } from '../src/dns/expiration';
 import { checkDnsRecordValue, lookupPublicDnsRecords } from '../src/dns/record-check';
 import { createCloudflareProvider } from '../src/dns/providers/cloudflare';
@@ -22,6 +24,16 @@ function fakeFetch(handler: (call: Call, body: Record<string, unknown> | null) =
 }
 
 const zone = { id: 'zone-1', name: 'example.com', recordCount: 0 };
+
+describe('DNS HTTP helpers', () => {
+  it.each(['REQUEST_BUDGET_EXCEEDED', 'REQUEST_TIMEOUT'] as const)('preserves %s before provider dispatch', async (reason) => {
+    const exhausted = new AppError(503, 'request budget exhausted', reason);
+    const fetchImpl = vi.fn(async () => { throw exhausted; }) as unknown as typeof fetch;
+    await expect(sendJson(fetchImpl, 'https://provider.example/api')).rejects.toBe(exhausted);
+    await expect(sendText(fetchImpl, 'https://provider.example/api')).rejects.toBe(exhausted);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('Cloudflare provider', () => {
   it('maps paused and root names back to UI semantics', async () => {

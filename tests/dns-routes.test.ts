@@ -3,6 +3,7 @@ import { createApp } from '../src/app';
 import { md5 } from 'js-md5';
 import { AppError } from '../src/core/errors';
 import type { Bindings, RequestBudget } from '../src/core/types';
+import type { SqlDatabase, SqlStatement, SqlValue } from '../src/storage/sql';
 import { environment } from '../src/platform/runtime';
 import { encrypt } from '../src/security/crypto';
 import { createTestDatabase } from './helpers/sqlite';
@@ -14,10 +15,11 @@ let dohPayload: unknown = { Status: 0, Answer: [{ type: 1, data: '1.1.1.1' }] };
 let dohQueries: URL[] = [];
 let cloudflareRecords: Record<string, unknown>[] = [];
 let cloudflareRecordTotal = 0;
+let cloudflareRemarkFailure = false;
 
 function cloudflareFetch() {
   let nextRecord = 1;
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
     if (url.hostname === 'dns.alidns.com') {
@@ -33,8 +35,11 @@ function cloudflareFetch() {
     if (url.pathname === '/client/v4/zones' && url.searchParams.get('name')) {
       return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }], result_info: { total_count: 1 } });
     }
-    if (/\/dns_records\/r\d+$/.test(url.pathname)) {
+    if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method !== 'PATCH') {
       return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
+    }
+    if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method === 'PATCH' && cloudflareRemarkFailure) {
+      throw new Error('upstream connection lost after dispatch');
     }
     if (url.pathname === '/client/v4/zones/zone-1/dns_records' && url.search !== '') {
       return json({ success: true, result: cloudflareRecords, result_info: { total_count: cloudflareRecordTotal } });
@@ -58,6 +63,7 @@ describe('DNS account, domain and record API', () => {
     dohQueries = [];
     cloudflareRecords = [];
     cloudflareRecordTotal = 0;
+    cloudflareRemarkFailure = false;
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const transport = cloudflareFetch();
@@ -340,6 +346,180 @@ describe('DNS account, domain and record API', () => {
     expect(esaFanout.status).toBe(501);
     expect(await esaFanout.json()).toMatchObject({ reason: 'LEGACY_RECORD_BUDGET_UNSUPPORTED' });
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+  });
+
+  it('updates signed record remarks only for authorized Cloudflare records', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'remark-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    await testDb.db.execute('UPDATE dns_domains SET record_count=7 WHERE id=?', [domain!.id]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    async function signedRemark(
+      domainId: number | string = domain!.id, params: Record<string, string> = {},
+      overrides: Partial<Bindings> = {},
+    ) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const form = new URLSearchParams({ uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), ...params });
+      return app.request(`https://panel.example/api/record/remark/${domainId}`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      }, environment({ ...bindings, ...overrides }, 'local'));
+    }
+
+    const invalidSignature = await signedRemark(domain!.id, { recordid: 'r1', remark: 'invalid', sign: '0'.repeat(32) });
+    expect(invalidSignature.status).toBe(403);
+    await testDb.db.execute('UPDATE users SET is_api=0 WHERE id=1');
+    expect((await signedRemark(domain!.id, { recordid: 'r1', remark: 'disabled' })).status).toBe(403);
+    await testDb.db.execute('UPDATE users SET is_api=1 WHERE id=1');
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+
+    const updated = await signedRemark(domain!.id, { recordid: 'r1', remark: '  important  ' });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toEqual({ code: 0, msg: '操作成功！' });
+    const firstCall = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+    expect(firstCall[1]).toMatchObject({ method: 'PATCH', body: JSON.stringify({ comment: 'important' }) });
+    expect(new URL(String(firstCall[0])).pathname).toBe('/client/v4/zones/zone-1/dns_records/r1');
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+    expect(await testDb.db.query<{ action: string; detail: string }>(
+      "SELECT action,detail FROM audit_logs WHERE action='record.remark'",
+    )).toEqual([{ action: 'record.remark', detail: 'r1 important' }]);
+    expect(await testDb.db.query<{ record_count: number }>(
+      'SELECT record_count FROM dns_domains WHERE id=?', [domain!.id],
+    )).toEqual([{ record_count: 7 }]);
+
+    await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
+    const unassigned = await signedRemark(domain!.id, { recordid: 'r1', remark: 'denied' });
+    expect(unassigned.status).toBe(404);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+    await testDb.db.execute('INSERT INTO permissions(user_id,domain_id) VALUES(1,?)', [String(domain!.id)]);
+    const cleared = await signedRemark(domain!.id, { recordid: 'r1', remark: '   ' });
+    expect(cleared.status).toBe(200);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1]).toMatchObject({ body: JSON.stringify({ comment: '' }) });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
+    expect(await testDb.db.query<{ action: string; detail: string }>(
+      "SELECT action,detail FROM audit_logs WHERE action='record.remark' ORDER BY id",
+    )).toEqual([
+      { action: 'record.remark', detail: 'r1 important' },
+      { action: 'record.remark', detail: 'r1 ' },
+    ]);
+
+    await testDb.db.execute('UPDATE users SET level=0 WHERE id=1');
+    const denied = await signedRemark(domain!.id, { recordid: 'r1', remark: 'denied' });
+    expect(denied.status).toBe(403);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
+    await testDb.db.execute('UPDATE users SET level=2 WHERE id=1');
+
+    for (const params of [
+      { recordid: '', remark: 'invalid' },
+      { recordid: 'r1', remark: 'x'.repeat(101) },
+    ]) {
+      expect((await signedRemark(domain!.id, params)).status).toBe(400);
+    }
+    expect((await signedRemark(999_999, { recordid: 'r1', remark: 'missing' })).status).toBe(404);
+    const mismatch = await signedRemark(domain!.id, { recordid: 'r1', remark: 'wrong store' }, { DB_FORMAT: 'map' });
+    expect(mismatch.status).toBe(503);
+    expect(await mismatch.json()).toMatchObject({ reason: 'STORAGE_IDENTITY_MISMATCH' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
+
+    const owner = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domain!.id]);
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['aliyun', owner[0]!.account_id]);
+    const unsupported = await signedRemark(domain!.id, { recordid: 'r1', remark: 'not supported' });
+    expect(unsupported.status).toBe(501);
+    expect(await unsupported.json()).toMatchObject({ reason: 'LEGACY_RECORD_REMARK_UNSUPPORTED' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
+  });
+
+  it('uses at most four ESA fetches for a signed Cloudflare remark write', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'esa-remark-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    let spent = 0;
+    const consume = () => {
+      spent += 1;
+      if (spent > 4) throw new AppError(503, 'ESA fetch budget exhausted', 'REQUEST_BUDGET_EXCEEDED');
+    };
+    const transport = cloudflareFetch();
+    const esaBudget: RequestBudget = {
+      consume,
+      remainingMs: () => 8_000,
+      fetch: async (input, init) => { consume(); return transport(input, init); },
+    };
+    const budgetDatabase: SqlDatabase = {
+      async query<T extends Record<string, unknown>>(sql: string, args: SqlValue[] = []) {
+        consume();
+        return testDb.db.query<T>(sql, args);
+      },
+      async execute(sql: string, args: SqlValue[] = []) {
+        consume();
+        return testDb.db.execute(sql, args);
+      },
+      async batch(statements: SqlStatement[]) {
+        consume();
+        return testDb.db.batch(statements);
+      },
+    };
+    const esaApp = createApp({ database: budgetDatabase });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const form = new URLSearchParams({
+      uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1', remark: 'esa note',
+    });
+    const response = await esaApp.request(`https://panel.example/api/record/remark/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment({ ...bindings, BUDGET: esaBudget }, 'esa'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ code: 0, msg: '操作成功！' });
+    expect(spent).toBe(4);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an unknown write outcome if Cloudflare rejects the connection after dispatch', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'unknown-write-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    cloudflareRemarkFailure = true;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const form = new URLSearchParams({
+      uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1', remark: 'possibly changed',
+    });
+    const response = await app.request(`https://panel.example/api/record/remark/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment(bindings, 'local'));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'DNS_WRITE_OUTCOME_UNKNOWN' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+    expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.remark'")).toEqual([]);
+
+    cloudflareRemarkFailure = false;
+    const originalFetch = budget.fetch;
+    budget.fetch = async () => { throw new AppError(503, 'budget exhausted', 'REQUEST_BUDGET_EXCEEDED'); };
+    const exhausted = await app.request(`https://panel.example/api/record/remark/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment(bindings, 'local'));
+    expect(exhausted.status).toBe(503);
+    expect(await exhausted.json()).toMatchObject({ reason: 'REQUEST_BUDGET_EXCEEDED' });
+    budget.fetch = originalFetch;
+    expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.remark'")).toEqual([]);
+
+    const originalExecute = testDb.db.execute.bind(testDb.db);
+    testDb.db.execute = async (sql, args = []) => {
+      if (sql.startsWith('INSERT INTO audit_logs')) throw new Error('audit store unavailable');
+      return originalExecute(sql, args);
+    };
+    try {
+      const auditFailure = await app.request(`https://panel.example/api/record/remark/${domain!.id}`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      }, environment(bindings, 'local'));
+      expect(auditFailure.status).toBe(503);
+      expect(await auditFailure.json()).toMatchObject({ reason: 'DNS_WRITE_OUTCOME_UNKNOWN' });
+    } finally {
+      testDb.db.execute = originalExecute;
+    }
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
+    expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.remark'")).toEqual([]);
   });
 
   it('rejects unknown providers before touching storage', async () => {
