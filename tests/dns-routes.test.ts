@@ -16,6 +16,7 @@ let dohQueries: URL[] = [];
 let cloudflareRecords: Record<string, unknown>[] = [];
 let cloudflareRecordTotal = 0;
 let cloudflareRemarkFailure = false;
+let cloudflareDeleteFailure = false;
 
 function cloudflareFetch() {
   let nextRecord = 1;
@@ -35,10 +36,13 @@ function cloudflareFetch() {
     if (url.pathname === '/client/v4/zones' && url.searchParams.get('name')) {
       return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }], result_info: { total_count: 1 } });
     }
-    if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method !== 'PATCH') {
+    if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method !== 'PATCH' && init?.method !== 'DELETE') {
       return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
     }
     if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method === 'PATCH' && cloudflareRemarkFailure) {
+      throw new Error('upstream connection lost after dispatch');
+    }
+    if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method === 'DELETE' && cloudflareDeleteFailure) {
       throw new Error('upstream connection lost after dispatch');
     }
     if (url.pathname === '/client/v4/zones/zone-1/dns_records' && url.search !== '') {
@@ -64,6 +68,7 @@ describe('DNS account, domain and record API', () => {
     cloudflareRecords = [];
     cloudflareRecordTotal = 0;
     cloudflareRemarkFailure = false;
+    cloudflareDeleteFailure = false;
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const transport = cloudflareFetch();
@@ -520,6 +525,127 @@ describe('DNS account, domain and record API', () => {
     }
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
     expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.remark'")).toEqual([]);
+  });
+
+  it('deletes signed Cloudflare records with domain permission within the ESA fetch limit', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'delete-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=?,level=1 WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    await testDb.db.execute('UPDATE dns_domains SET record_count=7 WHERE id=?', [domain!.id]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    async function signedDelete(
+      params: Record<string, string> = {}, platform: 'local' | 'esa' = 'local', esaApp = app,
+      overrides: Partial<Bindings> = {},
+    ) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const form = new URLSearchParams({ uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1', ...params });
+      return esaApp.request(`https://panel.example/api/record/delete/${domain!.id}`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      }, environment({ ...bindings, ...overrides }, platform));
+    }
+
+    const invalidSignature = await signedDelete({ sign: '0'.repeat(32) });
+    expect(invalidSignature.status).toBe(403);
+    await testDb.db.execute('UPDATE users SET level=0 WHERE id=1');
+    expect((await signedDelete()).status).toBe(403);
+    await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
+    const denied = await signedDelete();
+    expect(denied.status).toBe(404);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+    await testDb.db.execute('INSERT INTO permissions(user_id,domain_id) VALUES(1,?)', [String(domain!.id)]);
+    expect((await signedDelete({ recordid: '' })).status).toBe(400);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+
+    let spent = 0;
+    const consume = () => {
+      spent += 1;
+      if (spent > 4) throw new AppError(503, 'ESA fetch budget exhausted', 'REQUEST_BUDGET_EXCEEDED');
+    };
+    const transport = cloudflareFetch();
+    const esaBudget: RequestBudget = {
+      consume, remainingMs: () => 8_000,
+      fetch: async (input, init) => { consume(); return transport(input, init); },
+    };
+    const budgetDatabase: SqlDatabase = {
+      async query<T extends Record<string, unknown>>(sql: string, args: SqlValue[] = []) {
+        consume(); return testDb.db.query<T>(sql, args);
+      },
+      async execute(sql: string, args: SqlValue[] = []) {
+        consume(); return testDb.db.execute(sql, args);
+      },
+      async batch(statements: SqlStatement[]) {
+        consume(); return testDb.db.batch(statements);
+      },
+    };
+    const esaApp = createApp({ database: budgetDatabase });
+    const response = await signedDelete({}, 'esa', esaApp, { BUDGET: esaBudget });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ code: 0, msg: '删除解析记录成功！' });
+    expect(spent).toBe(4);
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [request, init] = (transport as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(new URL(String(request)).pathname).toBe('/client/v4/zones/zone-1/dns_records/r1');
+    expect(init).toMatchObject({ method: 'DELETE' });
+    expect(await testDb.db.query<{ record_count: number }>(
+      'SELECT record_count FROM dns_domains WHERE id=?', [domain!.id],
+    )).toEqual([{ record_count: 7 }]);
+    expect(await testDb.db.query<{ action: string; detail: string }>(
+      "SELECT action,detail FROM audit_logs WHERE action='record.delete'",
+    )).toEqual([{ action: 'record.delete', detail: 'r1' }]);
+
+    const owner = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domain!.id]);
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['aliyun', owner[0]!.account_id]);
+    const unsupported = await signedDelete();
+    expect(unsupported.status).toBe(501);
+    expect(await unsupported.json()).toMatchObject({ reason: 'LEGACY_RECORD_DELETE_UNSUPPORTED' });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an unknown signed delete result after a provider disconnect', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'delete-unknown-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    cloudflareDeleteFailure = true;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const form = new URLSearchParams({ uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), recordid: 'r1' });
+    const response = await app.request(`https://panel.example/api/record/delete/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment(bindings, 'local'));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'DNS_WRITE_OUTCOME_UNKNOWN' });
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 1);
+    expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.delete'")).toEqual([]);
+
+    cloudflareDeleteFailure = false;
+    const originalFetch = budget.fetch;
+    budget.fetch = async () => { throw new AppError(503, 'budget exhausted', 'REQUEST_BUDGET_EXCEEDED'); };
+    const exhausted = await app.request(`https://panel.example/api/record/delete/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, environment(bindings, 'local'));
+    expect(exhausted.status).toBe(503);
+    expect(await exhausted.json()).toMatchObject({ reason: 'REQUEST_BUDGET_EXCEEDED' });
+    budget.fetch = originalFetch;
+
+    const originalExecute = testDb.db.execute.bind(testDb.db);
+    testDb.db.execute = async (sql, args = []) => {
+      if (sql.startsWith('INSERT INTO audit_logs')) throw new Error('audit store unavailable');
+      return originalExecute(sql, args);
+    };
+    try {
+      const auditFailure = await app.request(`https://panel.example/api/record/delete/${domain!.id}`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      }, environment(bindings, 'local'));
+      expect(auditFailure.status).toBe(503);
+      expect(await auditFailure.json()).toMatchObject({ reason: 'DNS_WRITE_OUTCOME_UNKNOWN' });
+    } finally {
+      testDb.db.execute = originalExecute;
+    }
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 2);
+    expect(await testDb.db.query("SELECT id FROM audit_logs WHERE action='record.delete'")).toEqual([]);
   });
 
   it('rejects unknown providers before touching storage', async () => {
