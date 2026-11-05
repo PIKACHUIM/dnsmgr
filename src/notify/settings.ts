@@ -31,8 +31,11 @@ export interface NotificationSettings {
   contentType: string;
 }
 
+export const NOTIFICATION_CHANNELS = ['webhook', 'wxpusher', 'telegram', 'wecom', 'dingtalk', 'feishu'] as const;
+export type NotificationChannel = typeof NOTIFICATION_CHANNELS[number];
+
 export interface NotificationDelivery {
-  channel: 'webhook' | 'wxpusher' | 'telegram' | 'wecom' | 'dingtalk' | 'feishu';
+  channel: NotificationChannel;
   ok: boolean;
   status: number | null;
 }
@@ -388,12 +391,13 @@ async function sendFeishu(
 }
 
 export async function sendConfiguredNotifications(
-  c: Context<AppEnv>, title: string, content: string,
+  c: Context<AppEnv>, title: string, content: string, allowedChannels?: ReadonlySet<NotificationChannel>,
 ): Promise<NotificationDelivery[]> {
   const config = await loadNotificationSettings(c);
   const deliveries: NotificationDelivery[] = [];
   const fetchImpl = c.env.BUDGET.fetch;
-  if (config.secrets.webhookUrl) {
+  const enabled = (channel: NotificationChannel) => !allowedChannels || allowedChannels.has(channel);
+  if (enabled('webhook') && config.secrets.webhookUrl) {
     try {
       const webhook = parseConfig({
         custom_webhook_url: config.secrets.webhookUrl,
@@ -410,7 +414,7 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'webhook', ok: false, status: null });
     }
   }
-  if (config.secrets.wxpusherAppToken && config.secrets.wxpusherUids) {
+  if (enabled('wxpusher') && config.secrets.wxpusherAppToken && config.secrets.wxpusherUids) {
     try {
       const result = await sendWxPusher(config.secrets.wxpusherAppToken, config.secrets.wxpusherUids, title, content, fetchImpl);
       deliveries.push({ channel: 'wxpusher', ...result });
@@ -418,7 +422,7 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'wxpusher', ok: false, status: null });
     }
   }
-  if (config.secrets.telegramBotToken && config.secrets.telegramChatId) {
+  if (enabled('telegram') && config.secrets.telegramBotToken && config.secrets.telegramChatId) {
     try {
       const result = await sendTelegram(
         config.secrets.telegramBotToken, config.secrets.telegramChatId, config.secrets.telegramTopicId, title, content, fetchImpl,
@@ -428,7 +432,7 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'telegram', ok: false, status: null });
     }
   }
-  if (config.secrets.wecomWebhookUrl) {
+  if (enabled('wecom') && config.secrets.wecomWebhookUrl) {
     try {
       const result = await sendWecom(config.secrets.wecomWebhookUrl, title, content, fetchImpl);
       deliveries.push({ channel: 'wecom', ...result });
@@ -436,7 +440,7 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'wecom', ok: false, status: null });
     }
   }
-  if (config.secrets.dingtalkWebhookUrl) {
+  if (enabled('dingtalk') && config.secrets.dingtalkWebhookUrl) {
     try {
       const result = await sendDingTalk(
         config.secrets.dingtalkWebhookUrl, config.secrets.dingtalkSecret, config.secrets.dingtalkAtMobiles, title, content, fetchImpl,
@@ -446,7 +450,7 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'dingtalk', ok: false, status: null });
     }
   }
-  if (config.secrets.feishuWebhookUrl) {
+  if (enabled('feishu') && config.secrets.feishuWebhookUrl) {
     try {
       const result = await sendFeishu(config.secrets.feishuWebhookUrl, config.secrets.feishuUserIds, title, content, fetchImpl);
       deliveries.push({ channel: 'feishu', ...result });

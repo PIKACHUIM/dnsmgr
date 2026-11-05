@@ -32,7 +32,7 @@ features:
   <span class="home-status-mark" aria-hidden="true"></span>
   <div>
     <strong>FOUNDATION / 本地开发阶段</strong>
-    <p>认证、存储基础与三平台打包已建立。DNS、证书、任务和执行器业务尚未完成迁移。</p>
+    <p>认证、存储基础与三平台打包已建立；DNS 管理、定时任务和容灾已迁移部分核心能力，证书与执行器仍在迁移，新应用尚非旧系统的完整替代品。</p>
   </div>
 </div>
 

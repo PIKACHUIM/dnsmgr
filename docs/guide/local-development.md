@@ -57,7 +57,7 @@ npm run build:esa
 npm run audit:dependencies
 ```
 
-`npm test` 使用隔离的 SQLite 内存库及平台 API 替身；`test:e2e` 会启动本地服务，用 Chrome 验证初始化、登录、会话恢复、响应式导航、深链和退出。测试不会连接生产 DNS、数据库或平台存储。
+`npm test` 使用隔离的 SQLite 内存库及平台 API 替身；`test:e2e` 会启动本地服务，用 Chrome 验证初始化、登录、会话恢复、响应式导航、到期提醒天数与逐渠道开关保存/重载、深链和退出。测试不会连接生产 DNS、数据库或平台存储。
 
 ## 本地数据与安全
 

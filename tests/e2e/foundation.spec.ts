@@ -100,11 +100,26 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByRole('link', { name: '到期提醒设置' }).click();
   await expect(page.getByRole('heading', { name: '域名到期提醒设置' })).toBeVisible();
   const noticeDays = page.getByLabel('到期提前提醒天数');
+  const telegramNotice = page.getByLabel('Telegram');
   await expect(noticeDays).toHaveValue('');
+  await expect(telegramNotice).toBeChecked();
   await noticeDays.fill('14,7');
+  await telegramNotice.uncheck();
   await page.getByRole('button', { name: '保存设置' }).click();
   await expect(page.locator('.notice[role="status"]')).toContainText('到期提醒策略已保存');
   await expect(noticeDays).toHaveValue('7,14');
+  await expect(telegramNotice).not.toBeChecked();
+  await page.setViewportSize({ width: 375, height: 900 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(telegramNotice).toBeVisible();
+  await telegramNotice.focus();
+  await page.keyboard.press('Space');
+  await expect(telegramNotice).toBeChecked();
+  await page.keyboard.press('Space');
+  await expect(telegramNotice).not.toBeChecked();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  await expect(page.getByLabel('Telegram')).not.toBeChecked();
   await page.goto('/account');
   await expect(page.getByRole('heading', { name: '添加 DNS 账户' })).toBeVisible();
   await page.route(/\/api\/v1\/dns\/domains\?/, (route) => route.fulfill({ json: {

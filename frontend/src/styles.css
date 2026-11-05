@@ -352,6 +352,12 @@ a.button:hover { text-decoration: none; }
 .dns-form textarea:focus { border-color: var(--color-accent); }
 .form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .form-actions span { color: var(--color-muted); font-size: var(--font-xs); }
+.notice-channel-grid { grid-column: 1 / -1; min-width: 0; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.notice-channel-grid legend { padding: 0 6px; font-size: var(--font-sm); font-weight: 500; }
+.notice-channel-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 8px; }
+.notice-channel-option { display: flex; min-height: 42px; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); font-size: var(--font-sm); }
+.dns-form .notice-channel-option input { width: 18px; height: 18px; min-height: 18px; flex: 0 0 auto; padding: 0; accent-color: var(--color-accent); }
+.notice-channel-grid .form-hint { margin-top: 8px; }
 .dns-search { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; max-width: 760px; }
 .dns-search input,
 .dns-search select { flex: 1 1 160px; min-height: 40px; padding: 7px 11px; border: 1px solid var(--color-control-border); border-radius: var(--radius-sm); background: var(--color-surface); font-size: var(--font-sm); }

@@ -2,7 +2,9 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { lookupDomainExpiration } from '../dns/expiration';
-import { sendConfiguredNotifications, type NotificationDelivery } from '../notify/settings';
+import {
+  NOTIFICATION_CHANNELS, sendConfiguredNotifications, type NotificationChannel, type NotificationDelivery,
+} from '../notify/settings';
 import { nowSeconds } from '../security/auth';
 import type { SqlDatabase } from '../storage/sql';
 
@@ -27,6 +29,27 @@ interface NoticeDomain extends PendingDomain {
 const DAY_SECONDS = 86_400;
 const NOTICE_COOLDOWN_SECONDS = 20 * 60 * 60;
 const MAX_NOTICE_DOMAINS = 10;
+export const EXPIRATION_NOTICE_CHANNELS_SETTING = 'expire_notice_channels';
+export type ExpirationNoticeChannels = Record<NotificationChannel, boolean>;
+
+export function defaultExpirationNoticeChannels(): ExpirationNoticeChannels {
+  return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, true])) as ExpirationNoticeChannels;
+}
+
+export function parseExpirationNoticeChannels(value: string | null): ExpirationNoticeChannels {
+  if (value === null) return defaultExpirationNoticeChannels();
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, false])) as ExpirationNoticeChannels;
+    const settings = parsed as Record<string, unknown>;
+    if (NOTIFICATION_CHANNELS.some((channel) => typeof settings[channel] !== 'boolean')) {
+      return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, false])) as ExpirationNoticeChannels;
+    }
+    return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, settings[channel]])) as ExpirationNoticeChannels;
+  } catch {
+    return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, false])) as ExpirationNoticeChannels;
+  }
+}
 
 function db(c: Context<AppEnv>): SqlDatabase {
   return c.get('db');
@@ -163,6 +186,12 @@ export async function executeExpirationNotice(c: Context<AppEnv>, offsetMinutes:
   const settings = await db(c).query<{ value: string }>('SELECT value FROM app_settings WHERE key=?', ['expire_noticedays']);
   const days = parseNoticeDays(settings[0]?.value ?? null);
   if (days.length === 0) return;
+  const channelSettings = await db(c).query<{ value: string }>(
+    'SELECT value FROM app_settings WHERE key=?', [EXPIRATION_NOTICE_CHANNELS_SETTING],
+  );
+  const channels = parseExpirationNoticeChannels(channelSettings[0]?.value ?? null);
+  const enabledChannels = new Set(NOTIFICATION_CHANNELS.filter((channel) => channels[channel]));
+  if (enabledChannels.size === 0) return;
 
   const startedAt = nowSeconds();
   const localHour = new Date((startedAt + offsetMinutes * 60) * 1000).getUTCHours();
@@ -199,7 +228,7 @@ export async function executeExpirationNotice(c: Context<AppEnv>, offsetMinutes:
   ).join('\n')}`;
   let deliveries: NotificationDelivery[];
   try {
-    deliveries = await sendConfiguredNotifications(c, title, content);
+    deliveries = await sendConfiguredNotifications(c, title, content, enabledChannels);
   } catch {
     await auditNotice(c, day, `days=${day} domains=${claimed.length} deliveries=error`);
     return;

@@ -1,11 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
 
-interface Config { days: string }
+const NOTICE_CHANNELS = [
+  { key: 'webhook', label: '自定义 Webhook' },
+  { key: 'wxpusher', label: 'WxPusher' },
+  { key: 'telegram', label: 'Telegram' },
+  { key: 'wecom', label: '企业微信' },
+  { key: 'dingtalk', label: '钉钉' },
+  { key: 'feishu', label: '飞书' },
+] as const;
+type NoticeChannel = typeof NOTICE_CHANNELS[number]['key'];
+type ChannelSettings = Record<NoticeChannel, boolean>;
+interface Config { days: string; channels: ChannelSettings }
 interface Props { session: Session; onExpired: (message: string) => void }
+
+const DEFAULT_CHANNELS: ChannelSettings = {
+  webhook: true, wxpusher: true, telegram: true, wecom: true, dingtalk: true, feishu: true,
+};
 
 export function ExpirationNoticeSettings({ session, onExpired }: Props) {
   const [days, setDays] = useState('');
+  const [channels, setChannels] = useState<ChannelSettings>(DEFAULT_CHANNELS);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -23,6 +38,7 @@ export function ExpirationNoticeSettings({ session, onExpired }: Props) {
       const result = await request<{ code: 0 } & Config>('/api/v1/system/expiration-notice', { signal });
       if (!signal.aborted) {
         setDays(result.days);
+        setChannels(result.channels);
         setLoaded(true);
       }
     } catch (failure) { if (!signal.aborted) handle(failure); }
@@ -41,8 +57,9 @@ export function ExpirationNoticeSettings({ session, onExpired }: Props) {
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
     try {
-      const result = await send<{ code: 0 } & Config>('/api/v1/system/expiration-notice', 'PUT', { days }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      const result = await send<{ code: 0 } & Config>('/api/v1/system/expiration-notice', 'PUT', { days, channels }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setDays(result.days);
+      setChannels(result.channels);
       setNotice('到期提醒策略已保存');
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -60,12 +77,22 @@ export function ExpirationNoticeSettings({ session, onExpired }: Props) {
             <input type="text" inputMode="numeric" autoComplete="off" value={days} onChange={(event) => setDays(event.target.value)} maxLength={256} placeholder="例如：7,14" disabled={busy} />
           </label>
           <p className="form-hint">使用英文逗号分隔多个 0–3650 之间的天数，最多 32 项；填写 7,14 表示到期前 7 天和 14 天分别提醒。留空表示关闭提醒。</p>
+          <fieldset className="notice-channel-grid" disabled={busy} aria-label="到期提醒通知渠道">
+            <legend>提醒发送渠道</legend>
+            <div className="notice-channel-options">
+              {NOTICE_CHANNELS.map(({ key, label }) => <label className="notice-channel-option" key={key}>
+                <input type="checkbox" checked={channels[key]} onChange={(event) => setChannels((current) => ({ ...current, [key]: event.target.checked }))} />
+                <span>{label}</span>
+              </label>)}
+            </div>
+            <p className="form-hint">只会向已配置且已启用的渠道发送。所有开关关闭时不发送，并释放本次提醒占用。</p>
+          </fieldset>
           <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button></div>
         </form>}
     </section>
     <section className="panel" aria-labelledby="expiration-notice-scope-title">
       <div className="panel-heading"><div><h2 id="expiration-notice-scope-title">自动提醒规则</h2></div><span className="panel-meta">由 cron 触发</span></div>
-      <p>保存策略不会立即发送通知。cron 每分钟运行；没有到期查询工作时，才在配置时区 09:00 后按剩余天数分组发送，每次至多一组、最多 10 个域名。单域名发送后冷却 20 小时，发送失败也会冷却；尚未配置通知渠道时不会占用冷却。提醒会发往所有已配置的新通知渠道；旧版逐渠道开关、邮件和 QQ 机器人仍未迁移。</p>
+      <p>保存策略不会立即发送通知。cron 每分钟运行；没有到期查询工作时，才在配置时区 09:00 后按剩余天数分组发送，每次至多一组、最多 10 个域名。单域名发送后冷却 20 小时，发送失败也会冷却；未配置或未启用任何渠道时不会占用冷却。开关仅控制到期提醒，不影响其他通知；邮件和 QQ 机器人仍未迁移。</p>
     </section>
   </>;
 }

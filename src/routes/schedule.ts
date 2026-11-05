@@ -8,9 +8,12 @@ import { createProvider } from '../dns/registry';
 import { DnsError, type DnsDomain, type DnsRecordInput } from '../dns/types';
 import { type SqlDatabase } from '../storage/sql';
 import { nextRunAt, parseRunTime, type ScheduleMode, type ScheduleTaskRow } from '../schedule/tasks';
-import { sendConfiguredNotifications } from '../notify/settings';
+import { NOTIFICATION_CHANNELS, sendConfiguredNotifications, type NotificationChannel } from '../notify/settings';
 import { executeFailoverDue } from '../schedule/failover';
-import { executeExpirationNotice, executeInitialExpirationRefresh, executePeriodicExpirationRefresh } from '../schedule/expiration';
+import {
+  executeExpirationNotice, executeInitialExpirationRefresh, executePeriodicExpirationRefresh,
+  EXPIRATION_NOTICE_CHANNELS_SETTING, parseExpirationNoticeChannels,
+} from '../schedule/expiration';
 
 interface AccountRow extends Record<string, unknown> {
   id: number;
@@ -80,6 +83,17 @@ function normalizeExpirationNoticeDays(value: unknown): string {
     throw new AppError(400, '提醒天数必须在 0–3650 之间', 'INVALID_EXPIRATION_NOTICE_DAYS');
   }
   return days.sort((left, right) => left - right).join(',');
+}
+
+function normalizeExpirationNoticeChannels(value: unknown): Record<NotificationChannel, boolean> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new AppError(400, '到期提醒渠道配置格式无效', 'INVALID_EXPIRATION_NOTICE_CHANNELS');
+  }
+  const source = value as Record<string, unknown>;
+  if (Object.keys(source).length !== NOTIFICATION_CHANNELS.length || NOTIFICATION_CHANNELS.some((channel) => typeof source[channel] !== 'boolean')) {
+    throw new AppError(400, '到期提醒渠道配置必须包含全部渠道开关', 'INVALID_EXPIRATION_NOTICE_CHANNELS');
+  }
+  return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, source[channel]])) as Record<NotificationChannel, boolean>;
 }
 
 async function audit(c: Context<AppEnv>, action: string, target: string, detail: string): Promise<void> {
@@ -247,7 +261,8 @@ export function scheduleRoutes() {
     requireSql(c);
     requireAdmin(c);
     const stored = await getSetting(c, 'expire_noticedays');
-    return c.json({ code: 0, days: normalizeExpirationNoticeDays(stored ?? '') });
+    const channels = parseExpirationNoticeChannels(await getSetting(c, EXPIRATION_NOTICE_CHANNELS_SETTING));
+    return c.json({ code: 0, days: normalizeExpirationNoticeDays(stored ?? ''), channels });
   });
 
   routes.put('/api/v1/system/expiration-notice', requireSession, requireCsrf, async (c) => {
@@ -255,9 +270,20 @@ export function scheduleRoutes() {
     requireAdmin(c);
     const body = await input(c);
     const days = normalizeExpirationNoticeDays(body.days);
-    await putSetting(c, 'expire_noticedays', days);
-    await audit(c, 'expiration-notice.settings', 'system', days ? `days=${days}` : 'disabled');
-    return c.json({ code: 0, days });
+    const channels = body.channels === undefined
+      ? parseExpirationNoticeChannels(await getSetting(c, EXPIRATION_NOTICE_CHANNELS_SETTING))
+      : normalizeExpirationNoticeChannels(body.channels);
+    const updates = [{
+      sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+      args: ['expire_noticedays', days, nowSeconds()],
+    }];
+    if (body.channels !== undefined) updates.push({
+      sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+      args: [EXPIRATION_NOTICE_CHANNELS_SETTING, JSON.stringify(channels), nowSeconds()],
+    });
+    await db(c).batch(updates);
+    await audit(c, 'expiration-notice.settings', 'system', `${days ? `days=${days}` : 'disabled'} channels=${NOTIFICATION_CHANNELS.filter((channel) => channels[channel]).join(',') || 'none'}`);
+    return c.json({ code: 0, days, channels });
   });
 
   routes.get('/api/v1/system/cron', requireSession, async (c) => {

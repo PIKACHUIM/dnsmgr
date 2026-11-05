@@ -13,6 +13,7 @@ let rdapLookupStatus = 200;
 let rdapRequests: string[] = [];
 let wxpusherRequests: string[] = [];
 let wxpusherSuccess = true;
+let telegramRequests: string[] = [];
 
 function transport() {
   return vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -29,6 +30,10 @@ function transport() {
     if (url.hostname === 'wxpusher.zjiecode.com') {
       wxpusherRequests.push(String(init.body ?? ''));
       return json({ success: wxpusherSuccess });
+    }
+    if (url.hostname === 'api.telegram.org') {
+      telegramRequests.push(String(init.body ?? ''));
+      return json({ ok: true, result: { message_id: 1 } });
     }
     if (url.pathname === '/client/v4/zones') return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }] });
     if (/\/dns_records\/r\d+$/.test(url.pathname)) {
@@ -69,6 +74,7 @@ describe('schedule API', () => {
     rdapRequests = [];
     wxpusherRequests = [];
     wxpusherSuccess = true;
+    telegramRequests = [];
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
     const budget: RequestBudget = { consume: () => {}, remainingMs: () => 30_000, fetch: transport() };
@@ -133,6 +139,22 @@ describe('schedule API', () => {
     );
   }
 
+  async function setExpirationNoticeChannels(channels: Record<string, boolean>) {
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+      ['expire_notice_channels', JSON.stringify(channels), now],
+    );
+  }
+
+  async function enableTelegramNotices() {
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ telegramBotToken: '123456:abcdefghijklmnopqrstuvwxyz', telegramChatId: '12345' }),
+    });
+    expect(saved.status).toBe(200);
+  }
+
   async function enableWxPusherNotices() {
     const saved = await request('/api/v1/system/notify', {
       method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
@@ -162,6 +184,7 @@ describe('schedule API', () => {
     expect(await reloaded.json()).toMatchObject({ code: 0, days: '7,14' });
     const stored = await testDb.db.query<{ value: string }>('SELECT value FROM app_settings WHERE key=?', ['expire_noticedays']);
     expect(stored[0]!.value).toBe('7,14');
+    expect(await testDb.db.query('SELECT key FROM app_settings WHERE key=?', ['expire_notice_channels'])).toEqual([]);
 
     for (const days of ['7,,14', '3651', '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33', 7]) {
       const invalid = await request('/api/v1/system/expiration-notice', {
@@ -180,6 +203,41 @@ describe('schedule API', () => {
     await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
     const nonAdmin = await request('/api/v1/system/expiration-notice', { headers: { cookie } });
     expect(nonAdmin.status).toBe(403);
+  });
+
+  it('stores per-channel expiration notice settings with defaults, CSRF and validation', async () => {
+    const defaults = await request('/api/v1/system/expiration-notice', { headers: { cookie } });
+    expect(await defaults.json()).toMatchObject({ channels: {
+      webhook: true, wxpusher: true, telegram: true, wecom: true, dingtalk: true, feishu: true,
+    } });
+
+    const channels = { webhook: false, wxpusher: true, telegram: false, wecom: false, dingtalk: true, feishu: false };
+    const saved = await request('/api/v1/system/expiration-notice', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ days: '7', channels }),
+    });
+    expect(await saved.json()).toMatchObject({ code: 0, days: '7', channels });
+
+    const daysOnly = await request('/api/v1/system/expiration-notice', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ days: '14' }),
+    });
+    expect(await daysOnly.json()).toMatchObject({ days: '14', channels });
+
+    const invalid = await request('/api/v1/system/expiration-notice', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ days: '14', channels: { ...channels, telegram: 'false' } }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const reloaded = await request('/api/v1/system/expiration-notice', { headers: { cookie } });
+    expect(await reloaded.json()).toMatchObject({ days: '14', channels });
+
+    await testDb.db.execute('UPDATE app_settings SET value=? WHERE key=?', ['not-json', 'expire_notice_channels']);
+    const corrupted = await request('/api/v1/system/expiration-notice', { headers: { cookie } });
+    expect(await corrupted.json()).toMatchObject({ channels: {
+      webhook: false, wxpusher: false, telegram: false, wecom: false, dingtalk: false, feishu: false,
+    } });
   });
 
   it('creates tasks, exposes cron settings and executes due work', async () => {
@@ -225,12 +283,15 @@ describe('schedule API', () => {
     expect(await (await request('/cron?key=wrong')).text()).toBe('访问密钥错误');
   });
 
-  it('sends WxPusher notifications when a scheduled DNS update fails', async () => {
+  it('keeps scheduled failure notifications independent of expiration channel settings', async () => {
     const saved = await request('/api/v1/system/notify', {
       method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
       body: JSON.stringify({ wxpusherAppToken: 'AT_scheduled-test', wxpusherUids: 'UID_scheduled-test' }),
     });
     expect(saved.status).toBe(200);
+    await setExpirationNoticeChannels({
+      webhook: false, wxpusher: false, telegram: false, wecom: false, dingtalk: false, feishu: false,
+    });
     const domains = await (await request('/api/v1/dns/domains', { headers: { cookie } })).json() as { items: { id: number }[] };
     const now = Math.floor(Date.now() / 1000);
     await testDb.db.execute(
@@ -444,6 +505,29 @@ describe('schedule API', () => {
     expect(wxpusherRequests).toHaveLength(2);
   });
 
+  it('sends expiry reminders only to configured channels enabled by the per-channel policy', async () => {
+    await enableCron();
+    await enableWxPusherNotices();
+    await enableTelegramNotices();
+    await setExpirationNoticeChannels({
+      webhook: false, wxpusher: false, telegram: true, wecom: false, dingtalk: false, feishu: false,
+    });
+    const now = Math.floor(Date.now() / 1000);
+    await setExpirationNoticeConfig('7', 9);
+    await testDb.db.execute('UPDATE dns_domains SET check_status=1, checked_at=?, expires_at=NULL WHERE name=?', [now, 'example.com']);
+    await addDomain('notice.example.com', now + 7 * 86_400 + 60, now, 1);
+    await testDb.db.execute('UPDATE dns_domains SET notice=1 WHERE name=?', ['notice.example.com']);
+
+    await request('/cron?key=test-cron-key');
+
+    expect(wxpusherRequests).toHaveLength(0);
+    expect(telegramRequests).toHaveLength(1);
+    expect(JSON.parse(telegramRequests[0]!)).toMatchObject({ chat_id: '12345' });
+    const logs = await testDb.db.query<{ detail: string }>("SELECT detail FROM audit_logs WHERE action='domain.expiration.notice'");
+    expect(logs[0]!.detail).toContain('telegram:ok:200');
+    expect(logs[0]!.detail).not.toContain('wxpusher');
+  });
+
   it('does not send expiry reminders with empty days or before local 09:00', async () => {
     await enableCron();
     await enableWxPusherNotices();
@@ -502,6 +586,32 @@ describe('schedule API', () => {
     expect(wxpusherRequests).toHaveLength(0);
 
     await enableWxPusherNotices();
+    const notificationSecret = await testDb.db.query<{ value: string }>(
+      'SELECT value FROM app_settings WHERE key=?', ['notification_secrets_cipher'],
+    );
+    await testDb.db.execute('UPDATE app_settings SET value=? WHERE key=?', ['broken-ciphertext', 'notification_secrets_cipher']);
+    await setExpirationNoticeChannels({
+      webhook: false, wxpusher: false, telegram: false, wecom: false, dingtalk: false, feishu: false,
+    });
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(0);
+    domains = await testDb.db.query<{ notice_attempted_at: number | null }>(
+      'SELECT notice_attempted_at FROM dns_domains WHERE name=?', ['notice.example.com'],
+    );
+    expect(domains[0]!.notice_attempted_at).toBeNull();
+
+    await testDb.db.execute('UPDATE app_settings SET value=? WHERE key=?', [notificationSecret[0]!.value, 'notification_secrets_cipher']);
+    await testDb.db.execute('UPDATE app_settings SET value=? WHERE key=?', ['not-json', 'expire_notice_channels']);
+    await request('/cron?key=test-cron-key');
+    expect(wxpusherRequests).toHaveLength(0);
+    domains = await testDb.db.query<{ notice_attempted_at: number | null }>(
+      'SELECT notice_attempted_at FROM dns_domains WHERE name=?', ['notice.example.com'],
+    );
+    expect(domains[0]!.notice_attempted_at).toBeNull();
+
+    await setExpirationNoticeChannels({
+      webhook: false, wxpusher: true, telegram: false, wecom: false, dingtalk: false, feishu: false,
+    });
     await request('/cron?key=test-cron-key');
     expect(wxpusherRequests).toHaveLength(1);
     domains = await testDb.db.query<{ notice_attempted_at: number | null }>(
