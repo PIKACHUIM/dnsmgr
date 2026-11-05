@@ -67,8 +67,8 @@ function App() {
   }, [retry, navigate]);
 
   const onExpired = useCallback((notice: string) => setState({ kind: 'login', notice }), []);
-  const onLoggedOut = useCallback(() => {
-    setState({ kind: 'login', notice: '已退出登录，服务端会话已清除。' });
+  const onLoggedOut = useCallback((notice = '已退出登录，服务端会话已清除。') => {
+    setState({ kind: 'login', notice });
     navigate('/login', true);
   }, [navigate]);
   const onInstalled = useCallback((notice: string) => {

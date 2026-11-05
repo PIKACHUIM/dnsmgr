@@ -16,13 +16,14 @@ import { CronSettings } from './CronSettings';
 import { NotifySettings } from './NotifySettings';
 import { ExpirationNoticeSettings } from './ExpirationNoticeSettings';
 import { DnsFailover } from './DnsFailover';
+import { SetPassword } from './SetPassword';
 
 interface ConsoleProps {
   session: Session;
   path: string;
   navigate: (path: string) => void;
   onExpired: (message: string) => void;
-  onLoggedOut: () => void;
+  onLoggedOut: (notice?: string) => void;
 }
 
 const capabilityNames: Record<Capability, string> = { dns: 'DNS 管理', cert: 'SSL 证书', tasks: '任务调度', executor: '执行器' };
@@ -200,6 +201,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                   : path === '/system/cronset' && level === 2 ? <CronSettings session={session} onExpired={onExpired} />
                     : path === '/system/noticeset' && level === 2 ? <NotifySettings session={session} onExpired={onExpired} />
                       : path === '/domain/expirenotice' && level === 2 ? <ExpirationNoticeSettings session={session} onExpired={onExpired} />
+                    : path === '/setpwd' ? <SetPassword session={session} onExpired={onExpired} onLoggedOut={onLoggedOut} />
                     : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
                   : tunnelMatch && level === 2 ? <CfTunnels session={session} accountId={Number(tunnelMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : aliasMatch ? <DnsAliases session={session} domainId={Number(aliasMatch[1])} navigate={navigate} onExpired={onExpired} />

@@ -27,7 +27,11 @@ const importWorkbookBuffer = Buffer.from(testSheetJs.write(importWorkbook, { boo
 
 test('initialization, login, session restore, responsive navigation and logout', async ({ page, context }, testInfo) => {
   const errors: string[] = [];
+  let passwordChangePayload: unknown;
   page.on('pageerror', (error) => errors.push(error.message));
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/setpwd') passwordChangePayload = request.postDataJSON();
+  });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/install');
   await expect(page.getByRole('heading', { name: '初始化管理系统' })).toBeVisible();
@@ -140,6 +144,46 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.locator('tr').filter({ hasText: 'mail' })).toContainText('上游超时');
   await expect(page.locator('input[type="file"]')).toBeDisabled();
   await expect(page.locator('.notice[role="status"]')).toContainText('状态未知 1 条');
+  await page.getByRole('link', { name: '修改密码' }).click();
+  await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
+  for (const width of [768, 375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const currentPassword = page.getByLabel('当前密码');
+  const newPassword = page.getByLabel('新密码', { exact: true });
+  const confirmPassword = page.getByLabel('确认新密码');
+  const newPasswordValue = '  browser-new-password-2026!  ';
+  await currentPassword.fill('incorrect-password-2026');
+  await newPassword.fill('short');
+  await confirmPassword.fill('short');
+  await page.getByRole('button', { name: '更新密码' }).click();
+  await expect(page.getByRole('alert')).toContainText('12–72 个 UTF-8 字节');
+  expect(passwordChangePayload).toBeUndefined();
+  await newPassword.fill(newPasswordValue);
+  await confirmPassword.fill('different-password-2026!');
+  await page.getByRole('button', { name: '更新密码' }).click();
+  await expect(page.getByRole('alert')).toContainText('两次输入的新密码不一致');
+  expect(passwordChangePayload).toBeUndefined();
+  await confirmPassword.fill(newPasswordValue);
+  await page.getByRole('button', { name: '更新密码' }).click();
+  await expect(page.getByRole('alert')).toContainText('当前密码错误');
+  await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
+  expect(passwordChangePayload).toEqual({ currentPassword: 'incorrect-password-2026', password: newPasswordValue });
+  await currentPassword.fill('browser-test-password-2026');
+  await page.getByRole('button', { name: '更新密码' }).click();
+  await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole('status')).toContainText('密码已更新，请重新登录');
+  expect(passwordChangePayload).toEqual({ currentPassword: 'browser-test-password-2026', password: newPasswordValue });
+  await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
+  await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
+  await page.getByRole('button', { name: '登录控制台' }).click();
+  await expect(page.getByRole('alert')).toContainText('用户名或密码错误');
+  await page.getByLabel('密码', { exact: true }).fill(newPasswordValue);
+  await page.getByRole('button', { name: '登录控制台' }).click();
+  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();

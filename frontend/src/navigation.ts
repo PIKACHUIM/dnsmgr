@@ -51,7 +51,7 @@ export const navigation: NavigationGroup[] = [
   ] },
   { label: '审计与账户', items: [
     { path: '/log', label: '操作日志', scope: '用户操作与变更审计', implemented: true },
-    { path: '/setpwd', label: '修改密码', scope: '当前用户的密码修改' },
+    { path: '/setpwd', label: '修改密码', scope: '当前登录用户修改自己的密码', implemented: true },
   ] },
 ];
 

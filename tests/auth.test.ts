@@ -82,6 +82,18 @@ describe('authentication with a real transactional SQLite database', () => {
     expect((await post('/login', credentials)).status).toBe(401);
     expect((await post('/login', { ...credentials, password: 'new-password-2026!' })).status).toBe(200);
   });
+  it('keeps the current session and password when password change is rejected', async () => {
+    await install();
+    const { cookie, body } = await login();
+    const csrfMissing = await post('/setpwd', { currentPassword: credentials.password, password: 'new-password-2026!' }, { cookie });
+    expect(csrfMissing.status).toBe(403);
+    const wrongCurrentPassword = await post('/setpwd', { currentPassword: 'wrong-password-2026!', password: 'new-password-2026!' }, { cookie, 'X-CSRF-Token': body.csrfToken });
+    expect(wrongCurrentPassword.status).toBe(401);
+    expect(await wrongCurrentPassword.json()).toMatchObject({ reason: 'INVALID_CREDENTIALS' });
+    expect((await request('/api/v1/session', { headers: { cookie } })).status).toBe(200);
+    expect(await testDb.db.query('SELECT token_hash FROM sessions')).toEqual([{ token_hash: await sha256(cookie.split('=')[1]!) }]);
+    expect((await post('/login', credentials)).status).toBe(200);
+  });
   it('keeps newer sessions when an older password change loses its SQL CAS', async () => {
     await install();
     const { cookie, body } = await login();
