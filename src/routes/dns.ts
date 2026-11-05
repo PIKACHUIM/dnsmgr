@@ -56,6 +56,18 @@ interface LegacyDomainRow extends Record<string, unknown> {
   category_name: string | null;
 }
 
+interface LegacyDomainDetailRow extends DomainRow {
+  created_at: number;
+  notice_attempted_at: number | null;
+  owner_id: number;
+  owner_type: string;
+  owner_name: string;
+  owner_config_cipher: string;
+  owner_remark: string | null;
+  owner_created_at: number;
+  owner_updated_at: number;
+}
+
 const LEGACY_PROVIDER_NAMES: Record<string, string> = {
   aliyun: '阿里云', dnspod: '腾讯云', huawei: '华为云', baidu: '百度云', west: '西部数码',
   huoshan: '火山引擎', jdcloud: '京东云', dnsla: 'DNSLA', qingcloud: '青云', bt: '宝塔域名',
@@ -70,6 +82,8 @@ const LEGACY_PROVIDER_ICONS: Record<string, string> = {
   powerdns: 'powerdns.ico', technitium: 'technitium.png', aliyunesa: 'aliyun.png', tencenteo: 'tencent.png',
   dnsmgr: 'logo.png', goedge: 'logo.png', dynv6: 'dynv6.ico',
 };
+const LEGACY_ALIAS_RECORD_TYPES = new Set(['aliyun', 'henet', 'powerdns', 'spaceship']);
+const LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS = new Set(['goedge', 'huoshan']);
 
 function legacyText(body: Record<string, unknown>, key: string, maxLength = 256): string {
   const value = body[key];
@@ -488,6 +502,62 @@ export function dnsRoutes() {
       if (result.changes === 1) imported++;
     }
     await audit(c, 'domain.sync', current.name, `${domains.length} requested, ${imported} imported`);    return c.json({ code: 0, imported, skipped: domains.length - imported });
+  });
+
+  routes.post('/api/domain/:id', requireLegacyApi, async (c) => {
+    requireSql(c);
+    const principal = c.get('principal');
+    const domainId = id(c.req.param('id'));
+    const permission = principal.user.level === 2 ? '' : `AND EXISTS (
+      SELECT 1 FROM permissions p WHERE p.user_id=? AND p.domain_id=CAST(d.id AS TEXT)
+    )`;
+    const args: (string | number)[] = [domainId];
+    if (permission) args.push(principal.user.id);
+    const rows = await db(c).query<LegacyDomainDetailRow>(
+      `SELECT d.*, a.id AS owner_id, a.type AS owner_type, a.name AS owner_name,
+        a.config_cipher AS owner_config_cipher, a.remark AS owner_remark,
+        a.created_at AS owner_created_at, a.updated_at AS owner_updated_at
+       FROM dns_domains d JOIN dns_accounts a ON a.id=d.account_id
+       WHERE d.id=? ${permission}`,
+      args,
+    );
+    const row = rows[0];
+    if (!row) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
+    if (legacyText(c.get('legacyApiBody'), 'loginurl') === '1') {
+      throw new AppError(501, '旧版快捷登录尚未迁移', 'LEGACY_QUICKLOGIN_UNSUPPORTED');
+    }
+    if (c.env.RUNTIME.platform === 'esa' && LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS.has(row.owner_type)) {
+      throw new AppError(501, '当前 ESA 请求预算无法读取此服务商的完整解析线路详情', 'LEGACY_DETAIL_BUDGET_UNSUPPORTED');
+    }
+
+    const owner: AccountRow = {
+      id: row.owner_id, type: row.owner_type, name: row.owner_name,
+      config_cipher: row.owner_config_cipher, remark: row.owner_remark,
+      created_at: row.owner_created_at, updated_at: row.owner_updated_at,
+    };
+    let recordLine: { id: string; name: string; parent: string | null }[];
+    let minTTL: number;
+    try {
+      const provider = await providerFor(c, owner);
+      const target = toDnsDomain(row);
+      recordLine = (await provider.recordLines(target) ?? []).map((line) => ({
+        id: String(line.id), name: line.name, parent: line.parent,
+      }));
+      minTTL = (await provider.minTtl(target)) || 1;
+    } catch (error) { providerError(error); }
+
+    return c.json({ code: 0, data: {
+      id: row.id, aid: row.account_id, cid: row.category_id ?? 0, name: row.name, thirdid: row.third_id,
+      addtime: legacyDateTime(row.created_at), is_hide: row.hidden, is_sso: 0, recordcount: row.record_count,
+      remark: row.remark, is_notice: row.notice, regtime: null,
+      expiretime: legacyDateTime(row.expires_at), checktime: legacyDateTime(row.checked_at),
+      noticetime: legacyDateTime(row.notice_attempted_at), checkstatus: row.check_status,
+      config: {
+        type: row.owner_type, name: legacyProviderName(row.owner_type),
+        alias: LEGACY_ALIAS_RECORD_TYPES.has(row.owner_type),
+      },
+      recordLine, minTTL,
+    } });
   });
 
   routes.post('/api/domain', requireLegacyApi, async (c) => {

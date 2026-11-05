@@ -3,6 +3,7 @@ import { getCookie } from 'hono/cookie';
 import { md5 } from 'js-md5';
 import type { AppEnv, Principal, UserRow } from '../core/types';
 import { AppError } from '../core/errors';
+import { selectStorage } from '../core/database';
 import { assertSameOrigin, input } from '../core/request';
 import { constantTimeEqual, decrypt, sha256 } from './crypto';
 
@@ -85,9 +86,18 @@ export const requireLegacyApi: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!/^\d{1,15}$/.test(uid) || !/^\d{10}$/.test(timestamp) || !/^[a-f0-9]{32}$/.test(signature) || Math.abs(Number(timestamp) - nowSeconds()) > 300) {
     throw new AppError(403, 'API 参数、签名或时间戳无效', 'INVALID_API_SIGNATURE');
   }
-  const users = await c.get('db').query<UserRow>('SELECT * FROM users WHERE id = ?', [Number(uid)]);
-  const user = users[0];
-  if (!user || user.is_api !== 1 || !user.apikey_cipher) throw new AppError(403, 'API 用户无效或未启用', 'INVALID_API_USER');
+  const users = await c.get('db').query<UserRow & { system_initialized: number; storage_identity: string | null }>(
+    `SELECT u.*, s.initialized AS system_initialized, s.storage_identity
+     FROM users u JOIN system_state s ON s.id=1 WHERE u.id=?`, [Number(uid)],
+  );
+  const row = users[0];
+  if (!row) throw new AppError(403, 'API 用户无效或未启用', 'INVALID_API_USER');
+  const { system_initialized, storage_identity, ...userFields } = row;
+  const user = userFields as UserRow;
+  if (system_initialized === 1 && storage_identity !== selectStorage(c.env).identity) {
+    throw new AppError(503, '存储配置与初始化身份不一致，需要显式导出/导入', 'STORAGE_IDENTITY_MISMATCH');
+  }
+  if (user.is_api !== 1 || !user.apikey_cipher) throw new AppError(403, 'API 用户无效或未启用', 'INVALID_API_USER');
   assertActive(user);
   const apikey = await decrypt(user.apikey_cipher, c.env.APP_KEY, 'api-key');
   if (!constantTimeEqual(md5(uid + timestamp + apikey), signature)) throw new AppError(403, 'API 签名错误', 'INVALID_API_SIGNATURE');

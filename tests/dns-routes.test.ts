@@ -200,6 +200,69 @@ describe('DNS account, domain and record API', () => {
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
   });
 
+  it('serves signed domain details and rejects the unmigrated quick-login side effect', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const apiKey = 'detail-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    const before = await testDb.db.query<{ updated_at: number; record_count: number }>(
+      'SELECT updated_at,record_count FROM dns_domains WHERE id=?', [domain!.id],
+    );
+    const fetchCount = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    async function signedDetail(
+      params: Record<string, string> = {}, platform: 'local' | 'esa' = 'local', overrides: Partial<Bindings> = {},
+    ) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const form = new URLSearchParams({ uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`), ...params });
+      return app.request(`https://panel.example/api/domain/${domain!.id}`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+      }, environment({ ...bindings, ...overrides }, platform));
+    }
+
+    const response = await signedDetail({ loginurl: '0' });
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { code: number; data: Record<string, unknown> };
+    expect(payload).toMatchObject({ code: 0, data: {
+      id: domain!.id, aid: expect.any(Number), cid: 0, name: 'example.com', thirdid: 'zone-1',
+      is_hide: 0, is_sso: 0, recordcount: 0, remark: null, is_notice: 0, regtime: null,
+      expiretime: null, checktime: null, noticetime: null, checkstatus: 0,
+      config: { type: 'cloudflare', name: 'Cloudflare', alias: false },
+      recordLine: [{ id: '0', name: '仅 DNS', parent: null }, { id: '1', name: '已代理', parent: null }], minTTL: 1,
+    } });
+    expect(payload.data.addtime).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(JSON.stringify(payload)).not.toContain('token');
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+    expect(await testDb.db.query<{ updated_at: number; record_count: number }>(
+      'SELECT updated_at,record_count FROM dns_domains WHERE id=?', [domain!.id],
+    )).toEqual(before);
+
+    const quickLogin = await signedDetail({ loginurl: '1' });
+    expect(quickLogin.status).toBe(501);
+    expect(await quickLogin.json()).toMatchObject({ reason: 'LEGACY_QUICKLOGIN_UNSUPPORTED' });
+    expect(await testDb.db.query('SELECT token_hash FROM quick_tokens')).toEqual([]);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+    expect((await signedDetail({ loginurl: '10' })).status).toBe(200);
+
+    await testDb.db.execute('UPDATE users SET level=0 WHERE id=1');
+    expect((await signedDetail({})).status).toBe(404);
+    await testDb.db.execute('INSERT INTO permissions(user_id,domain_id) VALUES(1,?)', [String(domain!.id)]);
+    expect((await signedDetail({})).status).toBe(200);
+
+    const mismatch = await signedDetail({}, 'local', { DB_FORMAT: 'map' });
+    expect(mismatch.status).toBe(503);
+    expect(await mismatch.json()).toMatchObject({ reason: 'STORAGE_IDENTITY_MISMATCH' });
+
+    await testDb.db.execute('UPDATE users SET level=2 WHERE id=1');
+    const owner = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domain!.id]);
+    for (const type of ['goedge', 'huoshan']) {
+      await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', [type, owner[0]!.account_id]);
+      const unsupported = await signedDetail({}, 'esa');
+      expect(unsupported.status).toBe(501);
+      expect(await unsupported.json()).toMatchObject({ reason: 'LEGACY_DETAIL_BUDGET_UNSUPPORTED' });
+    }
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+  });
+
   it('rejects unknown providers before touching storage', async () => {
     const { cookie, csrf } = await session();
     expect((await post('/api/v1/dns/accounts', {

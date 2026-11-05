@@ -34,6 +34,7 @@ const pagePatterns = [
   /^\/schedule\/stask(?:\/(add|edit))?$/, /^\/system\/(loginset|noticeset|proxyset|cronset|update)$/,
 ];
 const databasePaths = /^(\/api\/v1\/|\/api\/domain(?:\/|$)|\/cron(?:\?|$)|\/(verifycode|install|login|auth\/totp|logout|setpwd|totp\/))/;
+const legacyDomainApiPaths = /^\/api\/domain(?:\/|$)/;
 
 export function createApp(options: { database?: SqlDatabase; shell?: string } = {}) {
   const app = new Hono<AppEnv>();
@@ -59,7 +60,7 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
       c.set('storage', configured
         ? { config: configured.config, db: configured.db, snapshots: configured.snapshots }
         : { config: selected, db, snapshots: null });
-      await assertStorageIdentity(db, selected);
+      if (!legacyDomainApiPaths.test(path)) await assertStorageIdentity(db, selected);
     }
     await next();
   });
