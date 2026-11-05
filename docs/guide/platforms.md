@@ -41,7 +41,7 @@ npm run build:cloudflare
 | 静态资源目录 | `dist/cloudflare/public/` |
 | 平台配置 | `wrangler.toml` |
 
-部署前需要自行创建 D1 数据库，配置 `DB` binding 并依次执行 `migrations/0001_core.sql`、`migrations/0002_dns.sql`、`migrations/0003_dns_aliases.sql`、`migrations/0004_schedule.sql`、`migrations/0005_failover.sql`、`migrations/0006_domain_expiration_queue.sql`。D1 SQL 模式的 `COORDINATOR_ID` 必须固定。DNS 账户/域名/审计表仅在 `DB_FORMAT=sql` 下可用。若使用对象格式，还需绑定 `KV` 或 `BUCKET`（R2），并固定 `PAYLOAD_STORE_ID`。敏感的 `APP_KEY` 与 `SETUP_TOKEN` 使用 Wrangler secrets，不写入 vars 或客户端 bundle。
+部署前需要自行创建 D1 数据库，配置 `DB` binding 并依次执行 `migrations/0001_core.sql`、`migrations/0002_dns.sql`、`migrations/0003_dns_aliases.sql`、`migrations/0004_schedule.sql`、`migrations/0005_failover.sql`、`migrations/0006_domain_expiration_queue.sql`、`migrations/0007_domain_periodic_expiration_queue.sql`。D1 SQL 模式的 `COORDINATOR_ID` 必须固定。DNS 账户/域名/审计表仅在 `DB_FORMAT=sql` 下可用。若使用对象格式，还需绑定 `KV` 或 `BUCKET`（R2），并固定 `PAYLOAD_STORE_ID`。敏感的 `APP_KEY` 与 `SETUP_TOKEN` 使用 Wrangler secrets，不写入 vars 或客户端 bundle。
 
 例如（命令只设置当前 Cloudflare 项目的 Secret，不会由本地构建执行）：
 

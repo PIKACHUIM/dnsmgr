@@ -10,7 +10,7 @@ import { type SqlDatabase } from '../storage/sql';
 import { nextRunAt, parseRunTime, type ScheduleMode, type ScheduleTaskRow } from '../schedule/tasks';
 import { sendConfiguredNotifications } from '../notify/settings';
 import { executeFailoverDue } from '../schedule/failover';
-import { executeInitialExpirationRefresh } from '../schedule/expiration';
+import { executeInitialExpirationRefresh, executePeriodicExpirationRefresh } from '../schedule/expiration';
 
 interface AccountRow extends Record<string, unknown> {
   id: number;
@@ -220,7 +220,7 @@ export function scheduleRoutes() {
     if (!key || !safeEqual(key, expected)) return c.text('访问密钥错误');
     await executeFailoverDue(c);
     await executeDue(c);
-    await executeInitialExpirationRefresh(c);
+    if (!await executeInitialExpirationRefresh(c)) await executePeriodicExpirationRefresh(c);
     return c.text('success!');
   });
 

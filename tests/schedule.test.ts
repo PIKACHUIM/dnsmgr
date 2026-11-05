@@ -103,6 +103,17 @@ describe('schedule API', () => {
     await testDb.db.execute('INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', ['cron_key', 'test-cron-key', now]);
   }
 
+  async function addDomain(name: string, expiresAt: number, checkedAt: number, checkStatus: number) {
+    const accounts = await testDb.db.query<{ id: number }>('SELECT id FROM dns_accounts LIMIT 1');
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      `INSERT INTO dns_domains
+       (account_id, name, third_id, record_count, expires_at, checked_at, check_status, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [accounts[0]!.id, name, `zone-${name}`, 0, expiresAt, checkedAt, checkStatus, now, now],
+    );
+  }
+
   it('creates tasks, exposes cron settings and executes due work', async () => {
     const settings = await request('/api/v1/system/cron', { headers: { cookie } });
     const config = await settings.json() as { key: string; enabled: boolean };
@@ -212,5 +223,111 @@ describe('schedule API', () => {
       'SELECT expires_at, check_status, checked_at FROM dns_domains WHERE name=?', ['example.com'],
     );
     expect(domains[0]).toEqual({ expires_at: null, check_status: 0, checked_at: null });
+  });
+
+  it('refreshes a due known expiration after the initial queue and only once per cron', async () => {
+    await enableCron();
+    const now = Math.floor(Date.now() / 1000);
+    const priorCheckedAt = now - 86_401;
+    await addDomain('periodic.example.com', now + 10 * 86_400, priorCheckedAt, 1);
+
+    await request('/cron?key=test-cron-key');
+    expect(rdapRequests).toHaveLength(2);
+    const initial = await testDb.db.query<{ check_status: number; expires_at: number | null }>(
+      'SELECT check_status, expires_at FROM dns_domains WHERE name=?', ['example.com'],
+    );
+    const periodicBefore = await testDb.db.query<{ check_status: number; checked_at: number; expires_at: number }>(
+      'SELECT check_status, checked_at, expires_at FROM dns_domains WHERE name=?', ['periodic.example.com'],
+    );
+    expect(initial[0]).toMatchObject({ check_status: 1, expires_at: 1_893_456_000 });
+    expect(periodicBefore[0]).toEqual({ check_status: 1, checked_at: priorCheckedAt, expires_at: now + 10 * 86_400 });
+
+    await request('/cron?key=test-cron-key');
+    expect(rdapRequests).toHaveLength(4);
+    const periodicAfter = await testDb.db.query<{ check_status: number; checked_at: number; expires_at: number }>(
+      'SELECT check_status, checked_at, expires_at FROM dns_domains WHERE name=?', ['periodic.example.com'],
+    );
+    expect(periodicAfter[0]).toMatchObject({ check_status: 1, expires_at: 1_893_456_000 });
+    expect(periodicAfter[0]!.checked_at).toBeGreaterThanOrEqual(now);
+
+    await request('/cron?key=test-cron-key');
+    expect(rdapRequests).toHaveLength(4);
+  });
+
+  it('skips periodic refreshes outside the expiry window or before the daily interval', async () => {
+    await enableCron();
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      'UPDATE dns_domains SET expires_at=?, checked_at=?, check_status=1 WHERE name=?',
+      [now + 31 * 86_400, now - 25 * 3_600, 'example.com'],
+    );
+    await addDomain('past.example.com', now - 6 * 86_400, now - 25 * 3_600, 2);
+    await addDomain('recent.example.com', now + 10 * 86_400, now - 23 * 3_600, 1);
+
+    await request('/cron?key=test-cron-key');
+
+    expect(rdapRequests).toHaveLength(0);
+    const statuses = await testDb.db.query<{ check_status: number; checked_at: number; expires_at: number }>(
+      'SELECT check_status, checked_at, expires_at FROM dns_domains ORDER BY name',
+    );
+    expect(statuses.every((domain) => domain.check_status !== 3)).toBe(true);
+  });
+
+  it('does not duplicate concurrent periodic refreshes', async () => {
+    await enableCron();
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      'UPDATE dns_domains SET expires_at=?, checked_at=?, check_status=1 WHERE name=?',
+      [now + 10 * 86_400, now - 86_401, 'example.com'],
+    );
+
+    const results = await Promise.all([
+      request('/cron?key=test-cron-key'),
+      request('/cron?key=test-cron-key'),
+    ]);
+
+    expect(await Promise.all(results.map((response) => response.text()))).toEqual(['success!', 'success!']);
+    expect(rdapRequests).toHaveLength(2);
+  });
+
+  it('preserves the previous expiry when a periodic lookup fails', async () => {
+    await enableCron();
+    const now = Math.floor(Date.now() / 1000);
+    rdapLookupStatus = 503;
+    await testDb.db.execute(
+      'UPDATE dns_domains SET expires_at=?, checked_at=?, check_status=1 WHERE name=?',
+      [now + 10 * 86_400, now - 86_401, 'example.com'],
+    );
+
+    await request('/cron?key=test-cron-key');
+
+    const domains = await testDb.db.query<{ expires_at: number; check_status: number; checked_at: number }>(
+      'SELECT expires_at, check_status, checked_at FROM dns_domains WHERE name=?', ['example.com'],
+    );
+    expect(domains[0]).toMatchObject({ expires_at: now + 10 * 86_400, check_status: 2 });
+    expect(domains[0]!.checked_at).toBeGreaterThanOrEqual(now);
+    const logs = await testDb.db.query<{ detail: string }>(
+      "SELECT detail FROM audit_logs WHERE action='domain.expiration.auto.failed'",
+    );
+    expect(logs[0]!.detail).toBe('periodic lookup failed');
+  });
+
+  it('restores the prior periodic state when the fetch budget is exhausted', async () => {
+    await enableCron();
+    const now = Math.floor(Date.now() / 1000);
+    const priorCheckedAt = now - 86_401;
+    const priorExpiresAt = now + 10 * 86_400;
+    await testDb.db.execute(
+      'UPDATE dns_domains SET expires_at=?, checked_at=?, check_status=2, updated_at=100 WHERE name=?',
+      [priorExpiresAt, priorCheckedAt, 'example.com'],
+    );
+    bindings.BUDGET!.fetch = async () => { throw new AppError(503, 'budget exhausted', 'REQUEST_BUDGET_EXCEEDED'); };
+
+    await request('/cron?key=test-cron-key');
+
+    const domains = await testDb.db.query<{ expires_at: number; check_status: number; checked_at: number; updated_at: number }>(
+      'SELECT expires_at, check_status, checked_at, updated_at FROM dns_domains WHERE name=?', ['example.com'],
+    );
+    expect(domains[0]).toEqual({ expires_at: priorExpiresAt, check_status: 2, checked_at: priorCheckedAt, updated_at: 100 });
   });
 });
