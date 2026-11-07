@@ -33,7 +33,14 @@ npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlit
 npx wrangler d1 execute dnsmgrui-data --remote --file migrations/0009_login_captcha.sql
 ```
 
-如果表已存在，不要重复执行该 SQL 文件。手动执行 SQL 不会登记到 Wrangler migration history；迁移完成后用表结构查询确认，再部署 Worker：
+如果表已存在，不要重复执行 `0009_login_captcha.sql`。证书订单首阶段需要另行备份 D1，并仅在 `cert_orders` 尚不存在时应用迁移：
+
+```bash
+npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='cert_orders'"
+npx wrangler d1 execute dnsmgrui-data --remote --file migrations/0010_certificates.sql
+```
+
+若订单表已存在，不要重放该建表迁移。它只创建 TS 证书订单/域名表，不会导入旧 PHP MySQL 订单或证书材料。手动执行 SQL 不会登记到 Wrangler migration history；迁移完成后用表结构查询确认，再部署 Worker：
 
 ```bash
 npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='login_captcha_challenges'"

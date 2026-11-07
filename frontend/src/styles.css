@@ -356,6 +356,12 @@ a.button:hover { text-decoration: none; }
 .dns-form input:focus,
 .dns-form select:focus,
 .dns-form textarea:focus { border-color: var(--color-accent); }
+.certificate-security-note { margin: 0; padding: 0 24px 14px; }
+.certificate-import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 24px 24px; }
+.certificate-import-form textarea { min-height: 220px; }
+.certificate-domains { display: flex; flex-wrap: wrap; gap: 5px; max-width: 360px; }
+.certificate-table td:first-child > span,
+.certificate-table td:nth-child(5) > span { display: block; }
 .form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .form-actions span { color: var(--color-muted); font-size: var(--font-xs); }
 .notice-channel-grid { grid-column: 1 / -1; min-width: 0; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
@@ -410,4 +416,6 @@ a.button:hover { text-decoration: none; }
 .totp-unknown p { color: var(--color-muted); font-size: var(--font-sm); }
 @media (max-width: 650px) {
   .totp-unknown { align-items: stretch; flex-direction: column; padding: 16px; }
+  .certificate-security-note { padding: 0 16px 12px; }
+  .certificate-import-form { grid-template-columns: minmax(0, 1fr); padding: 0 16px 16px; }
 }

@@ -30,7 +30,7 @@ export const navigation: NavigationGroup[] = [
   ] },
   { label: 'SSL 证书', adminOnly: true, items: [
     { path: '/cert/certaccount', label: '证书账户', scope: 'ACME 账户与签发配置', capability: 'cert' },
-    { path: '/cert/certorder', label: '证书订单', scope: '证书申请、导入与订单管理', capability: 'cert' },
+    { path: '/cert/certorder', label: '证书订单', scope: '已签发证书导入、订单管理与 PFX 导出', capability: 'cert', implemented: true },
     { path: '/cert/deployaccount', label: '自动部署账户', scope: '证书部署目标与访问凭证', capability: 'executor' },
     { path: '/cert/deploytask', label: '自动部署任务', scope: '证书自动部署与执行记录', capability: 'executor' },
     { path: '/cert/cname', label: 'CNAME 代理', scope: 'DNS 验证的 CNAME 代理配置', capability: 'cert' },

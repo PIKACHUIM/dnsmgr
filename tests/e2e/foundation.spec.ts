@@ -97,6 +97,16 @@ test('initialization, login, session restore, responsive navigation and logout',
     }
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('link', { name: '证书订单' }).click();
+  await expect(page.getByRole('heading', { name: '导入已签发证书' })).toBeVisible();
+  await expect(page.getByLabel('完整证书链 PEM')).toBeVisible();
+  await expect(page.getByLabel('RSA 私钥 PEM')).toBeVisible();
+  await expect(page.getByText('CA 自动申请、续签和部署将在后续阶段接入。')).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 900 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
   await page.getByRole('link', { name: '到期提醒设置' }).click();
   await expect(page.getByRole('heading', { name: '域名到期提醒设置' })).toBeVisible();
   const noticeDays = page.getByLabel('到期提前提醒天数');
