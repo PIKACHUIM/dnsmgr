@@ -34,6 +34,7 @@ const pagePatterns = [
   /^\/account(?:\/(add|edit))?$/, /^\/domain(?:\/(add|category|expirenotice))?$/,
   /^\/record\/(\d+|batchadd|batchedit|search|smartparse)$/,
   /^\/record\/(batchadd|batchedit|log|weight|groups|alias|import)\/\d+$/,
+  /^\/record\/\d+\/(alias|import)$/,
   /^\/cloudflare\/(hostnames|tunnels)\/\d+$/,
   /^\/dmonitor\/(overview|task)(?:\/(add|edit))?$/, /^\/dmonitor\/task\/info\/\d+$/,
   /^\/optimizeip\/(opipset|opiplist)$/, /^\/optimizeip\/opipform\/(add|edit)$/,

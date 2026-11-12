@@ -131,6 +131,7 @@ function legacyProviderName(type: string): string {
 }
 
 const DOMAIN_NAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+const SUBDOMAIN_NAME = /^(?:\*\.)?(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 const RECORD_NAME = /^(?:@|\*|(?:\*\.)?[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*)$/i;
 
 function id(value: string): number {
@@ -847,10 +848,7 @@ export function dnsRoutes() {
     const body = c.get('legacyApiBody');
     const action = legacyText(body, 'action', 20);
     if (!action) throw new AppError(400, '缺少批量操作类型', 'INVALID_BATCH_ACTION');
-    if (action === 'group') {
-      throw new AppError(501, '旧签名解析记录分组尚未迁移', 'LEGACY_RECORD_GROUP_UNSUPPORTED');
-    }
-    if (!['open', 'pause', 'delete', 'remark'].includes(action)) {
+    if (!['open', 'pause', 'delete', 'remark', 'group'].includes(action)) {
       throw new AppError(400, '不支持的批量操作', 'INVALID_BATCH_ACTION');
     }
     let recordinfo: unknown = body.recordinfo;
@@ -859,6 +857,40 @@ export function dnsRoutes() {
     }
     if (!Array.isArray(recordinfo) || recordinfo.length === 0 || recordinfo.length > 100) {
       throw new AppError(400, 'recordinfo 需为 1–100 条记录数组', 'INVALID_LEGACY_API_PARAMETER');
+    }
+    if (action === 'group') {
+      const groupId = legacyText(body, 'groupid', 20);
+      if (groupId && !/^\d{1,20}$/.test(groupId)) throw new AppError(400, '分组编号无效', 'INVALID_GROUP_ID');
+      const recordIds: string[] = [];
+      for (const entry of recordinfo) {
+        const record = entry && typeof entry === 'object' && !Array.isArray(entry)
+          ? entry as Record<string, unknown>
+          : null;
+        const recordId = record && (typeof record.RecordId === 'string' || typeof record.RecordId === 'number')
+          ? String(record.RecordId).trim()
+          : '';
+        if (recordId && /^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) recordIds.push(recordId);
+      }
+      if (recordIds.length === 0) {
+        throw new AppError(400, 'recordinfo 中没有有效的记录编号', 'INVALID_LEGACY_API_PARAMETER');
+      }
+      const provider = await providerFor(c, legacyOwner(domain));
+      if (!provider.changeRecordGroup) {
+        throw new AppError(501, '该 DNS 类型不支持分组', 'DNS_GROUP_UNSUPPORTED');
+      }
+      try {
+        await provider.changeRecordGroup(toDnsDomain(domain), recordIds, groupId);
+      } catch (error) {
+        if (error instanceof DnsError) {
+          throw new AppError(error.status === 400 ? 400 : 502, `修改分组失败，${error.message}`, error.code);
+        }
+        throw error;
+      }
+      await audit(c, 'record.batch.group', domain.name, `${recordIds.length} 条 → 分组 ${groupId || '默认'}`.slice(0, 500));
+      return c.json({
+        code: 0, success: recordIds.length, failed: recordinfo.length - recordIds.length,
+        msg: `成功修改${recordIds.length}条记录的分组`,
+      });
     }
     const remarkRaw = typeof body.remark === 'string' ? body.remark.trim() : '';
     if (remarkRaw.length > 100) throw new AppError(400, '备注最多 100 字', 'INVALID_REMARK');
@@ -1305,7 +1337,11 @@ export function dnsRoutes() {
         provider.recordLines(toDnsDomain(domain)),
         provider.minTtl(toDnsDomain(domain)),
       ]);
-      return c.json({ code: 0, lines, minTtl });
+      return c.json({
+        code: 0, lines, minTtl,
+        groups: typeof provider.listRecordGroups === 'function',
+        weightConfig: typeof provider.listWeightSubdomains === 'function',
+      });
     } catch (error) { providerError(error); }
   });
 
@@ -1487,6 +1523,74 @@ export function dnsRoutes() {
     return c.json({ code: 0, added, failed, errors, results });
   });
 
+  routes.post('/api/v1/dns/domains/:id/records/batch-edit', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 120, 60);
+    const body = await input(c);
+    const action = text(body, 'action', 16).trim();
+    if (action !== 'value' && action !== 'line') throw new AppError(400, '不支持的批量修改类型', 'INVALID_BATCH_EDIT_ACTION');
+    const newType = action === 'value' ? text(body, 'type', 16).trim().toUpperCase() : '';
+    if (newType && !isRecordType(newType)) throw new AppError(400, '不支持的记录类型', 'INVALID_RECORD_TYPE');
+    const newValue = action === 'value' ? text(body, 'value', 2048).trim() : '';
+    if (action === 'value' && !newValue) throw new AppError(400, '记录值不能为空', 'INVALID_RECORD_VALUE');
+    const newLine = action === 'line' ? text(body, 'line', 64).trim() : '';
+    if (action === 'line' && !newLine) throw new AppError(400, '线路不能为空', 'INVALID_LINE');
+    const records = Array.isArray(body.recordinfo) ? body.recordinfo : [];
+    if (records.length === 0 || records.length > 100) {
+      throw new AppError(400, 'recordinfo 需为 1–100 条记录数组', 'INVALID_RECORDS');
+    }
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    const target = toDnsDomain(domain);
+    let success = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (const entry of records) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        failed++;
+        if (errors.length < 5) errors.push('记录格式无效');
+        continue;
+      }
+      const row = entry as Record<string, unknown>;
+      const recordId = typeof row.RecordId === 'string' ? row.RecordId.trim() : '';
+      if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) {
+        failed++;
+        if (errors.length < 5) errors.push('记录编号无效');
+        continue;
+      }
+      let data: DnsRecordInput;
+      try {
+        data = recordInput({
+          name: row.Name,
+          type: action === 'value' ? newType : row.Type,
+          value: action === 'value' ? newValue : row.Value,
+          line: action === 'line' ? newLine : row.Line ?? 'default',
+          ttl: row.TTL ?? 600,
+          mx: row.MX ?? null,
+          weight: row.Weight ?? null,
+          remark: row.Remark ?? null,
+        });
+      } catch (error) {
+        failed++;
+        if (errors.length < 5) errors.push(error instanceof Error ? error.message.slice(0, 200) : '记录格式无效');
+        continue;
+      }
+      try {
+        await provider.updateRecord(target, recordId, data, { clearRemark: data.remark === null });
+        success++;
+      } catch (error) {
+        failed++;
+        if (errors.length < 5) errors.push(error instanceof Error ? error.message.slice(0, 200) : '未知错误');
+      }
+    }
+    if (success > 0) {
+      await audit(c, `record.batch.${action}`, domain.name, `${success} ok, ${failed} failed`.slice(0, 500));
+    }
+    return c.json({ code: 0, success, failed, errors });
+  });
+
   routes.get('/api/v1/dns/domains/:id/record-logs', requireSession, async (c) => {
     requireSql(c);
     const domainId = id(c.req.param('id'));
@@ -1498,6 +1602,115 @@ export function dnsRoutes() {
     try {
       const result = await provider.recordLogs(toDnsDomain(domain), { page, pageSize });
       return c.json({ code: 0, supported: true, ...result });
+    } catch (error) { providerError(error); }
+  });
+
+  routes.get('/api/v1/dns/domains/:id/record-groups', requireSession, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId);
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.listRecordGroups) {
+      throw new AppError(501, '当前服务商不支持解析记录分组', 'DNS_GROUP_UNSUPPORTED');
+    }
+    try {
+      const items = await provider.listRecordGroups(toDnsDomain(domain));
+      return c.json({ code: 0, items });
+    } catch (error) { providerError(error); }
+  });
+
+  routes.post('/api/v1/dns/domains/:id/records/group', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 120, 60);
+    const body = await input(c);
+    const recordIds = recordIdsFrom(body);
+    const raw = body.groupId;
+    if (raw !== undefined && typeof raw !== 'string' && typeof raw !== 'number') {
+      throw new AppError(400, '分组编号无效', 'INVALID_GROUP_ID');
+    }
+    const groupId = raw === undefined || raw === null ? '' : String(raw).trim();
+    if (groupId && !/^\d{1,20}$/.test(groupId)) throw new AppError(400, '分组编号无效', 'INVALID_GROUP_ID');
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.changeRecordGroup) {
+      throw new AppError(501, '当前服务商不支持解析记录分组', 'DNS_GROUP_UNSUPPORTED');
+    }
+    try {
+      await provider.changeRecordGroup(toDnsDomain(domain), recordIds, groupId);
+    } catch (error) { providerError(error); }
+    await audit(c, 'record.group', domain.name, `${recordIds.length} 条记录 → 分组 ${groupId || '默认'}`.slice(0, 500));
+    return c.json({ code: 0, moved: recordIds.length });
+  });
+
+  routes.get('/api/v1/dns/domains/:id/weight-subdomains', requireSession, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId);
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.listWeightSubdomains) {
+      throw new AppError(501, '当前服务商不支持权重配置', 'DNS_WEIGHT_UNSUPPORTED');
+    }
+    const { page, pageSize } = pageParams(c);
+    const keyword = c.req.query('keyword')?.slice(0, 128);
+    try {
+      const result = await provider.listWeightSubdomains(toDnsDomain(domain), { page, pageSize, ...(keyword ? { keyword } : {}) });
+      return c.json({ code: 0, page, pageSize, ...result });
+    } catch (error) { providerError(error); }
+  });
+
+  routes.post('/api/v1/dns/domains/:id/weights', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId, true);
+    await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 120, 60);
+    const body = await input(c);
+    const action = text(body, 'action', 16).trim();
+    if (action !== 'status' && action !== 'update') throw new AppError(400, '不支持的权重操作', 'INVALID_WEIGHT_ACTION');
+    const subdomain = text(body, 'subdomain', 253).trim().toLowerCase();
+    if (!SUBDOMAIN_NAME.test(subdomain)) throw new AppError(400, '子域名格式无效', 'INVALID_SUBDOMAIN');
+    const type = text(body, 'type', 16).trim().toUpperCase();
+    const line = text(body, 'line', 64).trim();
+    const rawEnabled = body.enabled;
+    if (rawEnabled !== undefined && typeof rawEnabled !== 'boolean' && typeof rawEnabled !== 'string' && typeof rawEnabled !== 'number') {
+      throw new AppError(400, '权重开关参数无效', 'INVALID_WEIGHT');
+    }
+    const enabled = !(rawEnabled === false || rawEnabled === 0 || rawEnabled === '0');
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (!provider.setWeightStatus) throw new AppError(501, '当前服务商不支持权重配置', 'DNS_WEIGHT_UNSUPPORTED');
+    const target = toDnsDomain(domain);
+    try {
+      if (type !== 'CNAME') {
+        await provider.setWeightStatus(target, {
+          subdomain, enabled, ...(type ? { type } : {}), ...(line ? { line } : {}),
+        });
+      }
+      let updated = 0;
+      if (action === 'update' && enabled) {
+        if (!provider.updateRecordWeight) throw new AppError(501, '当前服务商不支持修改权重', 'DNS_WEIGHT_UNSUPPORTED');
+        const weights = body.weights && typeof body.weights === 'object' && !Array.isArray(body.weights)
+          ? body.weights as Record<string, unknown>
+          : {};
+        const entries = Object.entries(weights);
+        if (entries.length === 0) throw new AppError(400, '权重参数不能为空', 'INVALID_WEIGHT');
+        if (entries.length > 100) throw new AppError(400, '一次最多修改 100 条权重', 'INVALID_WEIGHT');
+        for (const [recordId, value] of entries) {
+          if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+          const weight = Number(value);
+          if (!Number.isSafeInteger(weight) || weight < 0 || weight > 100) {
+            throw new AppError(400, '权重必须在 0–100 之间', 'INVALID_WEIGHT');
+          }
+          await provider.updateRecordWeight(target, recordId, weight);
+          updated++;
+        }
+      }
+      await audit(c, action === 'status' ? 'record.weight.status' : 'record.weight.update', domain.name,
+        `${subdomain} ${type || '-'} ${line || '-'} ${enabled ? 'on' : 'off'} ${updated} 条`.slice(0, 500));
+      return c.json({ code: 0, updated });
     } catch (error) { providerError(error); }
   });
 

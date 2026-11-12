@@ -5,16 +5,14 @@ interface Domain { id: number; name: string; accountName: string; accountType: s
 
 interface Props {
   session: Session;
-  mode: 'batchadd' | 'batchedit' | 'search' | 'smartparse';
+  mode: 'batchadd' | 'batchedit';
   navigate: (path: string) => void;
   onExpired: (message: string) => void;
 }
 
-const titles: Record<Props['mode'], { title: string; scope: string }> = {
-  batchadd: { title: '批量添加解析', scope: '选择域名后使用解析记录页的文本批量添加' },
-  batchedit: { title: '批量修改解析', scope: '选择域名后使用解析记录页的批量操作' },
-  search: { title: '解析记录搜索', scope: '按域名进入解析记录并筛选主机名' },
-  smartparse: { title: '智能解析', scope: '选择域名后使用解析记录页的文本批量添加' },
+const titles: Record<Props['mode'], { title: string; scope: string; action: string }> = {
+  batchadd: { title: '批量添加解析', scope: '先选择域名，再按行填写主机记录与记录值', action: '批量添加' },
+  batchedit: { title: '批量修改解析', scope: '先选择域名，再勾选记录批量修改类型、记录值或线路', action: '批量修改' },
 };
 
 export function RecordTools({ session, mode, navigate, onExpired }: Props) {
@@ -67,7 +65,10 @@ export function RecordTools({ session, mode, navigate, onExpired }: Props) {
             <tbody>{visible.map((domain) => <tr key={domain.id}>
               <td className="mono">{domain.name}</td>
               <td>{domain.accountName}<span className="value-detail mono">{domain.accountType}</span></td>
-              <td className="row-actions"><button className="button button-secondary" onClick={() => navigate(`/record/${domain.id}`)}>进入解析记录</button></td>
+              <td className="row-actions">
+                <button className="button button-secondary" onClick={() => navigate(`/record/${mode}/${domain.id}`)}>{titles[mode].action}</button>
+                <button className="button button-quiet" onClick={() => navigate(`/record/${domain.id}`)}>解析记录</button>
+              </td>
             </tr>)}</tbody>
           </table></div>}
     </section>

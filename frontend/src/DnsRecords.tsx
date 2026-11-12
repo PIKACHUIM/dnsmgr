@@ -10,7 +10,6 @@ interface Record {
 interface FormState {
   name: string; type: string; value: string; line: string; ttl: string; mx: string; weight: string; remark: string;
 }
-interface VendorLog { time: string | null; action: string }
 interface RecordCheck { status: 'active' | 'mismatch' | 'not_found'; actual: string[]; expected?: string }
 
 const TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'URL', 'REDIRECT_URL', 'FORWARD_URL'];
@@ -32,6 +31,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   const [recordChecks, setRecordChecks] = useState<{ [id: string]: RecordCheck }>({});
   const [checkingRecordId, setCheckingRecordId] = useState<string | null>(null);
   const [lines, setLines] = useState<DnsLine[] | null>(null);
+  const [capabilities, setCapabilities] = useState({ groups: false, weight: false });
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [nameDraft, setNameDraft] = useState('');
@@ -47,9 +47,6 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   const [batchRemark, setBatchRemark] = useState('');
   const [batchText, setBatchText] = useState('');
   const [batchType, setBatchType] = useState('');
-  const [logs, setLogs] = useState<VendorLog[] | null>(null);
-  const [logsSupported, setLogsSupported] = useState(true);
-  const [logsLoading, setLogsLoading] = useState(false);
   const controller = useRef<AbortController | null>(null);
 
   const handle = useCallback((failure: unknown) => {
@@ -66,13 +63,14 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
       const [info, list, lineInfo] = await Promise.all([
         request<{ code: 0; domain: DomainInfo }>(`/api/v1/dns/domains/${domainId}`, { signal }),
         request<{ code: 0; total: number; items: Record[] }>(`/api/v1/dns/domains/${domainId}/records?${params}`, { signal }),
-        request<{ code: 0; lines: DnsLine[] | null; minTtl: number | null }>(`/api/v1/dns/domains/${domainId}/lines`, { signal }),
+        request<{ code: 0; lines: DnsLine[] | null; minTtl: number | null; groups?: boolean; weightConfig?: boolean }>(`/api/v1/dns/domains/${domainId}/lines`, { signal }),
       ]);
       if (signal.aborted) return;
       setDomain(info.domain);
       setRecords(list.items);
       setTotal(list.total);
       setLines(lineInfo.lines);
+      setCapabilities({ groups: lineInfo.groups === true, weight: lineInfo.weightConfig === true });
       setForm((current) => current.line === 'default' && lineInfo.lines?.[0]
         ? { ...current, line: lineInfo.lines[0].id }
         : current);
@@ -221,21 +219,6 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     finally { setBusy(false); }
   }
 
-  async function loadLogs() {
-    if (logsLoading) return;
-    setLogsLoading(true);
-    setError('');
-    const signal = new AbortController();
-    try {
-      const result = await request<{ code: 0; supported: boolean; items: VendorLog[] }>(
-        `/api/v1/dns/domains/${domainId}/record-logs?page=1&pageSize=50`, { signal: signal.signal },
-      );
-      setLogsSupported(result.supported);
-      setLogs(result.items);
-    } catch (failure) { handle(failure); }
-    finally { setLogsLoading(false); }
-  }
-
   function edit(record: Record) {
     setEditing(record.id);
     setForm({
@@ -250,7 +233,13 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   return <>
     <div className="page-tools">
       <a className="button button-secondary" href="/domain" onClick={(event) => { event.preventDefault(); navigate('/domain'); }}>返回域名列表</a>
-      <button className="button button-secondary" type="button" disabled={logsLoading} onClick={() => void loadLogs()}>{logsLoading ? '读取日志…' : '服务商操作日志'}</button>
+      <a className="button button-secondary" href={`/record/batchadd/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/batchadd/${domainId}`); }}>批量添加</a>
+      <a className="button button-secondary" href={`/record/batchedit/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/batchedit/${domainId}`); }}>批量修改</a>
+      <a className="button button-secondary" href={`/record/log/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/log/${domainId}`); }}>操作日志</a>
+      {capabilities.weight && <a className="button button-secondary" href={`/record/weight/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/weight/${domainId}`); }}>权重配置</a>}
+      {capabilities.groups && <a className="button button-secondary" href={`/record/groups/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/groups/${domainId}`); }}>记录分组</a>}
+      <a className="button button-secondary" href="/record/search" onClick={(event) => { event.preventDefault(); navigate('/record/search'); }}>记录值搜索</a>
+      <a className="button button-secondary" href="/record/smartparse" onClick={(event) => { event.preventDefault(); navigate('/record/smartparse'); }}>智能解析</a>
       <a className="button button-secondary" href={`/record/import/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/import/${domainId}`); }}>表格导入</a>
       {domain?.accountType === 'dnspod' && <a className="button button-secondary" href={`/record/${domainId}/alias`} onClick={(event) => { event.preventDefault(); navigate(`/record/${domainId}/alias`); }}>域名别名</a>}
       {domain?.accountType === 'cloudflare' && session.user.level === 2 && <a className="button button-secondary" href={`/cloudflare/hostnames/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/cloudflare/hostnames/${domainId}`); }}>自定义主机名</a>}
@@ -353,17 +342,5 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>批量添加</button></div>
       </form>
     </section>
-    {logs !== null && <section className="panel" aria-labelledby="record-log-title">
-      <div className="panel-heading"><div><h2 id="record-log-title">服务商操作日志</h2></div><span className="panel-meta">最近 50 条</span></div>
-      {!logsSupported ? <div className="panel-empty">当前服务商不提供解析操作日志。</div>
-        : logs.length === 0 ? <div className="panel-empty">服务商没有返回日志。</div>
-          : <div className="table-wrap"><table className="data-table">
-            <thead><tr><th>时间</th><th>操作</th></tr></thead>
-            <tbody>{logs.map((log, index) => <tr key={`${log.time ?? 't'}-${index}`}>
-              <td className="mono">{log.time ?? '—'}</td>
-              <td>{log.action}</td>
-            </tr>)}</tbody>
-          </table></div>}
-    </section>}
   </>;
 }

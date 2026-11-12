@@ -27,6 +27,13 @@ import { Users } from './Users';
 import { ProxySettings } from './ProxySettings';
 import { SystemUpdate } from './SystemUpdate';
 import { RecordTools } from './RecordTools';
+import { RecordBatchAdd } from './RecordBatchAdd';
+import { RecordBatchEdit } from './RecordBatchEdit';
+import { RecordGroup } from './RecordGroup';
+import { RecordWeight } from './RecordWeight';
+import { RecordSearch } from './RecordSearch';
+import { SmartParse } from './SmartParse';
+import { DnsRecordLog } from './DnsRecordLog';
 
 interface ConsoleProps {
   session: Session;
@@ -58,8 +65,12 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   const page = resolvePage(path, level);
   const home = path === '/';
   const recordMatch = /^\/record\/(\d+)$/.exec(path);
-  const legacyRecordMatch = /^\/record\/(?:batchadd|batchedit|log|weight|groups)\/(\d+)$/.exec(path);
-  const recordToolMatch = /^\/record\/(batchadd|batchedit|search|smartparse)$/.exec(path);
+  const batchAddMatch = /^\/record\/batchadd\/(\d+)$/.exec(path);
+  const batchEditMatch = /^\/record\/batchedit\/(\d+)$/.exec(path);
+  const recordLogMatch = /^\/record\/log\/(\d+)$/.exec(path);
+  const weightMatch = /^\/record\/weight\/(\d+)$/.exec(path);
+  const groupMatch = /^\/record\/groups\/(\d+)$/.exec(path);
+  const recordToolMatch = /^\/record\/(batchadd|batchedit)$/.exec(path);
   const importMatch = /^\/record\/import\/(\d+)$/.exec(path);
   const aliasMatch = /^\/record\/(\d+)\/alias$/.exec(path);
   const hostnameMatch = /^\/cloudflare\/hostnames\/(\d+)$/.exec(path);
@@ -230,8 +241,14 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                   : tunnelMatch && level === 2 ? <CfTunnels session={session} accountId={Number(tunnelMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : aliasMatch ? <DnsAliases session={session} domainId={Number(aliasMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : importMatch ? <DnsRecordImport session={session} domainId={Number(importMatch[1])} navigate={navigate} onExpired={onExpired} />
-                    : legacyRecordMatch ? <DnsRecords session={session} domainId={Number(legacyRecordMatch[1])} navigate={navigate} onExpired={onExpired} />
-                    : recordToolMatch ? <RecordTools session={session} mode={recordToolMatch[1] as 'batchadd' | 'batchedit' | 'search' | 'smartparse'} navigate={navigate} onExpired={onExpired} />
+                    : batchAddMatch ? <RecordBatchAdd session={session} domainId={Number(batchAddMatch[1])} navigate={navigate} onExpired={onExpired} />
+                    : batchEditMatch ? <RecordBatchEdit session={session} domainId={Number(batchEditMatch[1])} navigate={navigate} onExpired={onExpired} />
+                    : recordLogMatch ? <DnsRecordLog session={session} domainId={Number(recordLogMatch[1])} navigate={navigate} onExpired={onExpired} />
+                    : weightMatch ? <RecordWeight session={session} domainId={Number(weightMatch[1])} navigate={navigate} onExpired={onExpired} />
+                    : groupMatch ? <RecordGroup session={session} domainId={Number(groupMatch[1])} navigate={navigate} onExpired={onExpired} />
+                    : path === '/record/search' ? <RecordSearch session={session} navigate={navigate} onExpired={onExpired} />
+                    : path === '/record/smartparse' ? <SmartParse session={session} navigate={navigate} onExpired={onExpired} />
+                    : recordToolMatch ? <RecordTools session={session} mode={recordToolMatch[1] as 'batchadd' | 'batchedit'} navigate={navigate} onExpired={onExpired} />
                     : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />
               : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">模块状态 / NOT MIGRATED</span><h2 id="module-state-title">此模块尚未移植</h2><p>已保留「{page.item.label}」的导航入口与访问路径。当前页面只说明迁移边界，不提供业务查询、配置或执行操作。</p><dl className="module-details"><div><dt>当前路径</dt><dd><code>{path}</code></dd></div><div><dt>功能范围</dt><dd>{page.item.scope}</dd></div><div><dt>后端能力</dt><dd>{loading ? '正在读取…' : !bootstrap ? '读取失败，状态未知' : page.item.capability ? `${capabilityNames[page.item.capability]}：${bootstrap.capabilities[page.item.capability] ? '已声明可用，页面仍待移植' : '未开放'}` : '基础阶段未提供此功能的业务接口'}</dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>返回后台首页<Icon name="arrow" /></a><span>不会调用旧接口或产生业务变更。</span></div></section>}
         <footer className="workspace-footer"><span>聚合 DNS 管理系统</span><span>安装 · 认证 · 会话基础 <span className="mono">/ FOUNDATION</span></span></footer>

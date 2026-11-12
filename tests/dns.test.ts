@@ -133,6 +133,46 @@ describe('Aliyun provider', () => {
     await expect(createAliyunProvider({ AccessKeyId: 'ak', AccessKeySecret: 'sk' }, failing).check())
       .rejects.toThrow('Specified access key is not found.');
   });
+
+  it('lists and moves record groups, and manages SLB weights', async () => {
+    const { implementation, calls } = fakeFetch((call) => {
+      const action = new URL(call.url).searchParams.get('Action');
+      if (action === 'DescribeRecordGroups') {
+        return { TotalCount: 2, RecordGroups: { RecordGroup: [
+          { GroupId: 101, GroupName: '生产' },
+          { GroupId: 102, GroupName: '测试', RecordCount: 2 },
+        ] } };
+      }
+      if (action === 'DescribeDNSSLBSubDomains') {
+        return { TotalCount: 1, SlbSubDomains: { SlbSubDomain: [
+          { SubDomain: 'www.example.com', RecordCount: 2, Line: 'default', Type: 'A', Open: true },
+        ] } };
+      }
+      return {};
+    });
+    const provider = createAliyunProvider({ AccessKeyId: 'ak', AccessKeySecret: 'sk' }, implementation);
+    expect(await provider.listRecordGroups!(zone)).toEqual([
+      { id: '101', name: '生产', count: null },
+      { id: '102', name: '测试', count: 2 },
+    ]);
+
+    await provider.changeRecordGroup!(zone, ['1', '2'], '101');
+    const change = new URL(calls[1]!.url);
+    expect(change.searchParams.get('Action')).toBe('ChangeRecordGroup');
+    expect(change.searchParams.get('RecordIdList')).toBe('["1","2"]');
+    expect(change.searchParams.get('GroupId')).toBe('101');
+
+    const page = await provider.listWeightSubdomains!(zone, { page: 1, pageSize: 20, keyword: 'www' });
+    expect(page.items).toEqual([
+      { subdomain: 'www.example.com', rr: 'www', type: 'A', line: 'default', count: 2, enabled: true },
+    ]);
+    expect(new URL(calls[2]!.url).searchParams.get('Rr')).toBe('www');
+
+    await provider.setWeightStatus!(zone, { subdomain: 'www.example.com', enabled: false, type: 'A', line: 'default' });
+    expect(new URL(calls[3]!.url).searchParams.get('Open')).toBe('false');
+    await provider.updateRecordWeight!(zone, '100', 30);
+    expect(new URL(calls[4]!.url).searchParams.get('Weight')).toBe('30');
+  });
 });
 
 describe('DNSPod provider', () => {
@@ -159,6 +199,20 @@ describe('DNSPod provider', () => {
     }), { status: 200 })) as typeof fetch;
     await expect(createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, failing).check())
       .rejects.toBeInstanceOf(DnsError);
+  });
+
+  it('lists record groups and moves records with the pipe-delimited id list', async () => {
+    const { implementation, calls } = fakeFetch((call) => {
+      const action = (call.init.headers as Record<string, string>)['X-TC-Action'];
+      if (action === 'DescribeRecordGroupList') {
+        return { Response: { GroupList: [{ GroupId: 1, GroupName: '默认', RecordCount: 3 }] } };
+      }
+      return { Response: { RequestId: 'req-2' } };
+    });
+    const provider = createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, implementation);
+    expect(await provider.listRecordGroups!(zone)).toEqual([{ id: '1', name: '默认', count: 3 }]);
+    await provider.changeRecordGroup!(zone, ['11', '12'], '');
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({ Domain: 'example.com', GroupId: 0, RecordId: '11|12' });
   });
 });
 

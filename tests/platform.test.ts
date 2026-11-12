@@ -140,7 +140,12 @@ describe('platform routing and isolation', () => {
       }
     } finally { kvDatabase.close(); }
   });
-  it.each(['/login', '/install', '/record/1000', '/cloudflare/tunnels/12', '/cert/certorder'])('serves controlled HTML at %s', async (path) => {
+  it.each([
+    '/login', '/install', '/record/1000', '/cloudflare/tunnels/12', '/cert/certorder',
+    '/record/batchadd', '/record/batchedit', '/record/search', '/record/smartparse',
+    '/record/batchadd/1000', '/record/batchedit/1000', '/record/log/1000',
+    '/record/weight/1000', '/record/groups/1000', '/record/1000/alias', '/record/import/1000',
+  ])('serves controlled HTML at %s', async (path) => {
     const app = createApp({ shell });
     const response = await app.request(`https://panel.example${path}`, {}, environment({}, 'local'));
     expect(response.headers.get('content-type')).toContain('text/html');

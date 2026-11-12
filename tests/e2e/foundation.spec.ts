@@ -25,6 +25,8 @@ testSheetJs.utils.book_append_sheet(importWorkbook, testSheetJs.utils.aoa_to_she
 ]), 'Records');
 const importWorkbookBuffer = Buffer.from(testSheetJs.write(importWorkbook, { bookType: 'xlsx', type: 'buffer' }));
 
+test.describe.configure({ mode: 'serial' });
+
 test('initialization, login, session restore, responsive navigation and logout', async ({ page, context }, testInfo) => {
   const errors: string[] = [];
   let passwordChangePayload: unknown;
@@ -439,5 +441,93 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.locator('img[alt="登录验证码"]')).toBeVisible();
   expect((await context.request.get('/api/v1/session')).status()).toBe(401);
   expect((await context.request.get('/quicklogin')).status()).toBe(404);
+  expect(errors).toEqual([]);
+});
+
+test('record tool pages render and submit against mocked DNS APIs', async ({ page, context }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const login = await context.request.post('/login', { data: { username: 'browser-admin', password: '  browser-new-password-2026!  ' } });
+  expect(login.ok()).toBeTruthy();
+
+  const domain = { id: 1, name: 'example.com', accountName: '阿里云', accountType: 'aliyun', recordCount: 2 };
+  const records = [
+    { id: '11', name: 'www', type: 'A', value: '1.1.1.1', line: 'default', ttl: 600, mx: null, weight: 10, remark: null, status: 1 },
+    { id: '12', name: 'mail', type: 'A', value: '2.2.2.2', line: 'default', ttl: 600, mx: null, weight: 20, remark: null, status: 1 },
+  ];
+  const json = (payload: unknown) => ({ status: 200, contentType: 'application/json', json: payload });
+
+  await page.route('**/api/v1/dns/domains?*', (route) => route.fulfill(json({ code: 0, total: 1, items: [domain] })));
+  await page.route('**/api/v1/dns/domains/1', (route) => route.fulfill(json({ code: 0, domain })));
+  await page.route('**/api/v1/dns/domains/1/lines', (route) => route.fulfill(json({
+    code: 0, lines: [{ id: 'default', name: '默认', parent: null }], minTtl: 600, groups: true, weightConfig: true,
+  })));
+  await page.route('**/api/v1/dns/domains/1/records?*', (route) => route.fulfill(json({ code: 0, total: 2, items: records })));
+  await page.route('**/api/v1/dns/domains/1/weight-subdomains?*', (route) => route.fulfill(json({
+    code: 0, total: 1, items: [{ subdomain: 'www.example.com', rr: 'www', type: 'A', line: 'default', count: 2, enabled: true }],
+  })));
+  await page.route('**/api/v1/dns/domains/1/record-logs?*', (route) => route.fulfill(json({
+    code: 0, supported: true, total: 1, items: [{ time: '2026-01-01 10:00:00', action: '添加解析' }],
+  })));
+  await page.route('**/api/v1/dns/domains/1/record-groups', (route) => route.fulfill(json({
+    code: 0, items: [{ id: '100', name: '生产', count: 2 }],
+  })));
+  await page.route('**/api/v1/dns/domains/1/records/group', (route) => route.fulfill(json({ code: 0, moved: 1 })));
+  await page.route('**/api/v1/dns/domains/1/records/batch-edit', (route) => route.fulfill(json({ code: 0, success: 1, failed: 0, errors: [] })));
+  await page.route('**/api/v1/dns/domains/1/records/batch-add', (route) => route.fulfill(json({
+    code: 0, added: 1, failed: 0, errors: [], results: [{ index: 0, ok: true }],
+  })));
+  await page.route('**/api/v1/dns/domains/1/weights', (route) => route.fulfill(json({ code: 0, updated: 1 })));
+
+  await page.goto('/record/batchadd/1');
+  await expect(page.getByRole('heading', { level: 1, name: '批量添加解析' })).toBeVisible();
+  await page.getByLabel('记录行').fill('www 1.1.1.1');
+  await page.getByRole('button', { name: '批量添加', exact: true }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('批量添加完成：成功 1 条');
+  await expect(page.getByRole('heading', { name: '逐行结果' })).toBeVisible();
+
+  await page.goto('/record/batchedit/1');
+  await expect(page.getByRole('heading', { level: 1, name: '批量修改解析', exact: true })).toBeVisible();
+  await page.getByLabel('选择 www').check();
+  await page.getByLabel('新记录值').fill('3.3.3.3');
+  await page.getByRole('button', { name: '应用修改' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('批量修改完成：成功 1 条');
+
+  await page.goto('/record/log/1');
+  await expect(page.getByRole('heading', { level: 1, name: '服务商操作日志' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '添加解析' })).toBeVisible();
+
+  await page.goto('/record/weight/1');
+  await expect(page.getByRole('heading', { level: 1, name: '权重配置', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'www.example.com' })).toBeVisible();
+  await page.getByRole('button', { name: '设置权重' }).click();
+  await expect(page.getByRole('heading', { name: '设置权重 · www.example.com' })).toBeVisible();
+  await expect(page.getByLabel('www 权重')).toHaveValue('10');
+  await page.getByRole('button', { name: '保存权重' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('已保存权重配置');
+
+  await page.goto('/record/groups/1');
+  await expect(page.getByRole('heading', { level: 1, name: '解析记录分组' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '生产' })).toBeVisible();
+  await page.getByLabel('选择 www').check();
+  await page.getByRole('button', { name: '移动到「生产」' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('已移动 1 条解析记录');
+
+  await page.goto('/record/search');
+  await expect(page.getByRole('heading', { level: 1, name: '按记录值搜索' })).toBeVisible();
+  await page.getByRole('searchbox', { name: '记录值' }).fill('1.1.1.1');
+  await page.getByRole('button', { name: '开始搜索' }).click();
+  await expect(page.getByText('找到 1 条记录')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'example.com', exact: true })).toBeVisible();
+
+  await page.goto('/record/smartparse');
+  await expect(page.getByRole('heading', { level: 1, name: '智能批量添加' })).toBeVisible();
+  await page.getByLabel('解析数据').fill('www 1.1.1.1');
+  await page.getByRole('button', { name: '解析预览' }).click();
+  await expect(page.getByRole('heading', { name: '添加预览' })).toBeVisible();
+  await page.getByRole('button', { name: '确认添加 1 条' }).click();
+  await expect(page.locator('.notice[role="status"]')).toContainText('批量添加完成：成功 1 条');
+
   expect(errors).toEqual([]);
 });

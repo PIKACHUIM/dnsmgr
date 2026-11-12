@@ -1,8 +1,8 @@
 import { asArray, asRecord, num, sendJson } from '../http';
 import { tencentAuthorization } from '../sign';
 import {
-  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordLog, type DnsDomainAlias,
-  type DnsRecordInput, type PageResult, type RecordQuery,
+  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordGroup, type DnsRecordLog,
+  type DnsDomainAlias, type DnsRecordInput, type PageResult, type RecordQuery,
 } from '../types';
 
 export interface DnspodConfig {
@@ -212,6 +212,26 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
         return { time: time || null, action: text };
       });
       return { total: num(data.TotalCount, items.length), items };
+    },
+
+    async listRecordGroups(domain): Promise<DnsRecordGroup[]> {
+      const data = await request('DescribeRecordGroupList', { Domain: domainName(domain) });
+      return asArray(data.GroupList).map((raw) => {
+        const row = asRecord(raw);
+        return {
+          id: String(row.GroupId ?? ''),
+          name: String(row.GroupName ?? ''),
+          count: row.RecordCount === undefined || row.RecordCount === null ? null : num(row.RecordCount),
+        };
+      }).filter((group) => group.id !== '' && group.name);
+    },
+
+    async changeRecordGroup(domain, recordIds, groupId) {
+      if (recordIds.length === 0) throw new DnsError('记录编号不能为空', 400, 'INVALID_RECORD_IDS');
+      if (!/^\d{1,20}$/.test(groupId || '0')) throw new DnsError('分组编号无效', 400, 'INVALID_GROUP_ID');
+      await request('ModifyRecordToGroup', {
+        Domain: domainName(domain), GroupId: Number(groupId || '0'), RecordId: recordIds.join('|'),
+      });
     },
   };
 }

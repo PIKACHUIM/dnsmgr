@@ -77,6 +77,26 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
     const item: NavigationItem = { path, label: '域名别名', scope: 'DNSPod 域名别名与解析共用', capability: 'dns', implemented: true };
     return { item, group: visibleGroups.find((group) => group.items.includes(domainItem))!.label };
   }
+  const fixedRecordPages: Record<string, { label: string; scope: string }> = {
+    '/record/batchadd': { label: '批量添加解析', scope: '选择域名后按行批量添加解析记录' },
+    '/record/batchedit': { label: '批量修改解析', scope: '选择域名后批量修改记录类型、记录值与线路' },
+    '/record/search': { label: '按记录值搜索', scope: '跨域名搜索记录值并批量修改或删除' },
+    '/record/smartparse': { label: '智能批量添加', scope: '解析多域名输入并按域名批量添加记录' },
+  };
+  if (fixedRecordPages[path]) {
+    return { item: { path, ...fixedRecordPages[path]!, capability: 'dns', implemented: true }, group: '工作空间' };
+  }
+  const recordPage = /^\/record\/(batchadd|batchedit|log|weight|groups)\/\d+$/.exec(path);
+  if (recordPage) {
+    const labels: Record<string, { label: string; scope: string }> = {
+      batchadd: { label: '批量添加解析', scope: '按行批量添加解析记录' },
+      batchedit: { label: '批量修改解析', scope: '勾选记录批量修改类型、记录值与线路' },
+      log: { label: '服务商操作日志', scope: '读取服务商侧的解析操作日志' },
+      weight: { label: '权重配置', scope: '阿里云 DNS 线路权重开关与权重值' },
+      groups: { label: '解析记录分组', scope: '阿里云与 DNSPod 的解析记录分组' },
+    };
+    return { item: { path, ...labels[recordPage[1]!]!, capability: 'dns', implemented: true }, group: '工作空间' };
+  }
   if (/^\/record\/import\/\d+$/.test(path)) {
     const domainItem = visibleItems.find((item) => item.path === '/domain')!;
     const item: NavigationItem = { path, label: '导入解析记录', scope: '单域名 Excel 解析记录预览与逐行导入', capability: 'dns', implemented: true };

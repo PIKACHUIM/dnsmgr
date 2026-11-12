@@ -1,8 +1,8 @@
 import { asArray, asRecord, num, sendJson } from '../http';
 import { aliyunSignature } from '../sign';
 import {
-  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordLog,
-  type DnsRecordInput, type PageResult, type RecordQuery,
+  DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord, type DnsRecordGroup, type DnsRecordLog,
+  type DnsRecordInput, type DnsWeightStatusInput, type DnsWeightSubdomain, type PageResult, type RecordQuery,
 } from '../types';
 
 export interface AliyunConfig {
@@ -172,6 +172,61 @@ export function createAliyunProvider(config: AliyunConfig, fetchImpl: typeof fet
         };
       });
       return { total: num(data.TotalCount, items.length), items };
+    },
+
+    async listRecordGroups(domain): Promise<DnsRecordGroup[]> {
+      const data = await request('DescribeRecordGroups', { DomainName: domainOf(domain), PageSize: 100, Lang: 'zh' });
+      return asArray(asRecord(data.RecordGroups ?? {}).RecordGroup).map((raw) => {
+        const row = asRecord(raw);
+        return {
+          id: String(row.GroupId ?? ''),
+          name: String(row.GroupName ?? ''),
+          count: row.RecordCount === undefined || row.RecordCount === null ? null : num(row.RecordCount),
+        };
+      }).filter((group) => group.id && group.name);
+    },
+
+    async changeRecordGroup(domain, recordIds, groupId) {
+      if (recordIds.length === 0) throw new DnsError('记录编号不能为空', 400, 'INVALID_RECORD_IDS');
+      if (!/^\d{1,20}$/.test(groupId)) throw new DnsError('分组编号无效', 400, 'INVALID_GROUP_ID');
+      await request('ChangeRecordGroup', {
+        DomainName: domainOf(domain), RecordIdList: JSON.stringify(recordIds), GroupId: groupId,
+      });
+    },
+
+    async listWeightSubdomains(domain, page): Promise<PageResult<DnsWeightSubdomain>> {
+      const data = await request('DescribeDNSSLBSubDomains', {
+        DomainName: domainOf(domain), PageNumber: page.page, PageSize: page.pageSize,
+        ...(page.keyword ? { Rr: page.keyword } : {}),
+      });
+      const zone = domainOf(domain);
+      const items = asArray(asRecord(data.SlbSubDomains ?? {}).SlbSubDomain).map((raw) => {
+        const row = asRecord(raw);
+        const subdomain = String(row.SubDomain ?? '');
+        const rr = subdomain === zone ? '@' : subdomain.endsWith(`.${zone}`) ? subdomain.slice(0, -zone.length - 1) : subdomain;
+        return {
+          subdomain, rr,
+          type: String(row.Type ?? 'A'),
+          line: String(row.Line ?? 'default'),
+          count: num(row.RecordCount),
+          enabled: row.Open === true || row.Open === 1 || row.Open === 'true' || row.Open === '1',
+        };
+      });
+      return { total: num(data.TotalCount, items.length), items };
+    },
+
+    async setWeightStatus(domain, input: DnsWeightStatusInput) {
+      await request('SetDNSSLBStatus', {
+        DomainName: domainOf(domain),
+        SubDomain: input.subdomain,
+        Open: input.enabled ? 'true' : 'false',
+        ...(input.type ? { Type: input.type } : {}),
+        ...(input.line ? { Line: input.line } : {}),
+      });
+    },
+
+    async updateRecordWeight(_domain, recordId, weight) {
+      await request('UpdateDNSSLBWeight', { RecordId: recordId, Weight: weight });
     },
   };
 }

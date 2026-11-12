@@ -34,6 +34,30 @@ export interface DnsDomainAlias {
   name: string;
 }
 
+export interface DnsRecordGroup {
+  id: string;
+  name: string;
+  count: number | null;
+}
+
+export interface DnsWeightSubdomain {
+  /** 厂商返回的完整子域名，例如 www.example.com */
+  subdomain: string;
+  /** 相对域名的主机记录，例如 www 或 @ */
+  rr: string;
+  type: string;
+  line: string;
+  count: number;
+  enabled: boolean;
+}
+
+export interface DnsWeightStatusInput {
+  subdomain: string;
+  enabled: boolean;
+  type?: string;
+  line?: string;
+}
+
 export interface DnsDomain {
   id: string;
   name: string;
@@ -79,6 +103,13 @@ export interface DnsProvider {
   listDomainAliases?(domain: DnsDomain): Promise<DnsDomainAlias[]>;
   addDomainAlias?(domain: DnsDomain, alias: string): Promise<void>;
   deleteDomainAlias?(domain: DnsDomain, aliasId: string): Promise<void>;
+  /** 可选：厂商侧解析记录分组；未实现表示平台不提供分组 */
+  listRecordGroups?(domain: DnsDomain): Promise<DnsRecordGroup[]>;
+  changeRecordGroup?(domain: DnsDomain, recordIds: string[], groupId: string): Promise<void>;
+  /** 可选：厂商侧权重配置（目前仅阿里云提供） */
+  listWeightSubdomains?(domain: DnsDomain, page: { page: number; pageSize: number; keyword?: string }): Promise<PageResult<DnsWeightSubdomain>>;
+  setWeightStatus?(domain: DnsDomain, input: DnsWeightStatusInput): Promise<void>;
+  updateRecordWeight?(domain: DnsDomain, recordId: string, weight: number): Promise<void>;
 }
 
 export class DnsError extends Error {
