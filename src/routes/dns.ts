@@ -3,8 +3,9 @@ import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { input, text } from '../core/request';
 import { requireSession, requireCsrf, requireAdmin, requireDomain, requireLegacyApi, requireLegacyApiDomain, nowSeconds, consumeRateLimit } from '../security/auth';
-import { decrypt, encrypt } from '../security/crypto';
-import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecordInput } from '../dns/types';
+import { md5 } from 'js-md5';
+import { decrypt, encrypt, randomToken, sha256 } from '../security/crypto';
+import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecord, type DnsRecordInput, type RecordQuery } from '../dns/types';
 import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../dns/registry';
 import { lookupDomainExpiration } from '../dns/expiration';
 import { checkDnsRecordValue, isDnsCheckType, lookupPublicDnsRecords } from '../dns/record-check';
@@ -100,6 +101,9 @@ const LEGACY_ALIAS_RECORD_TYPES = new Set(['aliyun', 'henet', 'powerdns', 'space
 const LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS = new Set(['goedge', 'huoshan']);
 const LEGACY_CLIENT_PAGINATION_PROVIDERS = new Set(['aws', 'baidu', 'henet', 'namesilo', 'powerdns', 'technitium']);
 const LEGACY_RECORD_SORT_COLUMNS = new Set(['Name', 'Type', 'LineName', 'Value', 'UpdateTime']);
+const LEGACY_QUICKLOGIN_SECONDS = 300;
+const LEGACY_RECORD_SORT_MAX = 2000;
+const LEGACY_RECORD_SORT_MAX_ESA = 300;
 
 function legacyText(body: Record<string, unknown>, key: string, maxLength = 256): string {
   const value = body[key];
@@ -306,6 +310,34 @@ function guessRecordType(value: string): string {
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return 'A';
   if (value.includes(':') && /^[0-9a-f:.]+$/i.test(value)) return 'AAAA';
   return 'CNAME';
+}
+
+async function collectLegacyRecords(
+  provider: DnsProvider, domain: DnsDomain,
+  query: Omit<RecordQuery, 'page' | 'pageSize'>, maxRecords: number,
+): Promise<{ items: DnsRecord[]; total: number }> {
+  const pageSize = 100;
+  const items: DnsRecord[] = [];
+  let total = 0;
+  for (let page = 1; page <= Math.ceil(maxRecords / pageSize); page++) {
+    const result = await provider.listRecords(domain, { ...query, page, pageSize });
+    total = result.total;
+    items.push(...result.items);
+    if (result.items.length < pageSize || items.length >= total) break;
+  }
+  return { items, total };
+}
+
+function sortLegacyRecords(records: DnsRecord[], column: string, order: 'asc' | 'desc'): DnsRecord[] {
+  const direction = order === 'desc' ? -1 : 1;
+  const value = (record: DnsRecord) => column === 'Name' ? record.name
+    : column === 'Type' ? record.type
+      : column === 'LineName' ? record.line
+        : column === 'Value' ? record.value
+          : record.updatedAt ?? '';
+  return [...records].sort((first, second) => direction * String(value(first)).localeCompare(
+    String(value(second)), 'zh-CN', { numeric: true, sensitivity: 'base' },
+  ));
 }
 
 export function dnsRoutes() {
@@ -567,8 +599,19 @@ export function dnsRoutes() {
     );
     const row = rows[0];
     if (!row) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
+    let loginurl: string | undefined;
     if (legacyText(c.get('legacyApiBody'), 'loginurl') === '1') {
-      throw new AppError(501, '旧版快捷登录尚未迁移', 'LEGACY_QUICKLOGIN_UNSUPPORTED');
+      const token = randomToken();
+      const now = nowSeconds();
+      await db(c).execute('DELETE FROM quick_tokens WHERE expires_at <= ?', [now]);
+      await db(c).execute(
+        'INSERT INTO quick_tokens (token_hash, user_id, domain_id, expires_at) VALUES (?,?,?,?)',
+        [await sha256(token), principal.user.id, String(row.id), now + LEGACY_QUICKLOGIN_SECONDS],
+      );
+      const timestamp = String(now);
+      const sign = md5(`${c.env.APP_KEY}${row.name}${timestamp}${token}${c.env.APP_KEY}`);
+      const origin = c.env.PUBLIC_ORIGIN ? new URL(c.env.PUBLIC_ORIGIN).origin : new URL(c.req.url).origin;
+      loginurl = `${origin}/quicklogin?${new URLSearchParams({ domain: row.name, timestamp, token, sign })}`;
     }
     if (c.env.RUNTIME.platform === 'esa' && LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS.has(row.owner_type)) {
       throw new AppError(501, '当前 ESA 请求预算无法读取此服务商的完整解析线路详情', 'LEGACY_DETAIL_BUDGET_UNSUPPORTED');
@@ -601,6 +644,7 @@ export function dnsRoutes() {
         alias: LEGACY_ALIAS_RECORD_TYPES.has(row.owner_type),
       },
       recordLine, minTTL,
+      ...(loginurl ? { loginurl } : {}),
     } });
   });
 
@@ -626,9 +670,6 @@ export function dnsRoutes() {
     );
     const domain = rows[0];
     if (!domain) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
-    if (domain.owner_type !== 'cloudflare') {
-      throw new AppError(501, '旧签名记录备注目前仅支持 Cloudflare', 'LEGACY_RECORD_REMARK_UNSUPPORTED');
-    }
 
     const body = c.get('legacyApiBody');
     const recordId = typeof body.recordid === 'string' ? body.recordid.trim() : '';
@@ -683,9 +724,6 @@ export function dnsRoutes() {
     );
     const domain = rows[0];
     if (!domain) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
-    if (domain.owner_type !== 'cloudflare') {
-      throw new AppError(501, '旧签名解析记录删除目前仅支持 Cloudflare', 'LEGACY_RECORD_DELETE_UNSUPPORTED');
-    }
     const body = c.get('legacyApiBody');
     const recordId = typeof body.recordid === 'string' ? body.recordid.trim() : '';
     if (!/^[A-Za-z0-9_.|@:*\\-]{1,255}$/.test(recordId)) {
@@ -717,9 +755,6 @@ export function dnsRoutes() {
     requireSql(c);
     const principal = c.get('principal');
     const domain = c.get('legacyApiDomain') as LegacyRecordDomainRow;
-    if (domain.owner_type !== 'cloudflare') {
-      throw new AppError(501, '旧签名记录状态切换目前仅支持 Cloudflare', 'LEGACY_RECORD_STATUS_UNSUPPORTED');
-    }
     const body = c.get('legacyApiBody');
     const recordId = typeof body.recordid === 'string' ? body.recordid.trim() : '';
     if (!/^[A-Za-z0-9_.|@:*\\-]{1,255}$/.test(recordId)) {
@@ -771,9 +806,6 @@ export function dnsRoutes() {
     );
     const domain = rows[0];
     if (!domain) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
-    if (domain.owner_type !== 'cloudflare') {
-      throw new AppError(501, '旧签名记录更新目前仅支持 Cloudflare', 'LEGACY_RECORD_UPDATE_UNSUPPORTED');
-    }
 
     const body = c.get('legacyApiBody');
     const recordId = typeof body.recordid === 'string' ? body.recordid.trim() : '';
@@ -961,7 +993,7 @@ export function dnsRoutes() {
     if (sortName && !LEGACY_RECORD_SORT_COLUMNS.has(sortName)) {
       throw new AppError(400, '排序字段无效', 'INVALID_LEGACY_API_PARAMETER');
     }
-    if (sortName) throw new AppError(501, '旧签名解析记录排序尚未迁移', 'LEGACY_RECORD_SORT_UNSUPPORTED');
+    const sortOrder = legacyText(body, 'sortOrder', 8).toLowerCase() === 'desc' ? 'desc' : 'asc';
 
     const keyword = legacyText(body, 'keyword', 128);
     const name = legacyText(body, 'subdomain', 128);
@@ -972,11 +1004,9 @@ export function dnsRoutes() {
     if (status && status !== '0' && status !== '1') {
       throw new AppError(400, 'status 格式无效', 'INVALID_LEGACY_API_PARAMETER');
     }
-    if (status && domain.owner_type === 'cloudflare') {
-      throw new AppError(501, 'Cloudflare 旧签名记录列表暂不支持状态筛选', 'LEGACY_RECORD_FILTER_UNSUPPORTED');
-    }
-    if (LEGACY_CLIENT_PAGINATION_PROVIDERS.has(domain.owner_type)) {
-      throw new AppError(501, '旧版客户端分页服务商的完整记录列表尚未迁移', 'LEGACY_RECORD_CLIENT_PAGINATION_UNSUPPORTED');
+    const clientPaged = LEGACY_CLIENT_PAGINATION_PROVIDERS.has(domain.owner_type);
+    if (status === '0' && domain.owner_type === 'cloudflare') {
+      return clientPaged ? c.json([]) : c.json({ total: 0, rows: [] });
     }
     if (c.env.RUNTIME.platform === 'esa' && domain.owner_type === 'qingcloud' && !name) {
       throw new AppError(501, '当前 ESA 请求预算无法读取青云全部主机组记录', 'LEGACY_RECORD_BUDGET_UNSUPPORTED');
@@ -987,26 +1017,36 @@ export function dnsRoutes() {
       config_cipher: domain.owner_config_cipher, remark: domain.owner_remark,
       created_at: domain.owner_created_at, updated_at: domain.owner_updated_at,
     };
-    let records;
+    const provider = await providerFor(c, owner).catch((error) => providerError(error));
+    const target = toDnsDomain(domain);
+    const query: Omit<RecordQuery, 'page' | 'pageSize'> = {
+      ...(keyword ? { keyword } : {}), ...(name ? { name } : {}), ...(value ? { value } : {}),
+      ...(type ? { type } : {}), ...(line ? { line } : {}),
+      ...(status && domain.owner_type !== 'cloudflare' ? { status: status as '0' | '1' } : {}),
+    };
+    let items: DnsRecord[] = [];
+    let total = 0;
     try {
-      const provider = await providerFor(c, owner);
-      records = await provider.listRecords(toDnsDomain(domain), {
-        page: offset / pageSize + 1, pageSize,
-        ...(keyword ? { keyword } : {}), ...(name ? { name } : {}), ...(value ? { value } : {}),
-        ...(type ? { type } : {}), ...(line ? { line } : {}),
-        ...(status ? { status: status as '0' | '1' } : {}),
-      });
+      if (sortName) {
+        const collected = await collectLegacyRecords(
+          provider, target, query,
+          c.env.RUNTIME.platform === 'esa' ? LEGACY_RECORD_SORT_MAX_ESA : LEGACY_RECORD_SORT_MAX,
+        );
+        items = sortLegacyRecords(collected.items, sortName, sortOrder).slice(offset, offset + pageSize);
+        total = collected.total;
+      } else {
+        const result = await provider.listRecords(target, { ...query, page: offset / pageSize + 1, pageSize });
+        items = result.items;
+        total = result.total;
+      }
     } catch (error) { providerError(error); }
-    if (!records) return c.json({ total: 0, rows: [] });
 
-    return c.json({
-      total: Number(records.total),
-      rows: records.items.map((record) => ({
-        RecordId: record.id, Domain: domain.name, Name: record.name, Type: record.type, Value: record.value,
-        Line: record.line, LineName: record.line, TTL: record.ttl, MX: record.mx, Weight: record.weight,
-        Remark: record.remark, Status: record.status, UpdateTime: record.updatedAt,
-      })),
-    });
+    const rows = items.map((record) => ({
+      RecordId: record.id, Domain: domain.name, Name: record.name, Type: record.type, Value: record.value,
+      Line: record.line, LineName: record.line, TTL: record.ttl, MX: record.mx, Weight: record.weight,
+      Remark: record.remark, Status: record.status, UpdateTime: record.updatedAt,
+    }));
+    return clientPaged ? c.json(rows) : c.json({ total: Number(total), rows });
   });
 
   routes.post('/api/domain', requireLegacyApi, async (c) => {

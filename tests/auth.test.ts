@@ -264,6 +264,125 @@ describe('authentication with a real transactional SQLite database', () => {
     expect(rows[0]!.token_hash).toBe(await sha256(cookie.split('=')[1]!));
     expect(JSON.stringify(data)).not.toMatch(/password_hash|apikey_cipher|totp_cipher/);
   });
+  async function seedQuickLoginDomain(): Promise<number> {
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      "INSERT INTO dns_accounts(type,name,config_cipher,created_at,updated_at) VALUES('cloudflare','quick-acc','{}',?,?)",
+      [now, now],
+    );
+    await testDb.db.execute(
+      "INSERT INTO dns_domains(account_id,name,record_count,created_at,updated_at) VALUES(1,'example.com',0,?,?)",
+      [now, now],
+    );
+    const rows = await testDb.db.query<{ id: number }>("SELECT id FROM dns_domains WHERE name='example.com'");
+    return rows[0]!.id;
+  }
+  function quickLoginUrl(
+    token: string, options: { domain?: string; timestamp?: number; sign?: string } = {},
+  ): string {
+    const domain = options.domain ?? 'example.com';
+    const timestamp = String(options.timestamp ?? Math.floor(Date.now() / 1000));
+    const sign = options.sign ?? md5(`${bindings.APP_KEY}${domain}${timestamp}${token}${bindings.APP_KEY}`);
+    return `/quicklogin?${new URLSearchParams({ domain, timestamp, token, sign })}`;
+  }
+  async function grantQuickToken(token: string, domainId: number, expiresIn = 300): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await testDb.db.execute(
+      'INSERT INTO quick_tokens(token_hash,user_id,domain_id,expires_at) VALUES(?,?,?,?)',
+      [await sha256(token), 1, String(domainId), now + expiresIn],
+    );
+  }
+  it('resets a lost authenticator with the setup token and revokes old sessions', async () => {
+    await install();
+    const { cookie } = await login();
+    await testDb.db.execute('UPDATE users SET totp_cipher=? WHERE id=1', [
+      await encrypt('JBSWY3DPEHPK3PXP', bindings.APP_KEY!, 'totp'),
+    ]);
+    expect((await post('/auth/totp/reset', { username: 'admin' })).status).toBe(403);
+    expect((await post('/auth/totp/reset', { username: 'admin' }, { 'X-Setup-Token': 'x'.repeat(32) })).status).toBe(403);
+
+    const reset = await post('/auth/totp/reset', { username: 'admin' }, { 'X-Setup-Token': bindings.SETUP_TOKEN! });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ code: 0 });
+    expect(await testDb.db.query<{ totp_cipher: string | null; permission_version: number }>(
+      'SELECT totp_cipher,permission_version FROM users WHERE id=1',
+    )).toEqual([{ totp_cipher: null, permission_version: 2 }]);
+    expect(await testDb.db.query('SELECT token_hash FROM sessions')).toEqual([]);
+    expect(await testDb.db.query<{ user_id: number; action: string; detail: string }>(
+      "SELECT user_id,action,detail FROM audit_logs WHERE action='auth.totp.reset'",
+    )).toEqual([{ user_id: 1, action: 'auth.totp.reset', detail: 'operator=setup-token' }]);
+    expect((await request('/api/v1/session', { headers: { cookie } })).status).toBe(401);
+
+    const again = await post('/auth/totp/reset', { username: 'admin' }, { 'X-Setup-Token': bindings.SETUP_TOKEN! });
+    expect(again.status).toBe(404);
+    const relogin = await post('/login', credentials);
+    expect(relogin.status).toBe(200);
+    expect(await relogin.json()).toMatchObject({ totpEnabled: false });
+  });
+  it('rejects malformed, tampered and expired quick-login links without consuming the token', async () => {
+    await install();
+    const domainId = await seedQuickLoginDomain();
+    const token = 'a'.repeat(43);
+    await grantQuickToken(token, domainId);
+
+    const malformed = await request('/quicklogin?domain=example.com');
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ reason: 'INVALID_QUICKLOGIN' });
+
+    const expired = await request(quickLoginUrl(token, { timestamp: Math.floor(Date.now() / 1000) - 301 }));
+    expect(expired.status).toBe(400);
+    expect(await expired.json()).toMatchObject({ reason: 'QUICKLOGIN_EXPIRED' });
+
+    const tampered = await request(quickLoginUrl(token, { sign: md5('tampered') }));
+    expect(tampered.status).toBe(403);
+    expect(await tampered.json()).toMatchObject({ reason: 'INVALID_QUICKLOGIN_SIGNATURE' });
+
+    const wrongDomain = await request(quickLoginUrl(token, { domain: 'other.example.com' }));
+    expect(wrongDomain.status).toBe(404);
+    expect(await wrongDomain.json()).toMatchObject({ reason: 'DOMAIN_NOT_FOUND' });
+
+    expect(await testDb.db.query('SELECT token_hash FROM quick_tokens')).toHaveLength(1);
+  });
+  it('consumes a signed one-time quick-login token and opens a session for the bound domain', async () => {
+    await install();
+    const domainId = await seedQuickLoginDomain();
+    const token = 'b'.repeat(43);
+    await grantQuickToken(token, domainId);
+    const url = quickLoginUrl(token);
+
+    const response = await request(url);
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(`/record/${domainId}`);
+    expect(response.headers.get('set-cookie')).toMatch(/HttpOnly/);
+    expect(await testDb.db.query('SELECT token_hash FROM quick_tokens')).toEqual([]);
+    const sessionCookie = response.headers.get('set-cookie')!.split(';')[0]!;
+    const session = await request('/api/v1/session', { headers: { cookie: sessionCookie } });
+    expect(session.status).toBe(200);
+    expect(await session.json()).toMatchObject({ user: { id: 1, username: 'admin' } });
+
+    const replay = await request(url);
+    expect(replay.status).toBe(401);
+    expect(await replay.json()).toMatchObject({ reason: 'INVALID_QUICKLOGIN_TOKEN' });
+  });
+  it('requires the bound domain permission for a non-admin quick-login token', async () => {
+    await install();
+    const domainId = await seedQuickLoginDomain();
+    const token = 'c'.repeat(43);
+    await grantQuickToken(token, domainId);
+    await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
+    const url = quickLoginUrl(token);
+
+    const denied = await request(url);
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ reason: 'PERMISSION_DENIED' });
+    expect(await testDb.db.query('SELECT token_hash FROM quick_tokens')).toHaveLength(1);
+
+    await testDb.db.execute('INSERT INTO permissions(user_id,domain_id) VALUES(1,?)', [String(domainId)]);
+    const allowed = await request(url);
+    expect(allowed.status).toBe(302);
+    expect(allowed.headers.get('location')).toBe(`/record/${domainId}`);
+    expect(await testDb.db.query('SELECT token_hash FROM quick_tokens')).toEqual([]);
+  });
   it('rejects a cross-origin login and csrf-less logout, then revokes the authenticated session', async () => {
     await install();
     expect((await post('/login', credentials, { Origin: 'https://evil.example' })).status).toBe(403);

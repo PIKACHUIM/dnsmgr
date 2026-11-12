@@ -152,12 +152,19 @@ describe('platform routing and isolation', () => {
     expect(await response.text()).toBe(shell);
     expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
-  it.each(['/api/unknown', '/quicklogin', '/unknown', '/app/sql/install.sql', '/.env', '/config/database.php', '/assets/unknown.js'])('never swallows %s with a SPA fallback', async (path) => {
+  it.each(['/api/unknown', '/unknown', '/app/sql/install.sql', '/.env', '/config/database.php', '/assets/unknown.js'])('never swallows %s with a SPA fallback', async (path) => {
     const app = createApp({ shell });
     const response = await app.request(`https://panel.example${path}`, {}, environment({}, 'local'));
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toContain('application/json');
     expect(await response.text()).not.toBe(shell);
+  });
+  it('fails closed for /quicklogin without storage instead of serving the SPA shell', async () => {
+    const app = createApp({ shell });
+    const response = await app.request('https://panel.example/quicklogin', {}, environment({}, 'local'));
+    expect(response.status).toBe(503);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(await response.json()).toMatchObject({ code: -1, reason: 'STORAGE_NOT_CONFIGURED' });
   });
   it('fails closed for /qqbot/webhook without storage instead of serving the SPA shell', async () => {
     const app = createApp({ shell });

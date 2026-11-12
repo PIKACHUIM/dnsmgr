@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { compare, hash } from 'bcryptjs';
+import { md5 } from 'js-md5';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import type { Context } from 'hono';
 import type { AppEnv, UserRow } from '../core/types';
@@ -19,6 +20,8 @@ interface ChallengeRow extends Record<string, unknown> {
 }
 
 const sessionSeconds = 12 * 60 * 60;
+const quickLoginSeconds = 300;
+const quickLoginDomain = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 const expiredChallengePruneLimit = 100;
 const loginCaptchaCookie = 'login_captcha';
 const loginCaptchaSeconds = 1800;
@@ -433,6 +436,66 @@ export function authRoutes() {
     });
   });
 
+  routes.get('/quicklogin', async (c) => {
+    if (c.get('storage').config.format !== 'sql') {
+      throw new AppError(501, '当前存储格式尚未支持快捷登录', 'STORAGE_FORMAT_UNSUPPORTED');
+    }
+    const domain = (c.req.query('domain') ?? '').trim();
+    const timestamp = c.req.query('timestamp') ?? '';
+    const token = c.req.query('token') ?? '';
+    const sign = (c.req.query('sign') ?? '').toLowerCase();
+    if (!quickLoginDomain.test(domain) || !/^\d{10}$/.test(timestamp)
+      || !/^[A-Za-z0-9_-]{43}$/.test(token) || !/^[a-f0-9]{32}$/.test(sign)) {
+      throw new AppError(400, '快捷登录参数无效', 'INVALID_QUICKLOGIN');
+    }
+    const now = nowSeconds();
+    const stamp = Number(timestamp);
+    if (!Number.isSafeInteger(stamp) || Math.abs(now - stamp) > quickLoginSeconds) {
+      throw new AppError(400, '快捷登录链接已过期', 'QUICKLOGIN_EXPIRED');
+    }
+    const expected = md5(`${c.env.APP_KEY}${domain}${timestamp}${token}${c.env.APP_KEY}`);
+    if (!constantTimeEqual(expected, sign)) throw new AppError(403, '快捷登录签名无效', 'INVALID_QUICKLOGIN_SIGNATURE');
+    const ip = trustedClientIp(c);
+    if (ip) await consumeRateLimit(c, `quicklogin:${ip}`, 60, 60);
+
+    const tokenHash = await sha256(token);
+    const rows = await c.get('db').query<UserRow & { quick_domain_id: string }>(
+      `SELECT u.*, qt.domain_id AS quick_domain_id FROM quick_tokens qt JOIN users u ON u.id=qt.user_id
+       WHERE qt.token_hash=? AND qt.expires_at>?`, [tokenHash, now],
+    );
+    const user = rows[0];
+    if (!user) throw new AppError(401, '快捷登录令牌无效或已使用', 'INVALID_QUICKLOGIN_TOKEN');
+    const targetId = /^\d{1,10}$/.test(user.quick_domain_id) ? Number(user.quick_domain_id) : 0;
+    const domains = targetId > 0
+      ? await c.get('db').query<{ id: number; name: string }>('SELECT id,name FROM dns_domains WHERE id=?', [targetId])
+      : [];
+    const target = domains[0];
+    if (!target || target.name !== domain) throw new AppError(404, '域名不存在', 'DOMAIN_NOT_FOUND');
+    if (user.level !== 2) {
+      const permission = await c.get('db').query(
+        'SELECT 1 FROM permissions WHERE user_id=? AND domain_id=?', [user.id, user.quick_domain_id],
+      );
+      if (!permission[0]) throw new AppError(403, '没有该域名的访问权限', 'PERMISSION_DENIED');
+    }
+    assertActive(user);
+    const consumed = await c.get('db').execute(
+      'DELETE FROM quick_tokens WHERE token_hash=? AND expires_at>?', [tokenHash, now],
+    );
+    if (consumed.changes !== 1) throw new AppError(401, '快捷登录令牌无效或已使用', 'INVALID_QUICKLOGIN_TOKEN');
+
+    const sessionToken = randomToken();
+    const csrf = await csrfToken(sessionToken);
+    const created = await c.get('db').execute(
+      `INSERT INTO sessions (token_hash, user_id, permission_version, csrf_hash, expires_at, created_at)
+       SELECT ?, id, permission_version, ?, ?, ? FROM users
+       WHERE id=? AND status=1 AND permission_version=? AND (expires_at IS NULL OR expires_at>?)`,
+      [await sha256(sessionToken), await sha256(csrf), now + sessionSeconds, now, user.id, user.permission_version, now],
+    );
+    if (created.changes !== 1) throw new AppError(401, '账户状态已变更，请重新登录', 'SESSION_REVOKED');
+    setSessionCookie(c, sessionToken);
+    return c.redirect(`/record/${target.id}`);
+  });
+
   routes.post('/logout', requireSession, requireCsrf, async (c) => {
     await c.get('db').execute('DELETE FROM sessions WHERE token_hash = ?', [c.get('principal').sessionHash!]);
     deleteCookie(c, 'user_token', { path: '/', secure: new URL(c.env.PUBLIC_ORIGIN ?? c.req.url).protocol === 'https:', sameSite: 'Strict' });
@@ -494,6 +557,42 @@ export function authRoutes() {
     if (result[0]?.changes !== 1) throw new AppError(401, '动态口令已使用，请等待下一个口令', 'TOTP_REPLAY');
     if (result[1]?.changes !== 1) throw new AppError(409, '账户已变更，请重新登录', 'CONCURRENT_CHANGE');
     return c.json({ code: 0, msg: '动态口令已关闭，请重新登录' });
+  });
+
+  routes.post('/auth/totp/reset', async (c) => {
+    assertSameOrigin(c);
+    if (!c.env.SETUP_TOKEN || c.env.SETUP_TOKEN.length < 32) {
+      throw new AppError(503, '需要配置不少于 32 字符的 SETUP_TOKEN', 'SETUP_NOT_CONFIGURED');
+    }
+    if (!constantTimeEqual(c.req.header('X-Setup-Token') ?? '', c.env.SETUP_TOKEN)) {
+      throw new AppError(403, '重置授权无效', 'INVALID_SETUP_TOKEN');
+    }
+    const ip = trustedClientIp(c);
+    if (ip) await consumeRateLimit(c, `totp-reset:${ip}`, 10, 60);
+    const body = await input(c);
+    const username = text(body, 'username', 64).trim();
+    if (!/^[\p{L}\p{N}_.@-]{3,64}$/u.test(username)) {
+      throw new AppError(400, '用户名需为 3–64 位字母、数字或 _.@-', 'INVALID_USERNAME');
+    }
+    const now = nowSeconds();
+    const results = await c.get('db').batch([
+      {
+        sql: `UPDATE users SET totp_cipher=NULL, permission_version=permission_version+1
+              WHERE username=? AND totp_cipher IS NOT NULL RETURNING id`,
+        args: [username],
+      },
+      { sql: 'DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE username=?)', args: [username] },
+      { sql: 'DELETE FROM totp_counters WHERE user_id=(SELECT id FROM users WHERE username=?)', args: [username] },
+    ]);
+    const row = results[0]?.rows[0] as { id?: number } | undefined;
+    if (results[0]?.changes !== 1 || !row?.id) {
+      throw new AppError(404, '用户不存在或未启用动态口令', 'TOTP_NOT_ENABLED');
+    }
+    await c.get('db').execute(
+      'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
+      [row.id, 'auth.totp.reset', username, 'operator=setup-token', now],
+    );
+    return c.json({ code: 0, msg: '动态口令已重置，请使用密码重新登录并重新绑定' });
   });
 
   return routes;

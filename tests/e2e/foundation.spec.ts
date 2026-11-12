@@ -440,7 +440,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.getByLabel('图形验证码')).toBeVisible();
   await expect(page.locator('img[alt="登录验证码"]')).toBeVisible();
   expect((await context.request.get('/api/v1/session')).status()).toBe(401);
-  expect((await context.request.get('/quicklogin')).status()).toBe(404);
+  expect((await context.request.get('/quicklogin')).status()).toBe(400);
   expect(errors).toEqual([]);
 });
 

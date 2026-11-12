@@ -42,7 +42,7 @@ const pagePatterns = [
   /^\/cert\/(account|order|deploy)\/(add|edit|import|show|download)$/,
   /^\/schedule\/stask(?:\/(add|edit))?$/, /^\/system\/(loginset|noticeset|proxyset|cronset|update)$/,
 ];
-const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)|\/cron(?:\?|$)|\/qqbot\/webhook(?:\?|$)|\/(verifycode|install|login|auth\/totp|logout|setpwd|totp\/))/;
+const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)|\/cron(?:\?|$)|\/qqbot\/webhook(?:\?|$)|\/(verifycode|install|login|quicklogin|auth\/totp|logout|setpwd|totp\/))/;
 const legacySignedApiPaths = /^\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)/;
 const certificateSessionPaths = /^\/api\/v1\/cert(?:\/|$)/;
 
