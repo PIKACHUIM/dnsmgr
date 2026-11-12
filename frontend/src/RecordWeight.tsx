@@ -107,7 +107,13 @@ export function RecordWeight({ session, domainId, navigate, onExpired }: Props) 
       const result = await request<{ code: 0; total: number; items: RecordRow[] }>(
         `/api/v1/dns/domains/${domainId}/records?page=1&pageSize=100&name=${encodeURIComponent(row.rr)}`, { signal: controller.signal },
       );
-      const matched = result.items.filter((record) => record.name === row.rr && record.line === row.line);
+      let matched = result.items.filter((record) => record.name === row.rr && record.line === row.line);
+      if (matched.length === 0) {
+        const all = await request<{ code: 0; total: number; items: RecordRow[] }>(
+          `/api/v1/dns/domains/${domainId}/records?page=1&pageSize=100`, { signal: controller.signal },
+        );
+        matched = all.items.filter((record) => record.name === row.rr && record.line === row.line);
+      }
       setWeightRecords(matched);
       setWeights(Object.fromEntries(matched.map((record) => [record.id, String(record.weight ?? 0)])));
       setEnabled(row.type === 'CNAME' ? true : row.enabled);
