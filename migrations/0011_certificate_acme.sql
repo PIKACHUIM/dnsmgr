@@ -13,7 +13,8 @@ CREATE TABLE cert_orders_v2 (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-INSERT INTO cert_orders_v2 SELECT * FROM cert_orders;
+INSERT INTO cert_orders_v2 (id,source,status,issuer,key_type,key_size,issued_at,expires_at,fullchain_cipher,private_key_cipher,created_by,created_at,updated_at)
+SELECT id,source,status,issuer,key_type,key_size,issued_at,expires_at,fullchain_cipher,private_key_cipher,created_by,created_at,updated_at FROM cert_orders;
 
 CREATE TABLE cert_order_domains_v2 (
   order_id INTEGER NOT NULL REFERENCES cert_orders_v2(id) ON DELETE CASCADE,
@@ -22,7 +23,8 @@ CREATE TABLE cert_order_domains_v2 (
   PRIMARY KEY(order_id, domain),
   UNIQUE(order_id, sort)
 );
-INSERT INTO cert_order_domains_v2 SELECT * FROM cert_order_domains;
+INSERT INTO cert_order_domains_v2 (order_id,domain,sort)
+SELECT order_id,domain,sort FROM cert_order_domains;
 
 DROP TABLE cert_order_domains;
 DROP TABLE cert_orders;

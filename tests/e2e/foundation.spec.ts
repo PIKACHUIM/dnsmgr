@@ -113,6 +113,11 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.getByRole('button', { name: '创建 ACME 账户' })).toBeEnabled();
   await page.getByLabel('CA 环境').selectOption('staging');
   await expect(page.getByRole('button', { name: '创建 ACME 账户' })).toBeEnabled();
+  await page.getByRole('link', { name: '证书账户' }).click();
+  await expect(page.getByRole('heading', { name: 'ACME 账户' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '导入已签发证书' })).toHaveCount(0);
+  await page.getByRole('link', { name: '证书订单' }).click();
+  await expect(page.getByRole('heading', { name: '导入已签发证书' })).toBeVisible();
   await page.setViewportSize({ width: 375, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.setViewportSize({ width: 1440, height: 1000 });

@@ -42,16 +42,17 @@ npx wrangler d1 execute dnsmgrui-data --remote --file migrations/0010_certificat
 
 若订单表已存在，不要重放该建表迁移。它只创建 TS 证书订单/域名表，不会导入旧 PHP MySQL 订单或证书材料。手动执行 SQL 不会登记到 Wrangler migration history；迁移完成后用表结构查询确认，再部署 Worker：
 
-ACME DNS-01 签发需要再次备份 D1，并应用 `0011_certificate_acme.sql`。该迁移会重建 `cert_orders` / `cert_order_domains` 以放宽 `source` 约束并保留外键，同时新增 `cert_acme_accounts`、`cert_acme_orders`；请在维护窗口内执行，确认重建后的行数与备份一致：
+ACME DNS-01 签发需要再次备份 D1，并应用 `0011_certificate_acme.sql`。该迁移会重建 `cert_orders` / `cert_order_domains` 以放宽 `source` 约束并保留外键，同时新增 `cert_acme_accounts`、`cert_acme_orders`；请在维护窗口内执行。它不能逐语句回滚，失败时只能从备份恢复，因此先记录行数，迁移后再核对：
 
 ```bash
 npx wrangler d1 export dnsmgrui-data --remote --output backup-before-acme-$(date +%Y%m%d-%H%M).sql
+npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT (SELECT COUNT(*) FROM cert_orders) AS orders, (SELECT COUNT(*) FROM cert_order_domains) AS domains"
 npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='cert_acme_accounts'"
 npx wrangler d1 execute dnsmgrui-data --remote --file migrations/0011_certificate_acme.sql
-npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT COUNT(*) FROM cert_orders"
+npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT (SELECT COUNT(*) FROM cert_orders) AS orders, (SELECT COUNT(*) FROM cert_order_domains) AS domains"
 ```
 
-`cert_acme_accounts` 已存在时不要重放 `0011`。该版本不会自动续签或部署证书；生产 CA 注册必须由管理员在界面显式确认，staging 默认用于验证。每次推进签发任务只执行一个 CA/DNS 操作，结果未知时先核对再重试。
+`cert_acme_accounts` 已存在时不要重放 `0011`。该版本不会自动续签或部署证书；生产 CA 注册必须由管理员在界面显式确认，staging 默认用于验证。每次推进签发任务只执行一个 CA/DNS 操作，结果未知时先核对再重试。证书账户页可单独注册 ACME 账户，证书订单页负责签发、导入与 PFX 导出。
 
 ```bash
 npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='login_captcha_challenges'"

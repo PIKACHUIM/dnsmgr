@@ -26,7 +26,7 @@ interface AcmeIssuance {
   requestInFlight: boolean; needsDnsCleanup: boolean; createdAt: number; updatedAt: number;
 }
 interface DomainResult { code: 0; items: DnsZone[]; page: number; pageSize: number; total: number }
-interface Props { session: Session; onExpired: (message: string) => void }
+interface Props { session: Session; onExpired: (message: string) => void; section?: 'all' | 'accounts' }
 
 function date(value: number): string {
   return new Date(value * 1000).toLocaleString();
@@ -71,7 +71,8 @@ function issuanceStatus(status: string): string {
   return names[status] ?? status;
 }
 
-export function CertificateOrders({ session, onExpired }: Props) {
+export function CertificateOrders({ session, onExpired, section = 'all' }: Props) {
+  const accountsOnly = section === 'accounts';
   const [items, setItems] = useState<CertificateOrder[]>([]);
   const [accounts, setAccounts] = useState<AcmeAccount[]>([]);
   const [dnsZones, setDnsZones] = useState<DnsZone[]>([]);
@@ -270,6 +271,7 @@ export function CertificateOrders({ session, onExpired }: Props) {
         </div>
       </article>)}</div>}
     </section>
+    {!accountsOnly && <>
     <section className="panel" aria-labelledby="acme-issuance-title">
       <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2></div><span className="panel-meta">DNS-01 · Cloudflare</span></div>
       <p className="form-hint certificate-security-note">每个订单分步推进，自动写入并清理本系统创建的 TXT challenge。CA 请求结果未知时必须先核对状态，不会自动重试。</p>
@@ -328,5 +330,6 @@ export function CertificateOrders({ session, onExpired }: Props) {
           </table></div>}
       <div className="panel-footnote">PFX 遵循旧接口兼容密码 123456。导出操作会写审计；审计未确认时不会返回证书材料。</div>
     </section>
+    </>}
   </>;
 }
