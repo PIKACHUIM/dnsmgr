@@ -19,4 +19,8 @@ binding = "DB"
 database_name = "dnsmgrui-data"
 database_id = "7e483cab-5039-4665-b181-f1377f4265a6"
 
+# 需先在 Cloudflare 账户启用 Email Routing；未启用时部署会失败。
+[[send_email]]
+name = "EMAIL"
+
 # Keep APP_KEY and SETUP_TOKEN in platform secrets, not in this file.

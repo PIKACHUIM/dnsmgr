@@ -40,4 +40,12 @@ Makers Node Cloud Function 尚不能直接使用 Makers 原生 Edge Function KV 
 
 Cloudflare D1 协调模式要求配置稳定的 `COORDINATOR_ID`；对象模式还要给出稳定的 `PAYLOAD_STORE_ID`。ESA 的 payload ID 默认绑定 `ESA_KV_NAMESPACE`。Makers Blob 使用 `BLOB_NAMESPACE`；Cloudflare R2 使用 `BUCKET` binding。配置改变被认为指向不同数据集。
 
-现在已实现 staging 写入、内容哈希校验和 SQL 活动指针提交基础协议；尚未完成跨存储恢复命令、孤立对象回收、活动版本回滚工具和受验证的格式导入导出工具。不得用手动改环境变量冒充迁移；不得在真实平台未经 smoke test 就接管生产数据。
+现在已实现 staging 写入、内容哈希校验和 SQL 活动指针提交基础协议，并提供管理员维护接口：
+
+- `GET /api/v1/system/storage/versions?namespace=`：列出命名空间版本、格式与当前活动版本。
+- `GET /api/v1/system/storage/export?namespace=&version=`：导出单一版本的逻辑数据、来源格式与 `dataSha256`；不返回活动指针以外的内部对象键。
+- `POST /api/v1/system/storage/import`：校验 `dataSha256` 后以当前存储格式写入为新版本，可用于跨驱动/格式迁移；`expectedVersion` 必须显式传入（无历史时传 `null`），冲突返回 409。
+- `POST /api/v1/system/storage/restore`：读取指定历史版本并以新版本重新发布，保留不可变历史，不会直接改写旧对象。
+- `POST /api/v1/system/storage/prune`：保留最近 N 个版本及当前活动版本，删除其余版本记录；SQL 对象存储同时删除不再被保留版本引用的快照/实体对象，KV、R2、Blob 与 ESA EdgeKV 只删除版本记录，不虚构平台删除 API。
+
+所有接口要求管理员会话，写操作还要求 CSRF，并写入审计。导入包上限 4 MB；哈希不符按存储损坏拒绝，不会部分导入。仍不得用手动改环境变量冒充迁移；不得在真实平台未经 smoke test 就接管生产数据。

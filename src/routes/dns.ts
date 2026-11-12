@@ -599,20 +599,6 @@ export function dnsRoutes() {
     );
     const row = rows[0];
     if (!row) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
-    let loginurl: string | undefined;
-    if (legacyText(c.get('legacyApiBody'), 'loginurl') === '1') {
-      const token = randomToken();
-      const now = nowSeconds();
-      await db(c).execute('DELETE FROM quick_tokens WHERE expires_at <= ?', [now]);
-      await db(c).execute(
-        'INSERT INTO quick_tokens (token_hash, user_id, domain_id, expires_at) VALUES (?,?,?,?)',
-        [await sha256(token), principal.user.id, String(row.id), now + LEGACY_QUICKLOGIN_SECONDS],
-      );
-      const timestamp = String(now);
-      const sign = md5(`${c.env.APP_KEY}${row.name}${timestamp}${token}${c.env.APP_KEY}`);
-      const origin = c.env.PUBLIC_ORIGIN ? new URL(c.env.PUBLIC_ORIGIN).origin : new URL(c.req.url).origin;
-      loginurl = `${origin}/quicklogin?${new URLSearchParams({ domain: row.name, timestamp, token, sign })}`;
-    }
     if (c.env.RUNTIME.platform === 'esa' && LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS.has(row.owner_type)) {
       throw new AppError(501, '当前 ESA 请求预算无法读取此服务商的完整解析线路详情', 'LEGACY_DETAIL_BUDGET_UNSUPPORTED');
     }
@@ -632,6 +618,21 @@ export function dnsRoutes() {
       }));
       minTTL = (await provider.minTtl(target)) || 1;
     } catch (error) { providerError(error); }
+
+    let loginurl: string | undefined;
+    if (legacyText(c.get('legacyApiBody'), 'loginurl') === '1') {
+      const token = randomToken();
+      const now = nowSeconds();
+      await db(c).execute('DELETE FROM quick_tokens WHERE expires_at <= ?', [now]);
+      await db(c).execute(
+        'INSERT INTO quick_tokens (token_hash, user_id, domain_id, expires_at) VALUES (?,?,?,?)',
+        [await sha256(token), principal.user.id, String(row.id), now + LEGACY_QUICKLOGIN_SECONDS],
+      );
+      const timestamp = String(now);
+      const sign = md5(`${c.env.APP_KEY}${row.name}${timestamp}${token}${c.env.APP_KEY}`);
+      const origin = c.env.PUBLIC_ORIGIN ? new URL(c.env.PUBLIC_ORIGIN).origin : new URL(c.req.url).origin;
+      loginurl = `${origin}/quicklogin?${new URLSearchParams({ domain: row.name, timestamp, token, sign })}`;
+    }
 
     return c.json({ code: 0, data: {
       id: row.id, aid: row.account_id, cid: row.category_id ?? 0, name: row.name, thirdid: row.third_id,

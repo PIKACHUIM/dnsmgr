@@ -5,7 +5,8 @@ import type { AppEnv } from './core/types';
 import type { SqlDatabase } from './storage/sql';
 import { SqlStorageError } from './storage/sql';
 import { StorageCorruptionError } from './storage/format';
-import { StorageConflictError } from './storage/coordinator';
+import { SqlCoordinator, StorageConflictError } from './storage/coordinator';
+import type { StorageRuntime } from './storage/config';
 import { StorageUnavailableError } from './storage/objects';
 import { AppError } from './core/errors';
 import { assertStorageIdentity, selectStorage, storage as createStorage } from './core/database';
@@ -25,6 +26,7 @@ import { optimizeRoutes } from './routes/optimize';
 import { userRoutes } from './routes/users';
 import { proxyRoutes } from './routes/proxy';
 import { updateRoutes } from './routes/update';
+import { storageRoutes } from './routes/storage';
 
 declare const __APP_SHELL__: string;
 const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
@@ -46,7 +48,19 @@ const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:add
 const legacySignedApiPaths = /^\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)/;
 const certificateSessionPaths = /^\/api\/v1\/cert(?:\/|$)/;
 
-export function createApp(options: { database?: SqlDatabase; shell?: string } = {}) {
+function injectedStorage(db: SqlDatabase, config: StorageRuntime['config']): StorageRuntime {
+  return {
+    config,
+    db,
+    coordinator: new SqlCoordinator(db),
+    entities: () => {
+      throw new Error('Entity repository is not available for injected storage');
+    },
+    snapshots: null,
+  };
+}
+
+export function createApp(options: { database?: SqlDatabase; shell?: string; storage?: StorageRuntime } = {}) {
   const app = new Hono<AppEnv>();
   app.use('*', secureHeaders({
     xFrameOptions: 'DENY',
@@ -57,19 +71,23 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
       connectSrc: ["'self'"], objectSrc: ["'none'"], baseUri: ["'none'"], frameAncestors: ["'none'"],
     },
   }));
-  app.use('*', bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ code: -1, msg: '请求体超过 64KB', reason: 'BODY_TOO_LARGE' }, 413) }));
+  const jsonBodyLimit = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ code: -1, msg: '请求体超过 64KB', reason: 'BODY_TOO_LARGE' }, 413) });
+  app.use('*', (c, next) => c.req.path === '/api/v1/system/storage/import' ? next() : jsonBodyLimit(c, next));
+  app.use('/api/v1/system/storage/import', bodyLimit({
+    maxSize: 4 * 1024 * 1024,
+    onError: (c) => c.json({ code: -1, msg: '存储导入包超过 4MB', reason: 'BODY_TOO_LARGE' }, 413),
+  }));
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
     const path = c.req.path;
     if (/(^|\/)\.|\.(php|sql|env|map)$|^\/(app|config|route|vendor|runtime)(\/|$)/i.test(path)) return c.json({ code: -1, msg: '未找到', reason: 'NOT_FOUND' }, 404);
     if (databasePaths.test(path) && !(c.req.method === 'GET' && ['/', '/install', '/login', '/setpwd'].includes(path))) {
       const selected = selectStorage(c.env);
-      const configured = options.database ? null : createStorage(c.env);
-      const db = options.database ?? configured!.db;
+      const runtimeStorage = options.storage
+        ?? (options.database ? injectedStorage(options.database, selected) : createStorage(c.env));
+      const db = runtimeStorage.db;
       c.set('db', db);
-      c.set('storage', configured
-        ? { config: configured.config, db: configured.db, snapshots: configured.snapshots }
-        : { config: selected, db, snapshots: null });
+      c.set('storage', runtimeStorage);
       if (!legacySignedApiPaths.test(path) && !certificateSessionPaths.test(path)) await assertStorageIdentity(db, selected);
     }
     await next();
@@ -90,6 +108,7 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
   app.route('/', userRoutes());
   app.route('/', proxyRoutes());
   app.route('/', updateRoutes());
+  app.route('/', storageRoutes());
   app.get('/api/v1/bootstrap', requireSession, (c) => {
     const storage = c.get('storage').config;
     return c.json({

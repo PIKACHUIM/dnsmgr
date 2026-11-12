@@ -62,7 +62,8 @@ npm run build:edgeone
 - 静态目录：`dist/edgeone/public/`；配置文件：`edgeone.json`。
 - Node Function 需在平台配置 SQL/Turso 凭据；Blob 模式设置 `BLOB_NAMESPACE`。
 - VitePress 的静态站点建议作为独立站点部署到域名根；不要把它复制进 DNS 应用 `public` 目录。
-- Makers 原生 KV 当前属于 Edge Functions 能力；本项目 Node Cloud Function 的受认证 KV bridge 尚未实现。
+- Makers 原生 KV 当前属于 Edge Functions 能力；Node Cloud Function 通过 `MAKERS_KV_BRIDGE_URL` 与 `MAKERS_KV_BRIDGE_TOKEN`（≥32 字符）访问单独部署的受认证 bridge：`GET /get?key=` 返回 `{value}`（缺失为 `null`），`PUT /put` 接收 `{key,value}`；请求使用 Bearer 鉴权并要求 HTTPS。bridge 端点需自行部署为可访问原生 KV 的 Edge Function，未配置时 `DB_DRIVER=kv` 仍会 fail closed。
+- Makers KV bridge 单值上限按 4 MB 在客户端预检；bridge 返回非 2xx、无效 JSON 或非字符串值会按存储不可用处理。
 
 `@edgeone/pages-blob` 的锁定版本将 `onlyIfNew` 标成废弃/不执行条件写；本项目适配器不使用它来模拟原子锁。
 

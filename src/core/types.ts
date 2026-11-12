@@ -17,6 +17,8 @@ export interface Bindings {
   BLOB_ADAPTER?: BlobAdapter;
   BLOB_NAMESPACE?: string;
   ESA_KV_NAMESPACE?: string;
+  MAKERS_KV_BRIDGE_URL?: string;
+  MAKERS_KV_BRIDGE_TOKEN?: string;
   BUDGET?: RequestBudget;
   COORDINATOR_ID?: string;
   PAYLOAD_STORE_ID?: string;
