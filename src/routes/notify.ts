@@ -6,9 +6,12 @@ import { requireAdmin, requireCsrf, requireSession, nowSeconds } from '../securi
 import { parseConfig } from '../notify/custom';
 import {
   loadNotificationSettings, normalizeDingTalkAtMobiles, normalizeDingTalkWebhookUrl, normalizeFeishuUserIds,
-  normalizeFeishuWebhookUrl, normalizeWecomWebhookUrl, normalizeWxPusherUids, notificationSettingsView,
+  normalizeFeishuWebhookUrl, normalizeMailFrom, normalizeMailRecipients, normalizeQqBotAppId, normalizeQqBotAppSecret,
+  normalizeQqBotOpenId, normalizeWecomWebhookUrl, normalizeWxPusherUids, notificationSettingsView,
   saveNotificationSettings, sendConfiguredNotifications,
 } from '../notify/settings';
+import { qqBotValidationSignature, sendQqBotMessage, verifyQqBotSignature } from '../notify/qqbot';
+import { deliverQueuedNotifications } from '../notify/certificate';
 
 function normalizeTelegramBotToken(value: string): string {
   if (!/^\d{5,15}:[A-Za-z0-9_-]{20,128}$/.test(value)) {
@@ -43,7 +46,7 @@ export function notifyRoutes() {
   routes.get('/api/v1/system/notify', requireSession, async (c) => {
     requireSql(c);
     requireAdmin(c);
-    return c.json({ code: 0, ...notificationSettingsView(await loadNotificationSettings(c)) });
+    return c.json({ code: 0, ...notificationSettingsView(await loadNotificationSettings(c), { mailAvailable: Boolean(c.env.EMAIL) }) });
   });
 
   routes.put('/api/v1/system/notify', requireSession, requireCsrf, async (c) => {
@@ -71,6 +74,11 @@ export function notifyRoutes() {
       dingtalkAtMobiles: secretValue('dingtalkAtMobiles', 'clearDingtalk', 512, current.secrets.dingtalkAtMobiles),
       feishuWebhookUrl: secretValue('feishuWebhookUrl', 'clearFeishu', 1024, current.secrets.feishuWebhookUrl),
       feishuUserIds: secretValue('feishuUserIds', 'clearFeishu', 2048, current.secrets.feishuUserIds),
+      mailTo: secretValue('mailTo', 'clearMail', 1024, current.secrets.mailTo),
+      mailFrom: secretValue('mailFrom', 'clearMail', 254, current.secrets.mailFrom),
+      qqbotAppId: secretValue('qqbotAppId', 'clearQqbot', 32, current.secrets.qqbotAppId),
+      qqbotAppSecret: secretValue('qqbotAppSecret', 'clearQqbot', 128, current.secrets.qqbotAppSecret),
+      qqbotOpenId: secretValue('qqbotOpenId', 'clearQqbot', 128, current.secrets.qqbotOpenId),
     };
     if (typeof body.wxpusherUids === 'string' && body.wxpusherUids.trim() && body.clearWxpusherUids !== true) {
       secrets.wxpusherUids = normalizeWxPusherUids(body.wxpusherUids.trim());
@@ -101,6 +109,27 @@ export function notifyRoutes() {
     if (!secrets.feishuWebhookUrl && secrets.feishuUserIds) {
       throw new AppError(400, '飞书 Webhook URL 与 @用户配置必须一起设置或清除', 'INCOMPLETE_FEISHU_CONFIG');
     }
+    if (secrets.mailTo) secrets.mailTo = normalizeMailRecipients(secrets.mailTo);
+    if (secrets.mailFrom) secrets.mailFrom = normalizeMailFrom(secrets.mailFrom);
+    if (Boolean(secrets.mailTo) !== Boolean(secrets.mailFrom)) {
+      throw new AppError(400, '收件邮箱与发件邮箱必须同时配置或清除', 'INCOMPLETE_MAIL_CONFIG');
+    }
+    if (secrets.mailTo && !c.env.EMAIL) {
+      throw new AppError(400, '当前运行环境未绑定邮件发送服务（send_email），无法启用邮件通知', 'MAIL_BINDING_REQUIRED');
+    }
+    if (secrets.qqbotAppId) secrets.qqbotAppId = normalizeQqBotAppId(secrets.qqbotAppId);
+    if (secrets.qqbotAppSecret) secrets.qqbotAppSecret = normalizeQqBotAppSecret(secrets.qqbotAppSecret);
+    if (secrets.qqbotOpenId) secrets.qqbotOpenId = normalizeQqBotOpenId(secrets.qqbotOpenId);
+    if (Boolean(secrets.qqbotAppId) !== Boolean(secrets.qqbotAppSecret)) {
+      throw new AppError(400, 'QQ 机器人 AppID 与 AppSecret 必须同时配置或清除', 'INCOMPLETE_QQBOT_CONFIG');
+    }
+    if (secrets.qqbotOpenId && !secrets.qqbotAppId) {
+      throw new AppError(400, '绑定 QQ 机器人 OpenID 前须先配置 AppID 与 AppSecret', 'INCOMPLETE_QQBOT_CONFIG');
+    }
+    if ((current.secrets.qqbotAppId || current.secrets.qqbotAppSecret)
+      && (secrets.qqbotAppId !== current.secrets.qqbotAppId || secrets.qqbotAppSecret !== current.secrets.qqbotAppSecret)) {
+      secrets.qqbotOpenId = '';
+    }
     const method = typeof body.method === 'string' ? body.method.trim().toUpperCase() : current.method;
     const contentType = typeof body.contentType === 'string'
       ? body.contentType.trim().slice(0, 128) || 'application/json'
@@ -118,9 +147,9 @@ export function notifyRoutes() {
     await saveNotificationSettings(c, { secrets, method, contentType });
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
-      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)},wecom=${Boolean(secrets.wecomWebhookUrl)},dingtalk=${Boolean(secrets.dingtalkWebhookUrl)},feishu=${Boolean(secrets.feishuWebhookUrl)}`, nowSeconds()],
+      [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)},wecom=${Boolean(secrets.wecomWebhookUrl)},dingtalk=${Boolean(secrets.dingtalkWebhookUrl)},feishu=${Boolean(secrets.feishuWebhookUrl)},mail=${Boolean(secrets.mailTo)},qqbot=${Boolean(secrets.qqbotOpenId)}`, nowSeconds()],
     );
-    return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType }) });
+    return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType }, { mailAvailable: Boolean(c.env.EMAIL) }) });
   });
 
   routes.post('/api/v1/system/notify/test', requireSession, requireCsrf, async (c) => {
@@ -128,7 +157,7 @@ export function notifyRoutes() {
     requireAdmin(c);
     const body = await input(c);
     const settings = await loadNotificationSettings(c);
-    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken && !settings.secrets.wecomWebhookUrl && !settings.secrets.dingtalkWebhookUrl && !settings.secrets.feishuWebhookUrl) {
+    if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken && !settings.secrets.wecomWebhookUrl && !settings.secrets.dingtalkWebhookUrl && !settings.secrets.feishuWebhookUrl && !settings.secrets.mailTo && !settings.secrets.qqbotOpenId) {
       throw new AppError(400, '请先配置至少一个通知渠道', 'NOTIFICATION_NOT_CONFIGURED');
     }
     const title = text(body, 'title', 100).trim() || 'DNSMGR 测试通知';
@@ -142,6 +171,61 @@ export function notifyRoutes() {
       code: 0, msg: '测试通知已发送', status: deliveries[0]?.status ?? 200,
       channels: deliveries.map(({ channel, status }) => ({ channel, status })),
     });
+  });
+
+  routes.post('/api/v1/system/notify/flush', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const result = await deliverQueuedNotifications(c.env, c.get('db'), 5);
+    await c.get('db').execute(
+      'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
+      [c.get('principal').user.id, 'notify.flush', 'system', `delivered=${result.delivered} failed=${result.failed} pending=${result.pending}`, nowSeconds()],
+    );
+    return c.json({ code: 0, ...result });
+  });
+
+  routes.post('/qqbot/webhook', async (c) => {
+    requireSql(c);
+    const raw = await c.req.text();
+    let payload: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return c.text('bad request', 400);
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      return c.text('bad request', 400);
+    }
+    const settings = await loadNotificationSettings(c);
+    const { qqbotAppId, qqbotAppSecret } = settings.secrets;
+    if (!qqbotAppId || !qqbotAppSecret) return c.text('not configured', 400);
+    const headerAppId = c.req.header('x-bot-appid') ?? '';
+    if (headerAppId && headerAppId !== qqbotAppId) return c.text('appid mismatch', 403);
+    if (Number(payload.op ?? 0) === 13) {
+      const data = payload.d && typeof payload.d === 'object' ? payload.d as Record<string, unknown> : {};
+      const eventTs = typeof data.event_ts === 'string' ? data.event_ts : '';
+      const plainToken = typeof data.plain_token === 'string' ? data.plain_token : '';
+      if (!eventTs || !plainToken) return c.text('bad request', 400);
+      return c.json({ plain_token: plainToken, signature: await qqBotValidationSignature(eventTs, plainToken, qqbotAppSecret) });
+    }
+    const timestamp = c.req.header('x-signature-timestamp') ?? '';
+    const signature = c.req.header('x-signature-ed25519') ?? '';
+    if (!await verifyQqBotSignature(timestamp, signature, raw, qqbotAppSecret)) return c.text('invalid signature', 401);
+    if (String(payload.t ?? '').toUpperCase() !== 'C2C_MESSAGE_CREATE') return c.text('', 200);
+    const event = payload.d && typeof payload.d === 'object' ? payload.d as Record<string, unknown> : {};
+    const author = event.author && typeof event.author === 'object' ? event.author as Record<string, unknown> : {};
+    const openid = typeof author.user_openid === 'string' ? author.user_openid : '';
+    if (!openid) return c.text('', 200);
+    if (openid !== settings.secrets.qqbotOpenId) {
+      await saveNotificationSettings(c, { ...settings, secrets: { ...settings.secrets, qqbotOpenId: openid } });
+      await c.get('db').execute(
+        'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
+        [0, 'qqbot.bind', 'system', openid, nowSeconds()],
+      );
+      try {
+        await sendQqBotMessage(c, qqbotAppId, qqbotAppSecret, openid, '绑定成功', '您已绑定 QQ 机器人通知，聚合 DNS 管理系统的通知将通过本机器人发送。');
+      } catch { /* 绑定回执失败不影响绑定结果 */ }
+    }
+    return c.text('', 200);
   });
 
   return routes;

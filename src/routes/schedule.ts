@@ -8,12 +8,19 @@ import { createProvider } from '../dns/registry';
 import { DnsError, type DnsDomain, type DnsRecordInput } from '../dns/types';
 import { type SqlDatabase } from '../storage/sql';
 import { nextRunAt, parseRunTime, type ScheduleMode, type ScheduleTaskRow } from '../schedule/tasks';
-import { NOTIFICATION_CHANNELS, sendConfiguredNotifications, type NotificationChannel } from '../notify/settings';
+import { sendConfiguredNotifications } from '../notify/settings';
 import { executeFailoverDue } from '../schedule/failover';
 import {
   executeExpirationNotice, executeInitialExpirationRefresh, executePeriodicExpirationRefresh,
-  EXPIRATION_NOTICE_CHANNELS_SETTING, parseExpirationNoticeChannels,
+  EXPIRATION_NOTICE_CHANNELS, EXPIRATION_NOTICE_CHANNELS_SETTING, parseExpirationNoticeChannels,
+  type ExpirationNoticeChannels,
 } from '../schedule/expiration';
+import {
+  CERT_RENEW_DAYS, CERT_RENEW_ENABLED, executeCertificateRenewal, readCertificateRenewSettings,
+} from '../schedule/certificate';
+import { CERT_NOTIFY_ENABLED, deliverQueuedNotifications } from '../notify/certificate';
+import { executeDeployDue } from '../deploy';
+import { executeOptimizeDue } from '../optimize';
 
 interface AccountRow extends Record<string, unknown> {
   id: number;
@@ -85,15 +92,15 @@ function normalizeExpirationNoticeDays(value: unknown): string {
   return days.sort((left, right) => left - right).join(',');
 }
 
-function normalizeExpirationNoticeChannels(value: unknown): Record<NotificationChannel, boolean> {
+function normalizeExpirationNoticeChannels(value: unknown): ExpirationNoticeChannels {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new AppError(400, '到期提醒渠道配置格式无效', 'INVALID_EXPIRATION_NOTICE_CHANNELS');
   }
   const source = value as Record<string, unknown>;
-  if (Object.keys(source).length !== NOTIFICATION_CHANNELS.length || NOTIFICATION_CHANNELS.some((channel) => typeof source[channel] !== 'boolean')) {
+  if (Object.keys(source).length !== EXPIRATION_NOTICE_CHANNELS.length || EXPIRATION_NOTICE_CHANNELS.some((channel) => typeof source[channel] !== 'boolean')) {
     throw new AppError(400, '到期提醒渠道配置必须包含全部渠道开关', 'INVALID_EXPIRATION_NOTICE_CHANNELS');
   }
-  return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, source[channel]])) as Record<NotificationChannel, boolean>;
+  return Object.fromEntries(EXPIRATION_NOTICE_CHANNELS.map((channel) => [channel, source[channel]])) as ExpirationNoticeChannels;
 }
 
 async function audit(c: Context<AppEnv>, action: string, target: string, detail: string): Promise<void> {
@@ -254,6 +261,10 @@ export function scheduleRoutes() {
     const initialRefreshRan = await executeInitialExpirationRefresh(c);
     const periodicRefreshRan = initialRefreshRan ? false : await executePeriodicExpirationRefresh(c);
     if (!initialRefreshRan && !periodicRefreshRan) await executeExpirationNotice(c, await offsetMinutes(c));
+    try { await executeCertificateRenewal(c.env, db(c)); } catch { /* 预算不足时由下一次 cron 继续 */ }
+    try { await executeDeployDue(c, 2); } catch { /* 部署失败由运行记录与通知反馈 */ }
+    try { await executeOptimizeDue(c); } catch { /* IP 优选失败记录在任务状态中 */ }
+    try { await deliverQueuedNotifications(c.env, db(c), 3); } catch { /* 通知发送失败不影响调度任务 */ }
     return c.text('success!');
   });
 
@@ -282,7 +293,7 @@ export function scheduleRoutes() {
       args: [EXPIRATION_NOTICE_CHANNELS_SETTING, JSON.stringify(channels), nowSeconds()],
     });
     await db(c).batch(updates);
-    await audit(c, 'expiration-notice.settings', 'system', `${days ? `days=${days}` : 'disabled'} channels=${NOTIFICATION_CHANNELS.filter((channel) => channels[channel]).join(',') || 'none'}`);
+    await audit(c, 'expiration-notice.settings', 'system', `${days ? `days=${days}` : 'disabled'} channels=${EXPIRATION_NOTICE_CHANNELS.filter((channel) => channels[channel]).join(',') || 'none'}`);
     return c.json({ code: 0, days, channels });
   });
 
@@ -316,6 +327,43 @@ export function scheduleRoutes() {
       code: 0, enabled: (await getSetting(c, 'cron_enabled')) === '1', key,
       offset: await offsetMinutes(c), url: `/cron?key=${key}`,
     });
+  });
+
+  routes.get('/api/v1/system/certificate-renew', requireSession, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    return c.json({ code: 0, ...(await readCertificateRenewSettings(db(c))) });
+  });
+
+  routes.put('/api/v1/system/certificate-renew', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
+      throw new AppError(400, '自动续签开关无效', 'INVALID_CERT_RENEW_SETTINGS');
+    }
+    if (body.notifyEnabled !== undefined && typeof body.notifyEnabled !== 'boolean') {
+      throw new AppError(400, '证书通知开关无效', 'INVALID_CERT_RENEW_SETTINGS');
+    }
+    if (body.days !== undefined) {
+      const days = Number(body.days);
+      if (!Number.isSafeInteger(days) || days < 1 || days > 60) {
+        throw new AppError(400, '到期前续签天数应为 1–60', 'INVALID_CERT_RENEW_SETTINGS');
+      }
+      await putSetting(c, CERT_RENEW_DAYS, String(days));
+    }
+    if (body.enabled !== undefined) await putSetting(c, CERT_RENEW_ENABLED, body.enabled ? '1' : '0');
+    if (body.notifyEnabled !== undefined) await putSetting(c, CERT_NOTIFY_ENABLED, body.notifyEnabled ? '1' : '0');
+    await audit(c, 'certificate-renew.settings', 'system', `enabled=${String(body.enabled ?? 'unchanged')} days=${String(body.days ?? 'unchanged')} notify=${String(body.notifyEnabled ?? 'unchanged')}`);
+    return c.json({ code: 0, ...(await readCertificateRenewSettings(db(c))) });
+  });
+
+  routes.post('/api/v1/system/certificate-renew/run', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const result = await executeCertificateRenewal(c.env, db(c));
+    await audit(c, 'certificate-renew.manual', 'system', result.detail);
+    return c.json({ code: 0, ...result });
   });
 
   routes.get('/api/v1/schedule/tasks', requireSession, async (c) => {

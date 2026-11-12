@@ -189,6 +189,47 @@ describe('certificate order API', () => {
     expect(spent).toBeLessThanOrEqual(4);
   });
 
+  it('supports order detail, auto-renewal toggle, deletion and manual revoke rejection', async () => {
+    const { cookie, csrf } = await adminSession();
+    const imported = await importFixture(cookie, csrf);
+    const { id } = await imported.json() as { id: number };
+
+    const detail = await request(`/api/v1/cert/orders/${id}`, { headers: { cookie } });
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({
+      item: { id, isAuto: false, revokedAt: null, renewedFrom: null, domains: fixture.domains },
+      renewals: [], issuance: null,
+    });
+
+    const enabled = await request(`/api/v1/cert/orders/${id}`, {
+      method: 'PATCH', headers: { cookie, 'content-type': 'application/json', 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ isAuto: true }),
+    });
+    expect(enabled.status).toBe(200);
+    expect(await testDb.db.query('SELECT is_auto FROM cert_orders WHERE id=?', [id])).toEqual([{ is_auto: 1 }]);
+    expect(await testDb.db.query("SELECT action,detail FROM audit_logs WHERE action='cert.order.auto'"))
+      .toEqual([{ action: 'cert.order.auto', detail: 'auto renewal enabled' }]);
+
+    const invalid = await request(`/api/v1/cert/orders/${id}`, {
+      method: 'PATCH', headers: { cookie, 'content-type': 'application/json', 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ isAuto: 'yes' }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const revoke = await post(`/api/v1/cert/orders/${id}/revoke`, {}, { cookie, 'X-CSRF-Token': csrf });
+    expect(revoke.status).toBe(501);
+    expect(await revoke.json()).toMatchObject({ reason: 'CERT_REVOKE_UNSUPPORTED' });
+
+    const removed = await request(`/api/v1/cert/orders/${id}`, {
+      method: 'DELETE', headers: { cookie, 'X-CSRF-Token': csrf },
+    });
+    expect(removed.status).toBe(200);
+    expect(await testDb.db.query('SELECT id FROM cert_orders')).toEqual([]);
+    expect(await testDb.db.query('SELECT domain FROM cert_order_domains')).toEqual([]);
+    expect(await testDb.db.query("SELECT action FROM audit_logs WHERE action='cert.order.delete'"))
+      .toEqual([{ action: 'cert.order.delete' }]);
+  });
+
   it('rejects a mismatched certificate key without persisting material', async () => {
     const { cookie, csrf } = await adminSession();
     const otherPair = forge.pki.rsa.generateKeyPair({ bits: 2048, workers: 0 });

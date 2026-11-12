@@ -67,6 +67,7 @@ export function environment(bindings: Bindings, platform: Platform) {
     PUBLIC_ORIGIN: bindings.PUBLIC_ORIGIN,
     CLIENT_IP: bindings.CLIENT_IP,
     EXECUTOR_URL: bindings.EXECUTOR_URL,
+    EMAIL: bindings.EMAIL,
     ASSETS: bindings.ASSETS,
     RUNTIME: policy,
     BUDGET: budget,

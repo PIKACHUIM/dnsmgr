@@ -8,6 +8,7 @@ import type { Bindings, RequestBudget } from '../src/core/types';
 import type { SqlDatabase, SqlStatement, SqlValue } from '../src/storage/sql';
 import { environment } from '../src/platform/runtime';
 import { encrypt } from '../src/security/crypto';
+import { executeCertificateRenewal } from '../src/schedule/certificate';
 import { createTestDatabase } from './helpers/sqlite';
 
 const appKey = btoa('12345678901234567890123456789012');
@@ -416,5 +417,47 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
     const denied = await post('/api/v1/cert/acme/accounts', { email: 'user@example.test', environment: 'staging' });
     expect(denied.status).toBe(403);
+  });
+
+  it('renews an auto-enabled certificate end to end without a browser session', async () => {
+    const accountId = await createReadyStagingAccount();
+    const orderId = await createDraftOrder(accountId);
+    for (const step of ['place', 'authorize', 'add-dns', 'trigger', 'poll-authorization', 'cleanup-dns', 'finalize', 'fetch-certificate']) {
+      const result = await post(`/api/v1/cert/acme/orders/${orderId}/${step}`, {});
+      expect(result.status, step).toBe(200);
+    }
+    const source = await testDb.db.query<{ cert_order_id: number }>('SELECT cert_order_id FROM cert_acme_orders WHERE id=?', [orderId]);
+    const certificateOrderId = source[0]!.cert_order_id;
+    await testDb.db.execute('UPDATE cert_orders SET is_auto=1,expires_at=? WHERE id=?', [Math.floor(Date.now() / 1000) - 60, certificateOrderId]);
+
+    let renewalId: number | null = null;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await testDb.db.execute(
+        "UPDATE cert_acme_orders SET updated_at=updated_at-120 WHERE renewal_of IS NOT NULL AND status='dns_present'",
+      );
+      const result = await executeCertificateRenewal(bindings, testDb.db);
+      const rows = await testDb.db.query<{ id: number; status: string }>(
+        'SELECT id,status FROM cert_acme_orders WHERE renewal_of=? ORDER BY id DESC LIMIT 1', [certificateOrderId],
+      );
+      if (rows[0]) {
+        renewalId = rows[0].id;
+        if (rows[0].status === 'issued' || rows[0].status === 'failed') break;
+      } else if (!result.processed) {
+        break;
+      }
+    }
+
+    expect(renewalId).toBeGreaterThan(0);
+    const renewal = await testDb.db.query<{ status: string; cert_order_id: number }>(
+      'SELECT status,cert_order_id FROM cert_acme_orders WHERE id=?', [renewalId],
+    );
+    expect(renewal[0]!.status).toBe('issued');
+    const renewed = await testDb.db.query<{ id: number; is_auto: number; renewed_from: number; expires_at: number }>(
+      'SELECT id,is_auto,renewed_from,expires_at FROM cert_orders WHERE renewed_from=?', [certificateOrderId],
+    );
+    expect(renewed).toHaveLength(1);
+    expect(renewed[0]).toMatchObject({ is_auto: 1, renewed_from: certificateOrderId });
+    expect(renewed[0]!.id).toBe(renewal[0]!.cert_order_id);
+    expect(renewed[0]!.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000));
   });
 });

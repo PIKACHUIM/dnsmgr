@@ -180,6 +180,33 @@ async function providerFor(c: Context<AppEnv>, account: AccountRow): Promise<Dns
   return createProvider(account.type, config as Record<string, string>, providerFetch(c));
 }
 
+async function legacyRecordDomain(c: Context<AppEnv>, domainId: number): Promise<LegacyRecordDomainRow> {
+  const principal = c.get('principal');
+  const permission = principal.user.level === 2 ? '' : `AND EXISTS (
+    SELECT 1 FROM permissions p WHERE p.user_id=? AND p.domain_id=CAST(d.id AS TEXT)
+  )`;
+  const args: (string | number)[] = [domainId];
+  if (permission) args.push(principal.user.id);
+  const rows = await db(c).query<LegacyRecordDomainRow>(
+    `SELECT d.id, d.account_id, d.name, d.third_id, a.id AS owner_id, a.type AS owner_type,
+      a.name AS owner_name, a.config_cipher AS owner_config_cipher, a.remark AS owner_remark,
+      a.created_at AS owner_created_at, a.updated_at AS owner_updated_at
+     FROM dns_domains d JOIN dns_accounts a ON a.id=d.account_id
+     WHERE d.id=? ${permission}`,
+    args,
+  );
+  if (!rows[0]) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
+  return rows[0];
+}
+
+function legacyOwner(domain: LegacyRecordDomainRow): AccountRow {
+  return {
+    id: domain.owner_id, type: domain.owner_type, name: domain.owner_name,
+    config_cipher: domain.owner_config_cipher, remark: domain.owner_remark,
+    created_at: domain.owner_created_at, updated_at: domain.owner_updated_at,
+  };
+}
+
 async function account(c: Context<AppEnv>, accountId: number): Promise<AccountRow> {
   const rows = await db(c).query<AccountRow>('SELECT * FROM dns_accounts WHERE id = ?', [accountId]);
   const row = rows[0];
@@ -777,6 +804,101 @@ export function dnsRoutes() {
       throw new AppError(503, 'DNS 记录已提交更新，但审计记录未确认；请核对服务商当前记录', 'DNS_WRITE_OUTCOME_UNKNOWN');
     }
     return c.json({ code: 0, msg: '修改解析记录成功！' });
+  });
+
+  routes.post('/api/record/add/:id', requireLegacyApi, async (c) => {
+    requireSql(c);
+    const principal = c.get('principal');
+    if (principal.user.level !== 2 && principal.user.level < 1) {
+      throw new AppError(403, '只读 API 用户无法添加解析', 'PERMISSION_DENIED');
+    }
+    const domain = await legacyRecordDomain(c, id(c.req.param('id')));
+    const body = c.get('legacyApiBody');
+    const inputData = recordInput({
+      ...body,
+      ttl: body.ttl === undefined || body.ttl === '' ? 600 : body.ttl,
+      mx: body.mx === undefined || body.mx === '' ? 1 : body.mx,
+      weight: body.weight === undefined || body.weight === '' ? 0 : body.weight,
+    });
+    const provider = await providerFor(c, legacyOwner(domain));
+    let recordId: string;
+    try {
+      recordId = await provider.addRecord(toDnsDomain(domain), inputData);
+    } catch (error) {
+      if (error instanceof AppError && ['REQUEST_BUDGET_EXCEEDED', 'REQUEST_TIMEOUT'].includes(error.reason)) throw error;
+      if (error instanceof DnsError && [400, 401, 403, 404, 409, 429, 501].includes(error.status)) providerError(error);
+      throw new AppError(503, 'DNS 新增结果未知，请核对服务商记录后重试', 'DNS_WRITE_OUTCOME_UNKNOWN');
+    }
+    try {
+      await audit(c, 'record.create', domain.name, `${inputData.type} ${inputData.name} ${inputData.value}`.slice(0, 500));
+    } catch {
+      throw new AppError(503, 'DNS 记录已提交新增，但审计记录未确认；请核对服务商当前记录', 'DNS_WRITE_OUTCOME_UNKNOWN');
+    }
+    return c.json({ code: 0, msg: '添加解析记录成功！', id: recordId });
+  });
+
+  routes.post('/api/record/batch/:id', requireLegacyApi, async (c) => {
+    requireSql(c);
+    const principal = c.get('principal');
+    if (principal.user.level !== 2 && principal.user.level < 1) {
+      throw new AppError(403, '只读 API 用户无法批量修改解析', 'PERMISSION_DENIED');
+    }
+    const domain = await legacyRecordDomain(c, id(c.req.param('id')));
+    const body = c.get('legacyApiBody');
+    const action = legacyText(body, 'action', 20);
+    if (!action) throw new AppError(400, '缺少批量操作类型', 'INVALID_BATCH_ACTION');
+    if (action === 'group') {
+      throw new AppError(501, '旧签名解析记录分组尚未迁移', 'LEGACY_RECORD_GROUP_UNSUPPORTED');
+    }
+    if (!['open', 'pause', 'delete', 'remark'].includes(action)) {
+      throw new AppError(400, '不支持的批量操作', 'INVALID_BATCH_ACTION');
+    }
+    let recordinfo: unknown = body.recordinfo;
+    if (typeof recordinfo === 'string') {
+      try { recordinfo = JSON.parse(recordinfo); } catch { recordinfo = null; }
+    }
+    if (!Array.isArray(recordinfo) || recordinfo.length === 0 || recordinfo.length > 100) {
+      throw new AppError(400, 'recordinfo 需为 1–100 条记录数组', 'INVALID_LEGACY_API_PARAMETER');
+    }
+    const remarkRaw = typeof body.remark === 'string' ? body.remark.trim() : '';
+    if (remarkRaw.length > 100) throw new AppError(400, '备注最多 100 字', 'INVALID_REMARK');
+    const remark = remarkRaw || null;
+    const provider = await providerFor(c, legacyOwner(domain));
+    const target = toDnsDomain(domain);
+    let success = 0;
+    let failed = 0;
+    for (const entry of recordinfo) {
+      const record = entry && typeof entry === 'object' && !Array.isArray(entry)
+        ? entry as Record<string, unknown>
+        : null;
+      const recordId = record && typeof record.RecordId === 'string' ? record.RecordId.trim() : '';
+      if (!recordId || !/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) {
+        failed++;
+        continue;
+      }
+      try {
+        if (action === 'open' || action === 'pause') {
+          await provider.setRecordStatus(target, recordId, action === 'open');
+        } else if (action === 'delete') {
+          await provider.deleteRecord(target, recordId);
+        } else {
+          await provider.setRecordRemark(target, recordId, remark);
+        }
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    if (success > 0 || action === 'remark') {
+      await audit(c, `record.batch.${action}`, domain.name, `${success} ok, ${failed} failed`);
+    }
+    const verbs: Record<string, string> = { open: '启用', pause: '暂停', delete: '删除', remark: '修改备注' };
+    return c.json({
+      code: 0,
+      success,
+      failed,
+      msg: action === 'remark' ? `批量修改备注，成功${success}条，失败${failed}条` : `成功${verbs[action]}${success}条解析记录`,
+    });
   });
 
   routes.post('/api/record/data/:id', requireLegacyApi, async (c) => {

@@ -4,6 +4,7 @@ import { AppError } from '../core/errors';
 import { encrypt, decrypt } from '../security/crypto';
 import type { SqlDatabase } from '../storage/sql';
 import { parseConfig, sendCustomWebhook } from './custom';
+import { sendQqBotMessage } from './qqbot';
 
 const SECRET_KEY = 'notification_secrets_cipher';
 const SECRET_PURPOSE = 'notification-secrets/v1';
@@ -26,12 +27,17 @@ export interface NotificationSettings {
     dingtalkAtMobiles: string;
     feishuWebhookUrl: string;
     feishuUserIds: string;
+    mailTo: string;
+    mailFrom: string;
+    qqbotAppId: string;
+    qqbotAppSecret: string;
+    qqbotOpenId: string;
   };
   method: string;
   contentType: string;
 }
 
-export const NOTIFICATION_CHANNELS = ['webhook', 'wxpusher', 'telegram', 'wecom', 'dingtalk', 'feishu'] as const;
+export const NOTIFICATION_CHANNELS = ['webhook', 'wxpusher', 'telegram', 'wecom', 'dingtalk', 'feishu', 'mail', 'qqbot'] as const;
 export type NotificationChannel = typeof NOTIFICATION_CHANNELS[number];
 
 export interface NotificationDelivery {
@@ -45,6 +51,7 @@ function emptySecrets(): NotificationSettings['secrets'] {
     webhookUrl: '', webhookHeaders: '', webhookBody: '', wxpusherAppToken: '', wxpusherUids: '',
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '', wecomWebhookUrl: '',
     dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', feishuWebhookUrl: '', feishuUserIds: '',
+    mailTo: '', mailFrom: '', qqbotAppId: '', qqbotAppSecret: '', qqbotOpenId: '',
   };
 }
 
@@ -58,6 +65,7 @@ function parseSecrets(value: string): NotificationSettings['secrets'] {
   const keys = [
     'webhookUrl', 'webhookHeaders', 'webhookBody', 'wxpusherAppToken', 'wxpusherUids',
     'telegramBotToken', 'telegramChatId', 'telegramTopicId', 'wecomWebhookUrl', 'dingtalkWebhookUrl', 'dingtalkSecret', 'dingtalkAtMobiles', 'feishuWebhookUrl', 'feishuUserIds',
+    'mailTo', 'mailFrom', 'qqbotAppId', 'qqbotAppSecret', 'qqbotOpenId',
   ] as const;
   if (keys.some((key) => source[key] !== undefined && typeof source[key] !== 'string')) {
     throw new AppError(503, '通知配置损坏，请重新保存通知设置', 'NOTIFICATION_CONFIG_CORRUPTED');
@@ -114,7 +122,9 @@ export async function saveNotificationSettings(c: Context<AppEnv>, settings: Not
   ]);
 }
 
-export function notificationSettingsView(settings: NotificationSettings) {
+export function notificationSettingsView(
+  settings: NotificationSettings, options: { mailAvailable?: boolean } = {},
+) {
   const { secrets } = settings;
   const webhookConfigured = Boolean(secrets.webhookUrl);
   const wxpusherConfigured = Boolean(secrets.wxpusherAppToken && secrets.wxpusherUids);
@@ -122,10 +132,13 @@ export function notificationSettingsView(settings: NotificationSettings) {
   const wecomConfigured = Boolean(secrets.wecomWebhookUrl);
   const dingtalkConfigured = Boolean(secrets.dingtalkWebhookUrl);
   const feishuConfigured = Boolean(secrets.feishuWebhookUrl);
+  const mailConfigured = Boolean(secrets.mailTo && secrets.mailFrom);
+  const qqbotConfigured = Boolean(secrets.qqbotAppId && secrets.qqbotAppSecret && secrets.qqbotOpenId);
   return {
     url: '', headers: '', body: '', wxpusherAppToken: '', wxpusherUids: '', wecomWebhookUrl: '',
     dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', feishuWebhookUrl: '', feishuUserIds: '',
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
+    mailTo: '', mailFrom: '', qqbotAppId: '', qqbotAppSecret: '', qqbotOpenId: '',
     method: settings.method, contentType: settings.contentType,
     configured: webhookConfigured, webhookConfigured,
     urlConfigured: webhookConfigured, headersConfigured: Boolean(secrets.webhookHeaders),
@@ -141,7 +154,43 @@ export function notificationSettingsView(settings: NotificationSettings) {
     dingtalkAtMobilesConfigured: Boolean(secrets.dingtalkAtMobiles),
     feishuConfigured, feishuUrlConfigured: feishuConfigured,
     feishuUserIdsConfigured: Boolean(secrets.feishuUserIds),
+    mailConfigured, mailToConfigured: Boolean(secrets.mailTo), mailFromConfigured: Boolean(secrets.mailFrom),
+    mailBindingAvailable: options.mailAvailable === true,
+    qqbotConfigured, qqbotAppIdConfigured: Boolean(secrets.qqbotAppId),
+    qqbotAppSecretConfigured: Boolean(secrets.qqbotAppSecret),
+    qqbotOpenIdConfigured: Boolean(secrets.qqbotOpenId),
+    qqbotWebhookUrl: '/qqbot/webhook',
   };
+}
+
+export function normalizeMailRecipients(value: string): string {
+  const recipients = [...new Set(value.split(/[\s,;]+/).map((recipient) => recipient.trim().toLowerCase()).filter(Boolean))];
+  if (recipients.length === 0 || recipients.length > 10 || recipients.some((recipient) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipient))) {
+    throw new AppError(400, '收件邮箱格式无效（最多 10 个）', 'INVALID_MAIL_RECIPIENTS');
+  }
+  return recipients.join(',');
+}
+
+export function normalizeMailFrom(value: string): string {
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) {
+    throw new AppError(400, '发件邮箱格式无效', 'INVALID_MAIL_FROM');
+  }
+  return value;
+}
+
+export function normalizeQqBotAppId(value: string): string {
+  if (!/^\d{6,20}$/.test(value)) throw new AppError(400, 'QQ 机器人 AppID 必须是数字', 'INVALID_QQBOT_APP_ID');
+  return value;
+}
+
+export function normalizeQqBotAppSecret(value: string): string {
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(value)) throw new AppError(400, 'QQ 机器人 AppSecret 格式无效', 'INVALID_QQBOT_APP_SECRET');
+  return value;
+}
+
+export function normalizeQqBotOpenId(value: string): string {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(value)) throw new AppError(400, 'QQ 机器人 OpenID 格式无效', 'INVALID_QQBOT_OPENID');
+  return value;
 }
 
 export function normalizeWxPusherUids(value: string): string {
@@ -390,6 +439,26 @@ async function sendFeishu(
   }
 }
 
+async function sendMail(
+  sender: AppEnv['Bindings']['EMAIL'], to: string, from: string, title: string, content: string,
+): Promise<{ status: number | null; ok: boolean }> {
+  if (!sender) return { status: null, ok: false };
+  const recipients = to.split(',').map((recipient) => recipient.trim()).filter(Boolean);
+  if (recipients.length === 0) return { status: null, ok: false };
+  try {
+    await sender.send({
+      to: recipients,
+      from,
+      subject: title,
+      text: content,
+      html: `<div style="font-family:system-ui,sans-serif;line-height:1.6"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(content).replaceAll('\n', '<br />')}</p></div>`,
+    });
+    return { status: 202, ok: true };
+  } catch {
+    return { status: null, ok: false };
+  }
+}
+
 export async function sendConfiguredNotifications(
   c: Context<AppEnv>, title: string, content: string, allowedChannels?: ReadonlySet<NotificationChannel>,
 ): Promise<NotificationDelivery[]> {
@@ -456,6 +525,20 @@ export async function sendConfiguredNotifications(
       deliveries.push({ channel: 'feishu', ...result });
     } catch {
       deliveries.push({ channel: 'feishu', ok: false, status: null });
+    }
+  }
+  if (enabled('mail') && config.secrets.mailTo && config.secrets.mailFrom) {
+    const result = await sendMail(c.env.EMAIL, config.secrets.mailTo, config.secrets.mailFrom, title, content);
+    deliveries.push({ channel: 'mail', ...result });
+  }
+  if (enabled('qqbot') && config.secrets.qqbotAppId && config.secrets.qqbotAppSecret && config.secrets.qqbotOpenId) {
+    try {
+      const result = await sendQqBotMessage(
+        c, config.secrets.qqbotAppId, config.secrets.qqbotAppSecret, config.secrets.qqbotOpenId, title, content,
+      );
+      deliveries.push({ channel: 'qqbot', ...result });
+    } catch {
+      deliveries.push({ channel: 'qqbot', ok: false, status: null });
     }
   }
   return deliveries;

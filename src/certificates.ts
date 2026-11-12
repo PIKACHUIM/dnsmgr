@@ -109,3 +109,15 @@ export function legacyPfxBytes(fullchain: string, privateKeyPem: string): Uint8A
   const encoded = exportLegacyPfx(fullchain, privateKeyPem);
   return Uint8Array.from(forge.util.decode64(encoded), (character) => character.charCodeAt(0));
 }
+
+export function certificateDerBase64Url(fullchain: string): string {
+  const block = fullchain.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)?.[0];
+  if (!block) throw new AppError(400, '证书链 PEM 格式无效', 'INVALID_CERTIFICATE');
+  try {
+    const certificate = forge.pki.certificateFromPem(block);
+    const der = forge.asn1.toDer(forge.pki.certificateToAsn1(certificate)).getBytes();
+    return forge.util.encode64(der).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+  } catch {
+    throw new AppError(400, '证书链 PEM 格式无效', 'INVALID_CERTIFICATE');
+  }
+}

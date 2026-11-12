@@ -19,6 +19,14 @@ import { LoginCaptchaSettings } from './LoginCaptchaSettings';
 import { DnsFailover } from './DnsFailover';
 import { SetPassword } from './SetPassword';
 import { CertificateOrders } from './CertificateOrders';
+import { CertificateSettings } from './CertificateSettings';
+import { CertificateCname } from './CertificateCname';
+import { DeployAccounts, DeployTasks } from './CertificateDeploy';
+import { OptimizeIpSettings, OptimizeIpTasks } from './OptimizeIp';
+import { Users } from './Users';
+import { ProxySettings } from './ProxySettings';
+import { SystemUpdate } from './SystemUpdate';
+import { RecordTools } from './RecordTools';
 
 interface ConsoleProps {
   session: Session;
@@ -50,6 +58,8 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   const page = resolvePage(path, level);
   const home = path === '/';
   const recordMatch = /^\/record\/(\d+)$/.exec(path);
+  const legacyRecordMatch = /^\/record\/(?:batchadd|batchedit|log|weight|groups)\/(\d+)$/.exec(path);
+  const recordToolMatch = /^\/record\/(batchadd|batchedit|search|smartparse)$/.exec(path);
   const importMatch = /^\/record\/import\/(\d+)$/.exec(path);
   const aliasMatch = /^\/record\/(\d+)\/alias$/.exec(path);
   const hostnameMatch = /^\/cloudflare\/hostnames\/(\d+)$/.exec(path);
@@ -206,11 +216,22 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                       : path === '/domain/expirenotice' && level === 2 ? <ExpirationNoticeSettings session={session} onExpired={onExpired} />
                     : path === '/cert/certaccount' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} section="accounts" />
                     : path === '/cert/certorder' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} />
+                    : path === '/cert/certset' && level === 2 ? <CertificateSettings session={session} onExpired={onExpired} />
+                    : path === '/cert/cname' && level === 2 ? <CertificateCname session={session} onExpired={onExpired} />
+                    : path === '/cert/deployaccount' && level === 2 ? <DeployAccounts session={session} onExpired={onExpired} />
+                    : path === '/cert/deploytask' && level === 2 ? <DeployTasks session={session} onExpired={onExpired} />
+                    : path === '/optimizeip/opipset' && level === 2 ? <OptimizeIpSettings session={session} onExpired={onExpired} />
+                    : path === '/optimizeip/opiplist' && level === 2 ? <OptimizeIpTasks session={session} onExpired={onExpired} />
+                    : path === '/system/proxyset' && level === 2 ? <ProxySettings session={session} onExpired={onExpired} />
+                    : path === '/system/update' && level === 2 ? <SystemUpdate session={session} onExpired={onExpired} />
+                    : path === '/user' && level === 2 ? <Users session={session} onExpired={onExpired} />
                     : path === '/setpwd' ? <SetPassword session={session} onExpired={onExpired} onLoggedOut={onLoggedOut} />
                     : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
                   : tunnelMatch && level === 2 ? <CfTunnels session={session} accountId={Number(tunnelMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : aliasMatch ? <DnsAliases session={session} domainId={Number(aliasMatch[1])} navigate={navigate} onExpired={onExpired} />
                     : importMatch ? <DnsRecordImport session={session} domainId={Number(importMatch[1])} navigate={navigate} onExpired={onExpired} />
+                    : legacyRecordMatch ? <DnsRecords session={session} domainId={Number(legacyRecordMatch[1])} navigate={navigate} onExpired={onExpired} />
+                    : recordToolMatch ? <RecordTools session={session} mode={recordToolMatch[1] as 'batchadd' | 'batchedit' | 'search' | 'smartparse'} navigate={navigate} onExpired={onExpired} />
                     : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />
               : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">模块状态 / NOT MIGRATED</span><h2 id="module-state-title">此模块尚未移植</h2><p>已保留「{page.item.label}」的导航入口与访问路径。当前页面只说明迁移边界，不提供业务查询、配置或执行操作。</p><dl className="module-details"><div><dt>当前路径</dt><dd><code>{path}</code></dd></div><div><dt>功能范围</dt><dd>{page.item.scope}</dd></div><div><dt>后端能力</dt><dd>{loading ? '正在读取…' : !bootstrap ? '读取失败，状态未知' : page.item.capability ? `${capabilityNames[page.item.capability]}：${bootstrap.capabilities[page.item.capability] ? '已声明可用，页面仍待移植' : '未开放'}` : '基础阶段未提供此功能的业务接口'}</dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>返回后台首页<Icon name="arrow" /></a><span>不会调用旧接口或产生业务变更。</span></div></section>}
         <footer className="workspace-footer"><span>聚合 DNS 管理系统</span><span>安装 · 认证 · 会话基础 <span className="mono">/ FOUNDATION</span></span></footer>

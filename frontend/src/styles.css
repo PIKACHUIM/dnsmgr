@@ -377,6 +377,9 @@ a.button:hover { text-decoration: none; }
 .certificate-issuance-heading > div:first-child > strong, .certificate-issuance-heading > div:first-child > span { display: block; }
 .certificate-order-error { margin: 0; color: var(--color-warning, #8a5800); }
 .certificate-domains { display: flex; flex-wrap: wrap; gap: 5px; max-width: 360px; }
+.certificate-order-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.executor-token-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+.executor-token-row input { flex: 1 1 320px; min-width: 0; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); }
 .certificate-table td:first-child > span,
 .certificate-table td:nth-child(5) > span { display: block; }
 .form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }

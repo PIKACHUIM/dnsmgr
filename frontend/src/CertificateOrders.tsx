@@ -12,21 +12,38 @@ interface CertificateOrder {
   expiresAt: number;
   createdAt: number;
   updatedAt: number;
+  isAuto: boolean;
+  revokedAt: number | null;
+  renewedFrom: number | null;
   domains: string[];
 }
 
 interface AcmeAccount {
-  id: number; environment: 'staging' | 'production'; email: string; status: string;
+  id: number; environment: 'staging' | 'production'; ca: string; email: string; status: string;
   termsOfService: string | null; nonceReady: boolean; requestInFlight: boolean; createdAt: number; updatedAt: number;
 }
 interface DnsZone { id: number; name: string; accountName: string; accountType: string; thirdId: string | null }
 interface AcmeIssuance {
-  id: number; environment: 'staging' | 'production'; status: string; domains: string[];
+  id: number; environment: 'staging' | 'production'; ca: string; status: string; domains: string[];
   certificateOrderId: number | null; lastError: string | null; canPoll: boolean; nonceReady: boolean;
   requestInFlight: boolean; needsDnsCleanup: boolean; createdAt: number; updatedAt: number;
 }
 interface DomainResult { code: 0; items: DnsZone[]; page: number; pageSize: number; total: number }
 interface Props { session: Session; onExpired: (message: string) => void; section?: 'all' | 'accounts' }
+
+const acmeCas = [
+  { value: 'letsencrypt', name: "Let's Encrypt", staging: true, eab: false },
+  { value: 'zerossl', name: 'ZeroSSL', staging: false, eab: true },
+  { value: 'google', name: 'Google Trust Services', staging: true, eab: true },
+  { value: 'litessl', name: 'LiteSSL', staging: false, eab: true },
+  { value: 'customacme', name: '自定义 ACME', staging: false, eab: false },
+] as const;
+
+type AcmeCaName = typeof acmeCas[number]['value'];
+
+function caName(value: string): string {
+  return acmeCas.find((entry) => entry.value === value)?.name ?? value;
+}
 
 function date(value: number): string {
   return new Date(value * 1000).toLocaleString();
@@ -41,7 +58,7 @@ function issuanceStep(order: AcmeIssuance): { action: string; label: string } | 
   switch (order.status) {
     case 'draft': return { action: 'place', label: '提交 ACME 订单' };
     case 'authorizing': return { action: 'authorize', label: '读取下一项授权' };
-    case 'challenge_ready': return { action: 'add-dns', label: '创建 Cloudflare TXT' };
+    case 'challenge_ready': return { action: 'add-dns', label: '创建 DNS TXT' };
     case 'dns_present': return { action: 'trigger', label: '通知 CA 验证' };
     case 'submitted':
     case 'trigger_unknown':
@@ -49,7 +66,7 @@ function issuanceStep(order: AcmeIssuance): { action: string; label: string } | 
     case 'authorization_valid': return { action: 'cleanup-dns', label: '清理 challenge TXT' };
     case 'dns_adding':
     case 'dns_cleaning':
-    case 'dns_outcome_unknown': return { action: 'reconcile-dns', label: '核对 Cloudflare TXT' };
+    case 'dns_outcome_unknown': return { action: 'reconcile-dns', label: '核对 DNS TXT' };
     case 'ready_to_finalize': return { action: 'finalize', label: '请求签发证书' };
     case 'finalizing':
     case 'processing': return { action: 'poll-order', label: '轮询 CA 订单' };
@@ -80,6 +97,10 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const [fullchain, setFullchain] = useState('');
   const [privateKey, setPrivateKey] = useState('');
   const [accountEmail, setAccountEmail] = useState('');
+  const [accountCa, setAccountCa] = useState<AcmeCaName>('letsencrypt');
+  const [accountDirectoryUrl, setAccountDirectoryUrl] = useState('');
+  const [eabKid, setEabKid] = useState('');
+  const [eabHmacKey, setEabHmacKey] = useState('');
   const [accountEnvironment, setAccountEnvironment] = useState<'staging' | 'production'>('staging');
   const [confirmProduction, setConfirmProduction] = useState(false);
   const [issuanceAccountId, setIssuanceAccountId] = useState('');
@@ -109,10 +130,10 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
       if (!signal.aborted) {
         setItems(orderResult.items);
         setAccounts(accountResult.items);
-        setDnsZones(domainResult.items.filter((zone) => zone.accountType === 'cloudflare' && Boolean(zone.thirdId)));
+        setDnsZones(domainResult.items.filter((zone) => Boolean(zone.thirdId)));
         setIssuances(issuanceResult.items);
         setIssuanceAccountId((current) => current || String(accountResult.items.find((account) => account.status === 'ready')?.id ?? ''));
-        setDnsDomainId((current) => current || String(domainResult.items.find((zone) => zone.accountType === 'cloudflare' && zone.thirdId)?.id ?? ''));
+        setDnsDomainId((current) => current || String(domainResult.items.find((zone) => Boolean(zone.thirdId))?.id ?? ''));
       }
     } catch (failure) { if (!signal.aborted) handle(failure); }
     finally { if (!signal.aborted) setLoading(false); }
@@ -148,12 +169,14 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     const controller = new AbortController();
     try {
       const account = await send<{ code: 0; id: number }>('/api/v1/cert/acme/accounts', 'POST', {
-        email: accountEmail, environment: accountEnvironment, confirmProduction,
+        email: accountEmail, ca: accountCa, environment: accountEnvironment, confirmProduction,
+        directoryUrl: accountCa === 'customacme' ? accountDirectoryUrl.trim() : undefined,
+        eabKid: eabKid.trim() || undefined, eabHmacKey: eabHmacKey.trim() || undefined,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       await send(`/api/v1/cert/acme/accounts/${account.id}/directory`, 'POST', {}, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       await send(`/api/v1/cert/acme/accounts/${account.id}/prepare-nonce`, 'POST', {}, controller.signal, { 'X-CSRF-Token': session.csrfToken });
-      setAccountEmail(''); setConfirmProduction(false);
-      setNotice(`${accountEnvironment === 'staging' ? 'Staging' : '生产'} ACME 账户已准备注册；同意服务条款后可继续。`);
+      setAccountEmail(''); setEabKid(''); setEabHmacKey(''); setAccountDirectoryUrl(''); setConfirmProduction(false);
+      setNotice(`${caName(accountCa)} ${accountEnvironment === 'staging' ? 'Staging' : '生产'} ACME 账户已准备注册；同意服务条款后可继续。`);
       await load(controller.signal);
     } catch (failure) { handle(failure); await load(controller.signal); }
     finally { setBusy(false); }
@@ -242,24 +265,75 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     finally { setBusy(false); }
   }
 
+  async function toggleAuto(order: CertificateOrder, isAuto: boolean) {
+    if (busy) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      await send(`/api/v1/cert/orders/${order.id}`, 'PATCH', { isAuto }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`订单 ${order.id} 自动续签已${isAuto ? '开启' : '关闭'}。`);
+      await load(controller.signal);
+    } catch (failure) { handle(failure); await load(controller.signal); }
+    finally { setBusy(false); }
+  }
+
+  async function removeOrder(order: CertificateOrder) {
+    if (busy || !window.confirm(`删除证书订单 #${order.id}？已保存的证书材料将不可恢复。`)) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      await send(`/api/v1/cert/orders/${order.id}`, 'DELETE', {}, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`证书订单 ${order.id} 已删除。`);
+      await load(controller.signal);
+    } catch (failure) { handle(failure); await load(controller.signal); }
+    finally { setBusy(false); }
+  }
+
+  async function revokeOrder(order: CertificateOrder) {
+    if (busy || !window.confirm(`吊销订单 #${order.id} 的证书？该操作会请求 CA 且不可撤销。`)) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      await send(`/api/v1/cert/orders/${order.id}/revoke`, 'POST', {}, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`订单 ${order.id} 的证书已吊销。`);
+      await load(controller.signal);
+    } catch (failure) { handle(failure); await load(controller.signal); }
+    finally { setBusy(false); }
+  }
+
   const selectedAccount = accounts.find((account) => String(account.id) === issuanceAccountId);
+  const accountCaEntry = acmeCas.find((entry) => entry.value === accountCa)!;
 
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="acme-account-title">
       <div className="panel-heading"><div><h2 id="acme-account-title">ACME 账户</h2></div><span className="panel-meta">RSA 账户密钥使用 AES-GCM 加密</span></div>
-      <p className="form-hint certificate-security-note">默认使用 Let's Encrypt staging。生产 CA 只有在明确选择并确认后才会请求；单测不会连接任何 CA。</p>
+      <p className="form-hint certificate-security-note">支持 Let's Encrypt、ZeroSSL、Google Trust Services、LiteSSL 与自定义 ACME。生产 CA 只有在明确选择并确认后才会请求；单测不会连接任何 CA。</p>
       <form className="dns-form certificate-setup-form" onSubmit={createAcmeAccount}>
-        <label className="form-field"><span>联系邮箱</span><input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} required maxLength={254} autoComplete="email" /></label>
-        <label className="form-field"><span>CA 环境</span><select value={accountEnvironment} onChange={(event) => setAccountEnvironment(event.target.value as 'staging' | 'production')}>
-          <option value="staging">Let's Encrypt staging（测试）</option><option value="production">Let's Encrypt production（正式签发）</option>
+        <label className="form-field"><span>CA 服务商</span><select value={accountCa} onChange={(event) => {
+          const next = event.target.value as AcmeCaName;
+          setAccountCa(next);
+          const entry = acmeCas.find((candidate) => candidate.value === next)!;
+          if (!entry.staging) setAccountEnvironment('production');
+          setConfirmProduction(false);
+        }}>
+          {acmeCas.map((entry) => <option key={entry.value} value={entry.value}>{entry.name}</option>)}
         </select></label>
+        <label className="form-field"><span>联系邮箱</span><input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} required maxLength={254} autoComplete="email" /></label>
+        <label className="form-field"><span>CA 环境</span><select value={accountEnvironment} onChange={(event) => { setAccountEnvironment(event.target.value as 'staging' | 'production'); setConfirmProduction(false); }}>
+          {accountCaEntry.staging && <option value="staging">Staging（测试）</option>}<option value="production">Production（正式签发）</option>
+        </select></label>
+        {accountCa === 'customacme' && <label className="form-field"><span>Directory URL</span><input type="url" value={accountDirectoryUrl} onChange={(event) => setAccountDirectoryUrl(event.target.value)} placeholder="https://ca.example.com/acme/directory" required maxLength={512} /></label>}
+        {accountCaEntry.eab && <>
+          <label className="form-field"><span>EAB KID</span><input value={eabKid} onChange={(event) => setEabKid(event.target.value)} maxLength={256} autoComplete="off" required /></label>
+          <label className="form-field"><span>EAB HMAC Key</span><input type="password" value={eabHmacKey} onChange={(event) => setEabHmacKey(event.target.value)} maxLength={512} autoComplete="new-password" required /></label>
+        </>}
         {accountEnvironment === 'production' && <label className="certificate-confirm"><input type="checkbox" checked={confirmProduction} onChange={(event) => setConfirmProduction(event.target.checked)} />我明确确认将向 production CA 注册账户</label>}
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !accountEmail.trim() || (accountEnvironment === 'production' && !confirmProduction)}>创建 ACME 账户</button><span>创建账户后仍需读取 Directory、获取 nonce 并同意 CA 条款完成注册。</span></div>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !accountEmail.trim() || (accountEnvironment === 'production' && !confirmProduction) || (accountCa === 'customacme' && !accountDirectoryUrl.trim()) || (accountCaEntry.eab && (!eabKid.trim() || !eabHmacKey.trim()))}>创建 ACME 账户</button><span>创建账户后仍需读取 Directory、获取 nonce 并同意 CA 条款完成注册。</span></div>
       </form>
       {accounts.length > 0 && <div className="certificate-account-list">{accounts.map((account) => <article className="certificate-account-card" key={account.id}>
-        <div><strong>#{account.id} · {account.email}</strong><span className="value-detail">{account.environment === 'staging' ? '测试 CA' : '生产 CA'} · {account.status}</span></div>
+        <div><strong>#{account.id} · {account.email}</strong><span className="value-detail">{caName(account.ca)} · {account.environment === 'staging' ? '测试 CA' : '生产 CA'} · {account.status}</span></div>
         <div className="certificate-account-actions">
           {account.status !== 'disabled' && (account.status !== 'ready' || !account.nonceReady) && <button className="button button-secondary" type="button" disabled={busy} onClick={() => void prepareAccount(account)}>{account.status === 'pending_directory' ? '读取 Directory 并准备 nonce' : account.status === 'ready' ? '准备签发 nonce' : '刷新一次性 nonce'}</button>}
           {account.status === 'pending_registration' && <>
@@ -273,14 +347,14 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     </section>
     {!accountsOnly && <>
     <section className="panel" aria-labelledby="acme-issuance-title">
-      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2></div><span className="panel-meta">DNS-01 · Cloudflare</span></div>
-      <p className="form-hint certificate-security-note">每个订单分步推进，自动写入并清理本系统创建的 TXT challenge。CA 请求结果未知时必须先核对状态，不会自动重试。</p>
+      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2></div><span className="panel-meta">DNS-01 · 已同步 DNS Zone</span></div>
+      <p className="form-hint certificate-security-note">每个订单分步推进，自动写入并清理本系统创建的 TXT challenge，支持已同步的 DNS 服务商。CA 请求结果未知时必须先核对状态，不会自动重试。</p>
       <form className="dns-form certificate-setup-form" onSubmit={createAcmeOrder}>
         <label className="form-field"><span>已注册 ACME 账户</span><select value={issuanceAccountId} onChange={(event) => setIssuanceAccountId(event.target.value)} required>
-          <option value="">选择 staging 或已确认的 production 账户</option>{accounts.filter((account) => account.status === 'ready').map((account) => <option key={account.id} value={account.id}>#{account.id} · {account.environment} · {account.email}</option>)}
+          <option value="">选择 staging 或已确认的 production 账户</option>{accounts.filter((account) => account.status === 'ready').map((account) => <option key={account.id} value={account.id}>#{account.id} · {caName(account.ca)} · {account.environment} · {account.email}</option>)}
         </select></label>
-        <label className="form-field"><span>Cloudflare DNS Zone</span><select value={dnsDomainId} onChange={(event) => setDnsDomainId(event.target.value)} required>
-          <option value="">选择已同步的 Cloudflare 域名</option>{dnsZones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name} · {zone.accountName}</option>)}
+        <label className="form-field"><span>DNS Zone（已同步）</span><select value={dnsDomainId} onChange={(event) => setDnsDomainId(event.target.value)} required>
+          <option value="">选择已同步的 DNS 域名</option>{dnsZones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name} · {zone.accountName}</option>)}
         </select></label>
         <label className="form-field certificate-domain-field"><span>证书域名（每行一个，可用通配符）</span><textarea value={domainsText} onChange={(event) => setDomainsText(event.target.value)} required maxLength={6000} spellCheck={false} placeholder={'example.com\nwww.example.com\n*.example.com'} /></label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !issuanceAccountId || !dnsDomainId || !domainsText.trim() || !selectedAccount?.nonceReady}>创建并准备签发任务</button><span>仅支持当前 Zone 覆盖的域名；账号密钥与 CSR 私钥均加密存储。所选账户须先在上方准备一次性 nonce。</span></div>
@@ -290,7 +364,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
           const step = issuanceStep(order);
           const canCancel = ['draft','outcome_unknown','failed'].includes(order.status) && !order.needsDnsCleanup;
           return <article className="certificate-issuance-card" key={order.id}>
-            <div className="certificate-issuance-heading"><div><strong className="mono">任务 #{order.id}</strong><span className="value-detail">{order.environment === 'staging' ? '测试 CA' : '生产 CA'} · {issuanceStatus(order.status)}</span></div>
+            <div className="certificate-issuance-heading"><div><strong className="mono">任务 #{order.id}</strong><span className="value-detail">{caName(order.ca)} · {order.environment === 'staging' ? '测试 CA' : '生产 CA'} · {issuanceStatus(order.status)}</span></div>
               <div className="certificate-domains">{order.domains.map((domain) => <span className="data-badge mono" key={domain}>{domain}</span>)}</div>
             </div>
             {order.lastError && <p className="form-hint certificate-order-error">状态提示：{order.lastError}。请先核对 CA/DNS 侧结果，不要盲目重试。</p>}
@@ -306,7 +380,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     </section>
     <section className="panel" aria-labelledby="certificate-import-title">
       <div className="panel-heading"><div><h2 id="certificate-import-title">导入已签发证书</h2></div><span className="panel-meta">RSA · PEM · AES-GCM 加密存储</span></div>
-      <p className="form-hint certificate-security-note">支持手动导入证书链和匹配的 RSA 私钥（至少 2048 位）。私钥不会回显在订单列表；自动续签和部署仍待接入。</p>
+      <p className="form-hint certificate-security-note">支持手动导入证书链和匹配的 RSA 私钥（至少 2048 位）。私钥不会回显在订单列表；开启自动续签后由计划任务分步续签。</p>
       <form className="dns-form certificate-import-form" onSubmit={importCertificate}>
         <label className="form-field"><span>完整证书链（PEM）</span><textarea value={fullchain} onChange={(event) => setFullchain(event.target.value)} required maxLength={48 * 1024} autoComplete="off" spellCheck={false} aria-label="完整证书链 PEM" placeholder="-----BEGIN CERTIFICATE-----" /></label>
         <label className="form-field"><span>未加密 RSA 私钥（PEM）</span><textarea value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} required maxLength={16 * 1024} autoComplete="off" spellCheck={false} aria-label="RSA 私钥 PEM" placeholder="-----BEGIN PRIVATE KEY-----" /></label>
@@ -318,14 +392,19 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取证书订单…</div>
         : items.length === 0 ? <div className="panel-empty">还没有证书订单。可导入一份已签发的 PEM 证书和匹配私钥。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">
-            <thead><tr><th>订单</th><th>域名</th><th>签发机构</th><th>密钥</th><th>有效期</th><th>操作</th></tr></thead>
+            <thead><tr><th>订单</th><th>域名</th><th>签发机构</th><th>密钥</th><th>有效期</th><th>自动续签</th><th>操作</th></tr></thead>
             <tbody>{items.map((order) => <tr key={order.id}>
-              <td><strong className="mono">#{order.id}</strong><span className="value-detail">{order.source === 'acme' ? 'ACME 签发' : '手动导入'}</span></td>
+              <td><strong className="mono">#{order.id}</strong><span className="value-detail">{order.source === 'acme' ? 'ACME 签发' : '手动导入'}</span>{order.renewedFrom && <span className="value-detail">续签自 #{order.renewedFrom}</span>}</td>
               <td className="certificate-domains">{order.domains.map((domain) => <span className="data-badge mono" key={domain}>{domain}</span>)}</td>
               <td>{order.issuer}</td>
               <td className="mono">{order.keyType} {order.keySize}</td>
               <td><span>{date(order.issuedAt)}</span><span className="value-detail">到期 {date(order.expiresAt)}</span></td>
-              <td><button className="button button-secondary" type="button" disabled={busy} onClick={() => void download(order)}>下载 PFX</button></td>
+              <td><label className="certificate-confirm"><input type="checkbox" checked={order.isAuto} disabled={busy || order.revokedAt !== null} onChange={(event) => void toggleAuto(order, event.target.checked)} />自动</label>{order.revokedAt !== null && <span className="value-detail">已吊销 {date(order.revokedAt)}</span>}</td>
+              <td className="certificate-order-actions">
+                <button className="button button-secondary" type="button" disabled={busy} onClick={() => void download(order)}>下载 PFX</button>
+                {order.source === 'acme' && order.revokedAt === null && <button className="button button-quiet" type="button" disabled={busy} onClick={() => void revokeOrder(order)}>吊销</button>}
+                <button className="button button-quiet" type="button" disabled={busy} onClick={() => void removeOrder(order)}>删除</button>
+              </td>
             </tr>)}</tbody>
           </table></div>}
       <div className="panel-footnote">PFX 遵循旧接口兼容密码 123456。导出操作会写审计；审计未确认时不会返回证书材料。</div>

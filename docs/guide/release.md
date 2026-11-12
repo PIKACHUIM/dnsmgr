@@ -58,11 +58,24 @@ npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT (SELECT COUNT(*
 
 ```bash
 npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='login_captcha_challenges'"
+```
+
+`wrangler.toml` 中的 `name` 为 `dnsmgrui-work`，D1 绑定为 `dnsmgrui-data`。后续的证书自动化、通知 outbox、CNAME 代理、自动部署、优选 IP 迁移（`0012`–`0017`）均为新增表或新增列，可先备份再逐文件执行；部署前用在线更新页或 SQL 核对 `d1_migrations` / `user_version`：
+
+```bash
+npx wrangler d1 export dnsmgrui-data --remote --output backup-before-automation-$(date +%Y%m%d-%H%M).sql
+npx wrangler d1 migrations apply dnsmgrui-data --remote
+npx wrangler d1 execute dnsmgrui-data --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('notification_outbox','cert_deploy_tasks','optimize_ip_tasks')"
+```
+
+自动迁移命令会按顺序应用尚未登记的迁移，不会删除现有数据。生产 ACME 仍要求在界面显式确认；证书部署、续签失败和通知投递由 `/cron` 推进，部署前应先配置执行器令牌或 Webhook。邮件通知需要额外的 Cloudflare `send_email` 绑定并以 `EMAIL` 名称暴露；未配置时通知设置会返回 `MAIL_BINDING_REQUIRED`，不影响其他渠道。
+
+```bash
 npx wrangler deploy
 npx wrangler deployments list
 ```
 
-`wrangler.toml` 中的 `name` 为 `dnsmgrui-work`，D1 绑定为 `dnsmgrui-data`。部署完成后至少检查：
+部署完成后至少检查：
 
 ```bash
 curl -fsS https://<worker-domain>/health

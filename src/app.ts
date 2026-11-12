@@ -19,6 +19,12 @@ import { notifyRoutes } from './routes/notify';
 import { failoverRoutes } from './routes/failover';
 import { certificateRoutes } from './routes/certificates';
 import { certificateAcmeRoutes } from './routes/certificate-acme';
+import { certificateCnameRoutes } from './routes/cname';
+import { certificateDeployRoutes } from './routes/deploy';
+import { optimizeRoutes } from './routes/optimize';
+import { userRoutes } from './routes/users';
+import { proxyRoutes } from './routes/proxy';
+import { updateRoutes } from './routes/update';
 
 declare const __APP_SHELL__: string;
 const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
@@ -27,7 +33,7 @@ const pagePatterns = [
   /^\/$/, /^\/(install|login|setpwd)$/, /^\/user$/, /^\/log$/,
   /^\/account(?:\/(add|edit))?$/, /^\/domain(?:\/(add|category|expirenotice))?$/,
   /^\/record\/(\d+|batchadd|batchedit|search|smartparse)$/,
-  /^\/record\/(batchadd|log|weight|alias|import)\/\d+$/,
+  /^\/record\/(batchadd|batchedit|log|weight|groups|alias|import)\/\d+$/,
   /^\/cloudflare\/(hostnames|tunnels)\/\d+$/,
   /^\/dmonitor\/(overview|task)(?:\/(add|edit))?$/, /^\/dmonitor\/task\/info\/\d+$/,
   /^\/optimizeip\/(opipset|opiplist)$/, /^\/optimizeip\/opipform\/(add|edit)$/,
@@ -35,8 +41,8 @@ const pagePatterns = [
   /^\/cert\/(account|order|deploy)\/(add|edit|import|show|download)$/,
   /^\/schedule\/stask(?:\/(add|edit))?$/, /^\/system\/(loginset|noticeset|proxyset|cronset|update)$/,
 ];
-const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:data|remark|delete|update|status))(?:\/|$)|\/cron(?:\?|$)|\/(verifycode|install|login|auth\/totp|logout|setpwd|totp\/))/;
-const legacySignedApiPaths = /^\/api\/(?:domain|cert\/order|record\/(?:data|remark|delete|update|status))(?:\/|$)/;
+const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)|\/cron(?:\?|$)|\/qqbot\/webhook(?:\?|$)|\/(verifycode|install|login|auth\/totp|logout|setpwd|totp\/))/;
+const legacySignedApiPaths = /^\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)/;
 const certificateSessionPaths = /^\/api\/v1\/cert(?:\/|$)/;
 
 export function createApp(options: { database?: SqlDatabase; shell?: string } = {}) {
@@ -77,13 +83,19 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
   app.route('/', failoverRoutes());
   app.route('/', certificateRoutes());
   app.route('/', certificateAcmeRoutes());
+  app.route('/', certificateCnameRoutes());
+  app.route('/', certificateDeployRoutes());
+  app.route('/', optimizeRoutes());
+  app.route('/', userRoutes());
+  app.route('/', proxyRoutes());
+  app.route('/', updateRoutes());
   app.get('/api/v1/bootstrap', requireSession, (c) => {
     const storage = c.get('storage').config;
     return c.json({
       code: 0, user: publicUser(c.get('principal').user),
       runtime: { platform: c.env.RUNTIME.platform, storage: { driver: storage.driver, format: storage.format } },
-      capabilities: { dns: true, cert: true, tasks: true, executor: false },
-      migration: { stage: 'wave5-acme-dns01-cloudflare' },
+      capabilities: { dns: true, cert: true, tasks: true, executor: true },
+      migration: { stage: 'wave7-system-management' },
     });
   });
 

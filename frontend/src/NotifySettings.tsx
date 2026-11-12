@@ -12,8 +12,12 @@ interface Config {
   dingtalkWebhookUrl: string; dingtalkSecret: string; dingtalkAtMobiles: string;
   dingtalkConfigured: boolean; dingtalkUrlConfigured: boolean; dingtalkSecretConfigured: boolean; dingtalkAtMobilesConfigured: boolean;
   feishuWebhookUrl: string; feishuUserIds: string; feishuConfigured: boolean; feishuUrlConfigured: boolean; feishuUserIdsConfigured: boolean;
+  mailTo: string; mailFrom: string; mailConfigured: boolean; mailToConfigured: boolean; mailFromConfigured: boolean; mailBindingAvailable: boolean;
+  qqbotAppId: string; qqbotAppSecret: string; qqbotOpenId: string; qqbotConfigured: boolean;
+  qqbotAppIdConfigured: boolean; qqbotAppSecretConfigured: boolean; qqbotOpenIdConfigured: boolean; qqbotWebhookUrl: string;
   clearUrl: boolean; clearHeaders: boolean; clearBody: boolean;
   clearWxpusherAppToken: boolean; clearWxpusherUids: boolean; clearTelegram: boolean; clearWecom: boolean; clearDingtalk: boolean; clearFeishu: boolean;
+  clearMail: boolean; clearQqbot: boolean;
 }
 interface Props { session: Session; onExpired: (message: string) => void }
 
@@ -32,8 +36,8 @@ export function NotifySettings({ session, onExpired }: Props) {
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     try {
-      const result = await request<{ code: 0 } & Omit<Config, 'clearUrl' | 'clearHeaders' | 'clearBody' | 'clearWxpusherAppToken' | 'clearWxpusherUids' | 'clearTelegram' | 'clearWecom' | 'clearDingtalk' | 'clearFeishu'>>('/api/v1/system/notify', { signal });
-      if (!signal.aborted) setConfig({ ...result, clearUrl: false, clearHeaders: false, clearBody: false, clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, clearWecom: false, clearDingtalk: false, clearFeishu: false });
+      const result = await request<{ code: 0 } & Omit<Config, 'clearUrl' | 'clearHeaders' | 'clearBody' | 'clearWxpusherAppToken' | 'clearWxpusherUids' | 'clearTelegram' | 'clearWecom' | 'clearDingtalk' | 'clearFeishu' | 'clearMail' | 'clearQqbot'>>('/api/v1/system/notify', { signal });
+      if (!signal.aborted) setConfig({ ...result, clearUrl: false, clearHeaders: false, clearBody: false, clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, clearWecom: false, clearDingtalk: false, clearFeishu: false, clearMail: false, clearQqbot: false });
     } catch (failure) { if (!signal.aborted) handle(failure); }
     finally { if (!signal.aborted) setLoading(false); }
   }, [handle]);
@@ -44,7 +48,7 @@ export function NotifySettings({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [load]);
 
-  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles' | 'feishuWebhookUrl' | 'feishuUserIds', value: string) {
+  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles' | 'feishuWebhookUrl' | 'feishuUserIds' | 'mailTo' | 'mailFrom' | 'qqbotAppId' | 'qqbotAppSecret' | 'qqbotOpenId', value: string) {
     setConfig((current) => {
       if (!current) return current;
       const updated = { ...current, [key]: value };
@@ -59,6 +63,8 @@ export function NotifySettings({ session, onExpired }: Props) {
       if (key === 'wecomWebhookUrl') updated.clearWecom = false;
       if (key === 'dingtalkWebhookUrl' || key === 'dingtalkSecret' || key === 'dingtalkAtMobiles') updated.clearDingtalk = false;
       if (key === 'feishuWebhookUrl' || key === 'feishuUserIds') updated.clearFeishu = false;
+      if (key === 'mailTo' || key === 'mailFrom') updated.clearMail = false;
+      if (key === 'qqbotAppId' || key === 'qqbotAppSecret' || key === 'qqbotOpenId') updated.clearQqbot = false;
       return updated;
     });
   }
@@ -80,6 +86,8 @@ export function NotifySettings({ session, onExpired }: Props) {
         dingtalkWebhookUrl: config.dingtalkWebhookUrl, dingtalkSecret: config.dingtalkSecret,
         dingtalkAtMobiles: config.dingtalkAtMobiles, clearDingtalk: config.clearDingtalk,
         feishuWebhookUrl: config.feishuWebhookUrl, feishuUserIds: config.feishuUserIds, clearFeishu: config.clearFeishu,
+        mailTo: config.mailTo, mailFrom: config.mailFrom, clearMail: config.clearMail,
+        qqbotAppId: config.qqbotAppId, qqbotAppSecret: config.qqbotAppSecret, qqbotOpenId: config.qqbotOpenId, clearQqbot: config.clearQqbot,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setConfig((current) => current ? {
         ...current, url: '', headers: '', body: '', wxpusherAppToken: '', wxpusherUids: '',
@@ -88,6 +96,7 @@ export function NotifySettings({ session, onExpired }: Props) {
         clearWxpusherAppToken: false, clearWxpusherUids: false, clearTelegram: false, wecomWebhookUrl: '', clearWecom: false,
         dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', clearDingtalk: false,
         feishuWebhookUrl: '', feishuUserIds: '', clearFeishu: false,
+        mailTo: '', mailFrom: '', clearMail: false, qqbotAppSecret: '', qqbotOpenId: '', clearQqbot: false,
       } : current);
       setNotice('通知设置已保存');
       await load(controller.signal);
@@ -152,16 +161,27 @@ export function NotifySettings({ session, onExpired }: Props) {
           <label className="form-field"><span>机器人 Webhook URL</span><input value={config.feishuWebhookUrl} onChange={(event) => update('feishuWebhookUrl', event.target.value)} maxLength={1024} placeholder={config.feishuUrlConfigured ? '已配置，留空保留' : 'https://open.feishu.cn/open-apis/bot/v2/hook/...'} /></label>
           <label className="form-field"><span>@用户 user_id（选填）</span><input value={config.feishuUserIds} onChange={(event) => update('feishuUserIds', event.target.value)} maxLength={2048} placeholder={config.feishuUserIdsConfigured ? '已配置，留空保留' : '逗号分隔 user_id，或填写 all'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearFeishu} onChange={(event) => setConfig({ ...config, clearFeishu: event.target.checked })} /> 清除飞书机器人配置</span></label>
+          <h3>邮件（Cloudflare Email）</h3>
+          <p className="form-hint">通过 Worker 的 <code>send_email</code> 绑定发送，发件地址必须是 Cloudflare Email 服务已验证的域名。{config.mailBindingAvailable ? '当前环境已绑定邮件发送服务。' : '当前环境未绑定邮件发送服务，暂不能配置。'}</p>
+          <label className="form-field"><span>收件邮箱</span><input value={config.mailTo} onChange={(event) => update('mailTo', event.target.value)} maxLength={1024} placeholder={config.mailToConfigured ? '已配置，留空保留' : 'ops@example.com，可用逗号分隔'} /></label>
+          <label className="form-field"><span>发件邮箱</span><input value={config.mailFrom} onChange={(event) => update('mailFrom', event.target.value)} maxLength={254} placeholder={config.mailFromConfigured ? '已配置，留空保留' : 'dns@example.com'} /></label>
+          <label className="form-field"><span><input type="checkbox" checked={config.clearMail} onChange={(event) => setConfig({ ...config, clearMail: event.target.checked })} /> 清除邮件通知配置</span></label>
+          <h3>QQ 机器人</h3>
+          <p className="form-hint">使用 QQ 开放平台机器人 API。回调地址为 <code>{config.qqbotWebhookUrl}</code>；与机器人单聊一次即可绑定 OpenID，也可手动填写。</p>
+          <label className="form-field"><span>AppID</span><input value={config.qqbotAppId} onChange={(event) => update('qqbotAppId', event.target.value)} maxLength={32} placeholder={config.qqbotAppIdConfigured ? '已配置，留空保留' : 'QQ 开放平台 AppID'} /></label>
+          <label className="form-field"><span>AppSecret</span><input type="password" value={config.qqbotAppSecret} onChange={(event) => update('qqbotAppSecret', event.target.value)} maxLength={128} autoComplete="new-password" placeholder={config.qqbotAppSecretConfigured ? '已配置，留空保留' : 'QQ 开放平台 AppSecret'} /></label>
+          <label className="form-field"><span>绑定 OpenID</span><input value={config.qqbotOpenId} onChange={(event) => update('qqbotOpenId', event.target.value)} maxLength={128} placeholder={config.qqbotOpenIdConfigured ? '已配置，留空保留' : '单聊后自动写入'} /></label>
+          <label className="form-field"><span><input type="checkbox" checked={config.clearQqbot} onChange={(event) => setConfig({ ...config, clearQqbot: event.target.checked })} /> 清除 QQ 机器人配置</span></label>
           <div className="form-actions">
             <button className="button button-primary" type="submit" disabled={busy}>保存</button>
-            <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured && !config.wecomConfigured && !config.dingtalkConfigured && !config.feishuConfigured)} onClick={() => void test()}>发送测试</button>
+            <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured && !config.wecomConfigured && !config.dingtalkConfigured && !config.feishuConfigured && !config.mailConfigured && !config.qqbotConfigured)} onClick={() => void test()}>发送测试</button>
             <span>Webhook 模板支持 <code>{'{title}'}</code> 与 <code>{'{content}'}</code>；GET 使用查询参数。</span>
           </div>
         </form>}
     </section>
     <section className="panel" aria-labelledby="notify-help-title">
       <div className="panel-heading"><div><h2 id="notify-help-title">说明</h2></div><span className="panel-meta">当前范围</span></div>
-      <p>目前支持自定义 Webhook、WxPusher、Telegram、企业微信、钉钉和飞书群机器人；定时任务失败及容灾切换/恢复事件会尝试发送已配置渠道。邮件和 QQ 机器人仍待迁移。通知失败不会回滚已完成的 DNS 操作。</p>
+      <p>支持自定义 Webhook、WxPusher、Telegram、企业微信、钉钉、飞书、邮件与 QQ 机器人；定时任务失败、容灾切换/恢复、证书签发与续签结果会尝试发送已配置渠道。QQ 机器人主动消息受平台配额限制，发送失败会在测试结果中提示。通知失败不会回滚已完成的 DNS 或证书操作。</p>
     </section>
   </>;
 }

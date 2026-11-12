@@ -3,7 +3,7 @@ import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { lookupDomainExpiration } from '../dns/expiration';
 import {
-  NOTIFICATION_CHANNELS, sendConfiguredNotifications, type NotificationChannel, type NotificationDelivery,
+  sendConfiguredNotifications, type NotificationChannel, type NotificationDelivery,
 } from '../notify/settings';
 import { nowSeconds } from '../security/auth';
 import type { SqlDatabase } from '../storage/sql';
@@ -30,24 +30,30 @@ const DAY_SECONDS = 86_400;
 const NOTICE_COOLDOWN_SECONDS = 20 * 60 * 60;
 const MAX_NOTICE_DOMAINS = 10;
 export const EXPIRATION_NOTICE_CHANNELS_SETTING = 'expire_notice_channels';
-export type ExpirationNoticeChannels = Record<NotificationChannel, boolean>;
+export const EXPIRATION_NOTICE_CHANNELS = ['webhook', 'wxpusher', 'telegram', 'wecom', 'dingtalk', 'feishu'] as const;
+export type ExpirationNoticeChannel = typeof EXPIRATION_NOTICE_CHANNELS[number];
+export type ExpirationNoticeChannels = Record<ExpirationNoticeChannel, boolean>;
+
+function allExpirationChannels(enabled: boolean): ExpirationNoticeChannels {
+  return Object.fromEntries(EXPIRATION_NOTICE_CHANNELS.map((channel) => [channel, enabled])) as ExpirationNoticeChannels;
+}
 
 export function defaultExpirationNoticeChannels(): ExpirationNoticeChannels {
-  return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, true])) as ExpirationNoticeChannels;
+  return allExpirationChannels(true);
 }
 
 export function parseExpirationNoticeChannels(value: string | null): ExpirationNoticeChannels {
   if (value === null) return defaultExpirationNoticeChannels();
   try {
     const parsed: unknown = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, false])) as ExpirationNoticeChannels;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return allExpirationChannels(false);
     const settings = parsed as Record<string, unknown>;
-    if (NOTIFICATION_CHANNELS.some((channel) => typeof settings[channel] !== 'boolean')) {
-      return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, false])) as ExpirationNoticeChannels;
+    if (EXPIRATION_NOTICE_CHANNELS.some((channel) => typeof settings[channel] !== 'boolean')) {
+      return allExpirationChannels(false);
     }
-    return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, settings[channel]])) as ExpirationNoticeChannels;
+    return Object.fromEntries(EXPIRATION_NOTICE_CHANNELS.map((channel) => [channel, settings[channel]])) as ExpirationNoticeChannels;
   } catch {
-    return Object.fromEntries(NOTIFICATION_CHANNELS.map((channel) => [channel, false])) as ExpirationNoticeChannels;
+    return allExpirationChannels(false);
   }
 }
 
@@ -190,7 +196,9 @@ export async function executeExpirationNotice(c: Context<AppEnv>, offsetMinutes:
     'SELECT value FROM app_settings WHERE key=?', [EXPIRATION_NOTICE_CHANNELS_SETTING],
   );
   const channels = parseExpirationNoticeChannels(channelSettings[0]?.value ?? null);
-  const enabledChannels = new Set(NOTIFICATION_CHANNELS.filter((channel) => channels[channel]));
+  const enabledChannels = new Set<NotificationChannel>(
+    EXPIRATION_NOTICE_CHANNELS.filter((channel) => channels[channel]),
+  );
   if (enabledChannels.size === 0) return;
 
   const startedAt = nowSeconds();

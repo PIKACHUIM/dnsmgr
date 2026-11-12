@@ -8,7 +8,7 @@ interface Record {
   ttl: number; mx: number | null; weight: number | null; remark: string | null; status: 0 | 1;
 }
 interface FormState {
-  name: string; type: string; value: string; line: string; ttl: string; mx: string; remark: string;
+  name: string; type: string; value: string; line: string; ttl: string; mx: string; weight: string; remark: string;
 }
 interface VendorLog { time: string | null; action: string }
 interface RecordCheck { status: 'active' | 'mismatch' | 'not_found'; actual: string[]; expected?: string }
@@ -17,7 +17,7 @@ const TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR', 'UR
 const CHECK_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV', 'CAA']);
 const TYPE_LABELS: { [key: string]: string } = { URL: 'URL', REDIRECT_URL: '显性URL', FORWARD_URL: '隐性URL' };
 const PAGE_SIZE = 20;
-const EMPTY: FormState = { name: '', type: 'A', value: '', line: 'default', ttl: '600', mx: '', remark: '' };
+const EMPTY: FormState = { name: '', type: 'A', value: '', line: 'default', ttl: '600', mx: '', weight: '', remark: '' };
 
 interface Props {
   session: Session;
@@ -118,7 +118,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     controller.current = new AbortController();
     const body = {
       name: form.name.trim(), type: form.type, value: form.value.trim(), line: form.line,
-      ttl: Number(form.ttl), mx: form.mx === '' ? null : Number(form.mx), remark: form.remark.trim(),
+      ttl: Number(form.ttl), mx: form.mx === '' ? null : Number(form.mx), weight: form.weight === '' ? null : Number(form.weight), remark: form.remark.trim(),
     };
     try {
       if (editing) {
@@ -240,7 +240,8 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     setEditing(record.id);
     setForm({
       name: record.name, type: record.type, value: record.value, line: record.line,
-      ttl: String(record.ttl), mx: record.mx === null ? '' : String(record.mx), remark: record.remark ?? '',
+      ttl: String(record.ttl), mx: record.mx === null ? '' : String(record.mx),
+      weight: record.weight === null ? '' : String(record.weight), remark: record.remark ?? '',
     });
     setNotice('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -270,6 +271,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
         </select></label>
         <label className="form-field"><span>TTL</span><input type="number" min={1} max={86400} value={form.ttl} onChange={(event) => update('ttl', event.target.value)} required /></label>
         <label className="form-field"><span>MX 优先级</span><input type="number" min={0} max={65535} value={form.mx} onChange={(event) => update('mx', event.target.value)} placeholder="仅 MX" /></label>
+        <label className="form-field"><span>权重</span><input type="number" min={0} max={65535} value={form.weight} onChange={(event) => update('weight', event.target.value)} placeholder="仅支持的线路" /></label>
         <label className="form-field"><span>备注</span><input value={form.remark} onChange={(event) => update('remark', event.target.value)} maxLength={100} /></label>
         <div className="form-actions">
           <button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在提交…' : editing ? '保存修改' : '添加记录'}</button>
@@ -303,7 +305,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
               <th><input type="checkbox" aria-label="全选"
                 checked={records.length > 0 && records.every((record) => selected.includes(record.id))}
                 onChange={(event) => setSelected(event.target.checked ? records.map((record) => record.id) : [])} /></th>
-              <th>主机</th><th>类型</th><th>记录值</th><th>线路</th><th>TTL</th><th>状态</th><th>备注</th><th>操作</th>
+              <th>主机</th><th>类型</th><th>记录值</th><th>线路</th><th>TTL</th><th>权重</th><th>状态</th><th>备注</th><th>操作</th>
             </tr></thead>
             <tbody>{records.map((record) => <tr key={record.id}>
               <td><input type="checkbox" checked={selected.includes(record.id)} aria-label={`选择 ${record.name}`} onChange={() => toggleSelected(record.id)} /></td>
@@ -318,6 +320,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
               </td>
               <td>{lines?.find((line) => line.id === record.line)?.name ?? record.line}</td>
               <td>{record.ttl}</td>
+              <td>{record.weight ?? '—'}</td>
               <td>{record.status === 1 ? '启用' : '停用'}</td>
               <td>{record.remark ?? '—'}</td>
               <td className="row-actions">

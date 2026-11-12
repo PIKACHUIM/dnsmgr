@@ -38,6 +38,25 @@ const directories: Record<AcmeEnvironment, string> = {
   production: 'https://acme-v02.api.letsencrypt.org/directory',
 };
 
+export type AcmeCa = 'letsencrypt' | 'zerossl' | 'google' | 'litessl' | 'customacme';
+
+export const acmeCaCatalog: Record<AcmeCa, { name: string; staging: string | null; production: string | null; eab: boolean }> = {
+  letsencrypt: { name: "Let's Encrypt", staging: directories.staging, production: directories.production, eab: false },
+  zerossl: { name: 'ZeroSSL', staging: null, production: 'https://acme.zerossl.com/v2/DV90', eab: true },
+  google: {
+    name: 'Google Trust Services',
+    staging: 'https://dv.acme-v02.test-api.pki.goog/directory',
+    production: 'https://dv.acme-v02.api.pki.goog/directory',
+    eab: true,
+  },
+  litessl: { name: 'LiteSSL', staging: null, production: 'https://acme.litessl.com/acme/v2/directory', eab: true },
+  customacme: { name: '自定义 ACME', staging: null, production: null, eab: false },
+};
+
+export function isAcmeCa(value: unknown): value is AcmeCa {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(acmeCaCatalog, value);
+}
+
 function toBase64Url(value: string): string {
   return forge.util.encode64(value).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
 }
@@ -58,13 +77,35 @@ export function acmeDirectoryUrl(environment: AcmeEnvironment): string {
   return directories[environment];
 }
 
-export function validateAcmeUrl(environment: AcmeEnvironment, value: string): string {
+export function validateAcmeUrlFrom(origin: string, value: string): string {
   let parsed: URL;
   try { parsed = new URL(value); } catch { throw new AppError(502, 'ACME 服务返回了无效 URL', 'ACME_INVALID_URL'); }
-  if (parsed.protocol !== 'https:' || parsed.origin !== allowedOrigin(environment) || parsed.username || parsed.password || parsed.hash) {
+  let expected: URL;
+  try { expected = new URL(origin); } catch { throw new AppError(502, 'ACME 服务 URL 超出允许的 CA 域名', 'ACME_URL_REJECTED'); }
+  if (parsed.protocol !== 'https:' || parsed.origin !== expected.origin || parsed.username || parsed.password || parsed.hash) {
     throw new AppError(502, 'ACME 服务 URL 超出允许的 CA 域名', 'ACME_URL_REJECTED');
   }
   return parsed.toString();
+}
+
+export function validateAcmeUrl(environment: AcmeEnvironment, value: string): string {
+  return validateAcmeUrlFrom(directories[environment], value);
+}
+
+export function validateAcmeDirectoryUrl(value: string): string {
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new AppError(400, 'ACME Directory 地址无效', 'INVALID_ACME_DIRECTORY'); }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash
+    || (parsed.port !== '' && parsed.port !== '443')
+    || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host === 'localhost' || host.endsWith('.local')) {
+    throw new AppError(400, 'ACME Directory 必须是公网 HTTPS 地址', 'INVALID_ACME_DIRECTORY');
+  }
+  return parsed.toString();
+}
+
+export function acmeDirectoryOrigin(environment: AcmeEnvironment): string {
+  return allowedOrigin(environment);
 }
 
 function responseBody(text: string, contentType: string): unknown {
@@ -80,9 +121,12 @@ async function readResponse(response: Response): Promise<{ body: unknown; text: 
   return { body: responseBody(text, contentType), text };
 }
 
-export async function loadAcmeDirectory(fetcher: typeof fetch, environment: AcmeEnvironment): Promise<AcmeDirectory> {
-  const url = directories[environment];
-  const response = await fetcher(url, { method: 'GET', redirect: 'manual' });
+export async function loadAcmeDirectory(fetcher: typeof fetch, directoryUrl: string): Promise<AcmeDirectory> {
+  const target = directoryUrl === 'staging' || directoryUrl === 'production'
+    ? directories[directoryUrl]
+    : validateAcmeDirectoryUrl(directoryUrl);
+  const origin = new URL(target).origin;
+  const response = await fetcher(target, { method: 'GET', redirect: 'manual' });
   if (response.status !== 200) throw new AcmeProtocolError('无法读取 ACME Directory', response.status);
   const { body } = await readResponse(response);
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AcmeProtocolError('ACME Directory 格式无效', 502);
@@ -97,18 +141,21 @@ export async function loadAcmeDirectory(fetcher: typeof fetch, environment: Acme
     } catch { termsOfService = undefined; }
   }
   const directory = {
-    newNonce: validateAcmeUrl(environment, String(value.newNonce ?? '')),
-    newAccount: validateAcmeUrl(environment, String(value.newAccount ?? '')),
-    newOrder: validateAcmeUrl(environment, String(value.newOrder ?? '')),
-    ...(typeof value.revokeCert === 'string' ? { revokeCert: validateAcmeUrl(environment, value.revokeCert) } : {}),
-    ...(typeof value.keyChange === 'string' ? { keyChange: validateAcmeUrl(environment, value.keyChange) } : {}),
+    newNonce: validateAcmeUrlFrom(origin, String(value.newNonce ?? '')),
+    newAccount: validateAcmeUrlFrom(origin, String(value.newAccount ?? '')),
+    newOrder: validateAcmeUrlFrom(origin, String(value.newOrder ?? '')),
+    ...(typeof value.revokeCert === 'string' ? { revokeCert: validateAcmeUrlFrom(origin, value.revokeCert) } : {}),
+    ...(typeof value.keyChange === 'string' ? { keyChange: validateAcmeUrlFrom(origin, value.keyChange) } : {}),
     ...(termsOfService ? { meta: { termsOfService } } : {}),
   };
   return directory;
 }
 
-export async function fetchAcmeNonce(fetcher: typeof fetch, environment: AcmeEnvironment, newNonceUrl: string): Promise<string> {
-  const response = await fetcher(validateAcmeUrl(environment, newNonceUrl), { method: 'HEAD', redirect: 'manual' });
+export async function fetchAcmeNonce(fetcher: typeof fetch, originOrEnvironment: AcmeEnvironment | string, newNonceUrl: string): Promise<string> {
+  const origin = originOrEnvironment === 'staging' || originOrEnvironment === 'production'
+    ? directories[originOrEnvironment]
+    : originOrEnvironment;
+  const response = await fetcher(validateAcmeUrlFrom(origin, newNonceUrl), { method: 'HEAD', redirect: 'manual' });
   if (response.status < 200 || response.status >= 300) throw new AcmeProtocolError('无法取得 ACME Replay-Nonce', response.status);
   const nonce = response.headers.get('Replay-Nonce');
   if (!nonce || nonce.length > 512) throw new AcmeProtocolError('ACME 响应缺少有效 Replay-Nonce', 502);
@@ -140,8 +187,7 @@ export async function dns01Value(privateKeyPem: string, token: string): Promise<
   return toBase64Url(String.fromCharCode(...new Uint8Array(digest)));
 }
 
-export function createCertificateKeyAndCsr(domains: string[]): { privateKey: string; csrDer: string; keySize: number } {
-  if (domains.length < 1 || domains.length > 20) throw new AppError(400, '一次最多签发 20 个域名', 'INVALID_CERT_DOMAINS');
+export function createCertificateKeyAndCsr(domains: string[]): { privateKey: string; csrDer: string; keySize: number } {  if (domains.length < 1 || domains.length > 20) throw new AppError(400, '一次最多签发 20 个域名', 'INVALID_CERT_DOMAINS');
   const pair = forge.pki.rsa.generateKeyPair({ bits: 2048, workers: 0 });
   const csr = forge.pki.createCertificationRequest();
   csr.publicKey = pair.publicKey;
@@ -153,6 +199,30 @@ export function createCertificateKeyAndCsr(domains: string[]): { privateKey: str
   csr.sign(pair.privateKey, forge.md.sha256.create());
   const der = forge.asn1.toDer(forge.pki.certificationRequestToAsn1(csr)).getBytes();
   return { privateKey: forge.pki.privateKeyToPem(pair.privateKey), csrDer: toBase64Url(der), keySize: pair.privateKey.n.bitLength() };
+}
+
+function fromBase64Url(value: string): string {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
+  return atob(normalized + '='.repeat((4 - normalized.length % 4) % 4));
+}
+
+export async function externalAccountBinding(
+  privateKeyPem: string, kid: string, hmacKeyBase64Url: string, url: string,
+): Promise<Record<string, unknown>> {
+  if (!kid || kid.length > 256) throw new AppError(400, 'EAB KID 无效', 'INVALID_ACME_EAB');
+  let keyBytes: Uint8Array;
+  try { keyBytes = Uint8Array.from(fromBase64Url(hmacKeyBase64Url), (character) => character.charCodeAt(0)); }
+  catch { throw new AppError(400, 'EAB HMAC Key 必须是 Base64URL', 'INVALID_ACME_EAB'); }
+  if (keyBytes.length < 16 || keyBytes.length > 512) throw new AppError(400, 'EAB HMAC Key 长度无效', 'INVALID_ACME_EAB');
+  const protected64 = toBase64Url(JSON.stringify({ alg: 'HS256', kid, url }));
+  const payload64 = toBase64Url(JSON.stringify(accountJwk(privateKeyPem)));
+  const key = await crypto.subtle.importKey('raw', keyBytes.buffer as ArrayBuffer, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${protected64}.${payload64}`));
+  return {
+    protected: protected64,
+    payload: payload64,
+    signature: toBase64Url(String.fromCharCode(...new Uint8Array(signature))),
+  };
 }
 
 export async function signAcmeJws(options: {
@@ -180,13 +250,14 @@ export async function signAcmeJws(options: {
 
 export async function postAcmeJws(fetcher: typeof fetch, options: {
   environment: AcmeEnvironment;
+  origin?: string;
   privateKeyPem: string;
   nonce: string;
   url: string;
   payload: unknown;
   kid?: string;
 }): Promise<AcmeJwsResponse> {
-  const url = validateAcmeUrl(options.environment, options.url);
+  const url = options.origin ? validateAcmeUrlFrom(options.origin, options.url) : validateAcmeUrl(options.environment, options.url);
   const jws = await signAcmeJws(options);
   const response = await fetcher(url, {
     method: 'POST',

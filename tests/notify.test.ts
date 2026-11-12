@@ -3,6 +3,7 @@ import { createApp } from '../src/app';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { environment } from '../src/platform/runtime';
 import { parseConfig, renderTemplate } from '../src/notify/custom';
+import { signQqBotPayload, verifyQqBotSignature } from '../src/notify/qqbot';
 import { createTestDatabase } from './helpers/sqlite';
 
 const credentials = { username: 'admin', password: 'test-password-2026!' };
@@ -33,6 +34,8 @@ describe('notification settings API', () => {
   let wecomErrcode = 0;
   let dingtalkErrcode = 0;
   let feishuCode = 0;
+  let qqbotSendOk = true;
+  let mailMessages: Record<string, unknown>[] = [];
 
   beforeEach(async () => {
     testDb = createTestDatabase();
@@ -43,9 +46,17 @@ describe('notification settings API', () => {
     wecomErrcode = 0;
     dingtalkErrcode = 0;
     feishuCode = 0;
+    qqbotSendOk = true;
+    mailMessages = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       sent.push(`${init.method ?? 'GET'} ${String(input)} ${String(init.body ?? '')}`);
       const url = new URL(String(input));
+      if (url.hostname === 'bots.qq.com') {
+        return new Response(JSON.stringify({ access_token: 'qqbot-access-token', expires_in: 7200 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.hostname === 'api.sgroup.qq.com') {
+        return new Response(JSON.stringify(qqbotSendOk ? { id: 'msg-1' } : { code: 40054, message: 'active message rejected' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.hostname === 'wxpusher.zjiecode.com') {
         return new Response(JSON.stringify({ success: wxpusherSuccess }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
@@ -458,5 +469,145 @@ describe('notification settings API', () => {
     });
     expect(incomplete.status).toBe(400);
     expect((await incomplete.json()).reason).toBe('INCOMPLETE_FEISHU_CONFIG');
+  });
+
+  it('requires the email binding and sends mail notifications with the configured sender', async () => {
+    const missing = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ mailTo: 'ops@example.test', mailFrom: 'dns@example.test' }),
+    });
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).reason).toBe('MAIL_BINDING_REQUIRED');
+
+    bindings.EMAIL = {
+      send: async (message) => { mailMessages.push(message as unknown as Record<string, unknown>); return { messageId: 'mail-1' }; },
+    };
+    const invalid = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ mailTo: 'not-an-email', mailFrom: 'dns@example.test' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_MAIL_RECIPIENTS');
+
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ mailTo: 'ops@example.test', mailFrom: 'dns@example.test' }),
+    });
+    expect(await saved.json()).toMatchObject({ mailConfigured: true, mailToConfigured: true, mailFromConfigured: true, mailBindingAvailable: true });
+
+    const read = await request('/api/v1/system/notify', { headers: { cookie } });
+    const view = JSON.stringify(await read.json());
+    expect(view).not.toContain('ops@example.test');
+    expect(view).toContain('"mailConfigured":true');
+
+    const delivered = await post('/api/v1/system/notify/test', { title: '证书到期', content: 'example.test 即将到期' });
+    expect(await delivered.json()).toMatchObject({ code: 0, channels: [{ channel: 'mail', status: 202 }] });
+    expect(mailMessages).toHaveLength(1);
+    expect(mailMessages[0]).toMatchObject({
+      to: ['ops@example.test'], from: 'dns@example.test', subject: '证书到期', text: 'example.test 即将到期',
+    });
+    expect(String(mailMessages[0]!.html)).toContain('example.test 即将到期');
+  });
+
+  it('validates QQ bot credentials, caches the access token and delivers markdown messages', async () => {
+    const missingSecret = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ qqbotAppId: '1020304050' }),
+    });
+    expect(missingSecret.status).toBe(400);
+    expect((await missingSecret.json()).reason).toBe('INCOMPLETE_QQBOT_CONFIG');
+
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ qqbotAppId: '1020304050', qqbotAppSecret: 'secret-value-0123456789', qqbotOpenId: 'OPENID_0123456789' }),
+    });
+    expect(await saved.json()).toMatchObject({ qqbotConfigured: true, qqbotAppIdConfigured: true, qqbotAppSecretConfigured: true, qqbotOpenIdConfigured: true });
+
+    const first = await post('/api/v1/system/notify/test', { title: '证书已签发', content: 'example.test' });
+    expect(await first.json()).toMatchObject({ code: 0, channels: [{ channel: 'qqbot', status: 200 }] });
+    expect(sent.filter((call) => call.includes('bots.qq.com'))).toHaveLength(1);
+    expect(sent.find((call) => call.includes('bots.qq.com'))).toContain('"clientSecret":"secret-value-0123456789"');
+    const message = sent.find((call) => call.includes('api.sgroup.qq.com'))!;
+    expect(message).toContain('/v2/users/OPENID_0123456789/messages');
+    expect(message).toContain('"msg_type":2');
+    expect(message).toContain('# 证书已签发');
+
+    const second = await post('/api/v1/system/notify/test', { title: '续签成功', content: 'example.test' });
+    expect((await second.json()).channels).toEqual([{ channel: 'qqbot', status: 200 }]);
+    expect(sent.filter((call) => call.includes('bots.qq.com'))).toHaveLength(1);
+  });
+
+  it('answers QQ bot callback validation, rejects unsigned events and binds the sender openid', async () => {
+    const secret = 'secret-value-0123456789';
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ qqbotAppId: '1020304050', qqbotAppSecret: secret }),
+    });
+    expect(saved.status).toBe(200);
+
+    const validation = await request('/qqbot/webhook', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op: 13, d: { event_ts: '1700000000', plain_token: 'plain-token-value' } }),
+    });
+    expect(validation.status).toBe(200);
+    const validationBody = await validation.json() as { plain_token: string; signature: string };
+    expect(validationBody.plain_token).toBe('plain-token-value');
+    expect(await verifyQqBotSignature('1700000000', validationBody.signature, 'plain-token-value', secret)).toBe(true);
+
+    const timestamp = '1700000001';
+    const eventBody = JSON.stringify({ op: 0, t: 'C2C_MESSAGE_CREATE', d: { id: 'msg-1', author: { user_openid: 'OPENID_0123456789' } } });
+    const rejected = await request('/qqbot/webhook', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-signature-timestamp': timestamp, 'x-signature-ed25519': 'f'.repeat(128) },
+      body: eventBody,
+    });
+    expect(rejected.status).toBe(401);
+
+    const accepted = await request('/qqbot/webhook', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json', 'x-bot-appid': '1020304050',
+        'x-signature-timestamp': timestamp, 'x-signature-ed25519': await signQqBotPayload(`${timestamp}${eventBody}`, secret),
+      },
+      body: eventBody,
+    });
+    expect(accepted.status).toBe(200);
+    const read = await request('/api/v1/system/notify', { headers: { cookie } });
+    expect(await read.json()).toMatchObject({ qqbotOpenIdConfigured: true });
+    expect(sent.some((call) => call.includes('/v2/users/OPENID_0123456789/messages'))).toBe(true);
+  });
+
+  it('delivers queued certificate notifications only while certificate notices are enabled', async () => {
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ url: 'https://example.com/hook', method: 'POST' }),
+    });
+    expect(saved.status).toBe(200);
+
+    await testDb.db.execute(
+      `INSERT INTO notification_outbox (topic,title,content,created_at) VALUES ('certificate','SSL 证书已签发','example.test',1)`,
+    );
+    const flushed = await post('/api/v1/system/notify/flush', {});
+    expect(await flushed.json()).toMatchObject({ code: 0, delivered: 1, failed: 0 });
+    expect(sent.some((call) => call.includes('https://example.com/hook'))).toBe(true);
+    const delivered = await testDb.db.query<{ sent_at: number | null; attempts: number }>(
+      'SELECT sent_at,attempts FROM notification_outbox ORDER BY id DESC LIMIT 1',
+    );
+    expect(delivered[0]!.sent_at).toBeTypeOf('number');
+    expect(delivered[0]!.attempts).toBe(1);
+
+    await testDb.db.execute(
+      `INSERT INTO app_settings (key,value,updated_at) VALUES ('cert_notify_enabled','0',1)
+       ON CONFLICT(key) DO UPDATE SET value='0'`,
+    );
+    await testDb.db.execute(
+      `INSERT INTO notification_outbox (topic,title,content,created_at) VALUES ('certificate','SSL 证书续签成功','example.test',2)`,
+    );
+    const skipped = await post('/api/v1/system/notify/flush', {});
+    expect(await skipped.json()).toMatchObject({ code: 0, delivered: 0 });
+    const latest = await testDb.db.query<{ last_error: string | null; sent_at: number | null }>(
+      'SELECT last_error,sent_at FROM notification_outbox ORDER BY id DESC LIMIT 1',
+    );
+    expect(latest[0]).toMatchObject({ last_error: 'DISABLED' });
+    expect(latest[0]!.sent_at).toBeTypeOf('number');
   });
 });

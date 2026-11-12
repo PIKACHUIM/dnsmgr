@@ -30,6 +30,7 @@ export interface Bindings {
   PUBLIC_ORIGIN?: string;
   CLIENT_IP?: string;
   EXECUTOR_URL?: string;
+  EMAIL?: { send(message: { to: string | string[]; from: string; subject: string; text: string; html?: string }): Promise<unknown> };
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }
 
