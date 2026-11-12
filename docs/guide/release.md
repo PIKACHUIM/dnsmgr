@@ -8,6 +8,7 @@
 npm run typecheck
 npm test
 npm run test:compat
+npm run test:e2e
 npm run build:cloudflare
 npm run build:edgeone
 npm run build:esa
@@ -15,7 +16,7 @@ npm run docs:build
 npm run docs:verify
 ```
 
-GitHub Actions 的 `Verify` 工作流（`.github/workflows/verify.yml`）会在 push 到 `main` 和 Pull Request 时执行同一组检查。`compat` 检查只验证旧 PHP 契约基线未漂移，不代表 TypeScript 功能覆盖率。
+GitHub Actions 的 `Verify` 工作流（`.github/workflows/verify.yml`）会在 push 到 `main` 和 Pull Request 时执行 typecheck、单测、兼容基线、三平台构建与文档构建；浏览器 E2E 需要本机 Chrome，发布前在本地执行 `npm run test:e2e`。`compat` 检查只验证旧 PHP 契约基线未漂移，不代表 TypeScript 功能覆盖率。
 
 上线前还需确认：
 
@@ -23,6 +24,7 @@ GitHub Actions 的 `Verify` 工作流（`.github/workflows/verify.yml`）会在 
 - `COORDINATOR_ID` 与存储身份保持不变。修改驱动、格式、数据库 URL 或对象命名空间会被识别为换库并拒绝启动。
 - `APP_KEY`、`SETUP_TOKEN` 只存在于平台 Secret，不进入 `wrangler.toml`、构建产物或前端包。
 - 已用真实 DNS 账户至少验证一次凭据校验、域名同步与一条记录的增删改；驱动单测使用构造请求，不能替代真实冒烟。
+- ACME 上线前先在 staging 完成一次 DNS-01 签发：创建账户、注册、提交订单、写入并清理 TXT、取回证书。若没有真实 CA 条件，至少确认 `tests/cert-acme-routes.test.ts` 的模拟链路通过，并保留 `0011` 备份与行数核对记录。
 
 ## Cloudflare Workers 发布
 
