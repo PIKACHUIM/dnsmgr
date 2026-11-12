@@ -359,6 +359,23 @@ a.button:hover { text-decoration: none; }
 .certificate-security-note { margin: 0; padding: 0 24px 14px; }
 .certificate-import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 24px 24px; }
 .certificate-import-form textarea { min-height: 220px; }
+.certificate-setup-form { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 24px 20px; }
+.certificate-setup-form .certificate-confirm,
+.certificate-confirm { display: flex; grid-column: 1 / -1; align-items: center; gap: 9px; color: var(--color-text); font-size: var(--font-sm); }
+.certificate-setup-form .certificate-confirm input,
+.certificate-confirm input { width: 18px; min-height: 18px; height: 18px; flex: 0 0 auto; margin: 0; accent-color: var(--color-accent); }
+.certificate-domain-field { grid-column: 1 / -1; }
+.certificate-domain-field textarea { min-height: 112px; }
+.certificate-account-list, .certificate-issuance-list { display: grid; gap: 10px; padding: 16px 24px 24px; }
+.certificate-account-card, .certificate-issuance-card { display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); }
+.certificate-account-card { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); align-items: center; }
+.certificate-account-card > div:first-child strong, .certificate-account-card > div:first-child > span { display: block; }
+.certificate-account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+.certificate-account-actions > a { font-size: var(--font-xs); overflow-wrap: anywhere; }
+.certificate-account-actions .certificate-confirm { flex: 1 1 220px; }
+.certificate-issuance-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.certificate-issuance-heading > div:first-child > strong, .certificate-issuance-heading > div:first-child > span { display: block; }
+.certificate-order-error { margin: 0; color: var(--color-warning, #8a5800); }
 .certificate-domains { display: flex; flex-wrap: wrap; gap: 5px; max-width: 360px; }
 .certificate-table td:first-child > span,
 .certificate-table td:nth-child(5) > span { display: block; }
@@ -417,5 +434,8 @@ a.button:hover { text-decoration: none; }
 @media (max-width: 650px) {
   .totp-unknown { align-items: stretch; flex-direction: column; padding: 16px; }
   .certificate-security-note { padding: 0 16px 12px; }
-  .certificate-import-form { grid-template-columns: minmax(0, 1fr); padding: 0 16px 16px; }
+  .certificate-import-form, .certificate-setup-form { grid-template-columns: minmax(0, 1fr); padding: 0 16px 16px; }
+  .certificate-account-list, .certificate-issuance-list { padding: 12px 16px 16px; }
+  .certificate-account-card { grid-template-columns: minmax(0, 1fr); }
+  .certificate-issuance-heading { flex-direction: column; }
 }

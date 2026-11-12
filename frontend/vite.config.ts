@@ -15,6 +15,9 @@ const legacyPaths = '^/(install|login|logout|auth|totp|domain|record|account|dmo
 
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
   build: {
     outDir: '../dist/frontend',
     assetsDir: 'assets',

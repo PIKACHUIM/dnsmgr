@@ -27,7 +27,7 @@ const version = Number(sqlite.prepare('PRAGMA user_version').get().user_version)
 const migrations = [
   '0001_core.sql', '0002_dns.sql', '0003_dns_aliases.sql', '0004_schedule.sql',
   '0005_failover.sql', '0006_domain_expiration_queue.sql', '0007_domain_periodic_expiration_queue.sql',
-  '0008_domain_expiration_notices.sql', '0009_login_captcha.sql', '0010_certificates.sql',
+  '0008_domain_expiration_notices.sql', '0009_login_captcha.sql', '0010_certificates.sql', '0011_certificate_acme.sql',
 ];
 if (version > migrations.length) throw new Error('Local schema version is newer than this application');
 for (const [index, migration] of migrations.entries()) {

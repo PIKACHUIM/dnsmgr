@@ -3,12 +3,12 @@ import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { input, text } from '../core/request';
 import { decrypt, encrypt } from '../security/crypto';
-import { nowSeconds, requireAdmin, requireCsrf, requireLegacyApi, requireSession } from '../security/auth';
+import { nowSeconds, requireAdmin, requireCertificateSession, requireCsrf, requireLegacyApi } from '../security/auth';
 import { inspectCertificate, legacyPfxBytes, exportLegacyPfx } from '../certificates';
 
 interface CertificateOrderRow extends Record<string, unknown> {
   id: number;
-  source: 'manual';
+  source: 'manual' | 'acme';
   status: 'issued';
   issuer: string;
   key_type: 'RSA';
@@ -26,7 +26,7 @@ interface CertificateOrderRow extends Record<string, unknown> {
 
 interface CertificateOrder {
   id: number;
-  source: 'manual';
+  source: 'manual' | 'acme';
   status: 'issued';
   issuer: string;
   keyType: 'RSA';
@@ -119,7 +119,7 @@ function idFromLegacyBody(body: Record<string, unknown>): number {
 export function certificateRoutes() {
   const routes = new Hono<AppEnv>();
 
-  routes.get('/api/v1/cert/orders', requireSession, async (c) => {
+  routes.get('/api/v1/cert/orders', requireCertificateSession, async (c) => {
     requireSql(c);
     requireAdmin(c);
     const { limit, offset } = pageParams(c);
@@ -143,7 +143,7 @@ export function certificateRoutes() {
     return c.json({ code: 0, items: [...items.values()], limit, offset });
   });
 
-  routes.post('/api/v1/cert/orders/import', requireSession, requireCsrf, async (c) => {
+  routes.post('/api/v1/cert/orders/import', requireCertificateSession, requireCsrf, async (c) => {
     requireSql(c);
     requireAdmin(c);
     const body = await input(c);
@@ -175,7 +175,7 @@ export function certificateRoutes() {
     return c.json({ code: 0, id });
   });
 
-  routes.post('/api/v1/cert/orders/:id/export', requireSession, requireCsrf, async (c) => {
+  routes.post('/api/v1/cert/orders/:id/export', requireCertificateSession, requireCsrf, async (c) => {
     requireSql(c);
     requireAdmin(c);
     const id = orderId(c.req.param('id'));

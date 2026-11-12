@@ -18,6 +18,7 @@ import { scheduleRoutes } from './routes/schedule';
 import { notifyRoutes } from './routes/notify';
 import { failoverRoutes } from './routes/failover';
 import { certificateRoutes } from './routes/certificates';
+import { certificateAcmeRoutes } from './routes/certificate-acme';
 
 declare const __APP_SHELL__: string;
 const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
@@ -36,6 +37,7 @@ const pagePatterns = [
 ];
 const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:data|remark|delete|update|status))(?:\/|$)|\/cron(?:\?|$)|\/(verifycode|install|login|auth\/totp|logout|setpwd|totp\/))/;
 const legacySignedApiPaths = /^\/api\/(?:domain|cert\/order|record\/(?:data|remark|delete|update|status))(?:\/|$)/;
+const certificateSessionPaths = /^\/api\/v1\/cert(?:\/|$)/;
 
 export function createApp(options: { database?: SqlDatabase; shell?: string } = {}) {
   const app = new Hono<AppEnv>();
@@ -61,7 +63,7 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
       c.set('storage', configured
         ? { config: configured.config, db: configured.db, snapshots: configured.snapshots }
         : { config: selected, db, snapshots: null });
-      if (!legacySignedApiPaths.test(path)) await assertStorageIdentity(db, selected);
+      if (!legacySignedApiPaths.test(path) && !certificateSessionPaths.test(path)) await assertStorageIdentity(db, selected);
     }
     await next();
   });
@@ -74,13 +76,14 @@ export function createApp(options: { database?: SqlDatabase; shell?: string } = 
   app.route('/', notifyRoutes());
   app.route('/', failoverRoutes());
   app.route('/', certificateRoutes());
+  app.route('/', certificateAcmeRoutes());
   app.get('/api/v1/bootstrap', requireSession, (c) => {
     const storage = c.get('storage').config;
     return c.json({
       code: 0, user: publicUser(c.get('principal').user),
       runtime: { platform: c.env.RUNTIME.platform, storage: { driver: storage.driver, format: storage.format } },
       capabilities: { dns: true, cert: true, tasks: true, executor: false },
-      migration: { stage: 'wave5-certificate-orders' },
+      migration: { stage: 'wave5-acme-dns01-cloudflare' },
     });
   });
 

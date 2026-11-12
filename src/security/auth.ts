@@ -53,6 +53,35 @@ export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+async function authenticateCertificateSession(c: Context<AppEnv>): Promise<Principal> {
+  const token = getCookie(c, 'user_token');
+  if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new AppError(401, '请先登录', 'NOT_AUTHENTICATED');
+  const tokenHash = await sha256(token);
+  const rows = await c.get('db').query<UserRow & {
+    csrf_hash: string; session_version: number; session_expires: number;
+    storage_initialized: number; storage_identity: string | null;
+  }>(
+    `SELECT u.*, s.csrf_hash, s.permission_version AS session_version, s.expires_at AS session_expires,
+      st.initialized AS storage_initialized, st.storage_identity
+     FROM sessions s JOIN users u ON u.id=s.user_id JOIN system_state st ON st.id=1
+     WHERE s.token_hash=?`, [tokenHash],
+  );
+  const user = rows[0];
+  if (!user || user.session_expires <= nowSeconds() || user.session_version !== user.permission_version) {
+    throw new AppError(401, '会话已失效，请重新登录', 'SESSION_REVOKED');
+  }
+  if (user.storage_initialized === 1 && user.storage_identity !== selectStorage(c.env).identity) {
+    throw new AppError(503, '存储配置与初始化身份不一致，需要显式导出/导入', 'STORAGE_IDENTITY_MISMATCH');
+  }
+  assertActive(user);
+  return { user, sessionHash: tokenHash, csrfHash: user.csrf_hash, mode: 'session' };
+}
+
+export const requireCertificateSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+  c.set('principal', await authenticateCertificateSession(c));
+  await next();
+};
+
 export const requireCsrf: MiddlewareHandler<AppEnv> = async (c, next) => {
   assertSameOrigin(c);
   const supplied = c.req.header('X-CSRF-Token');

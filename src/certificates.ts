@@ -20,6 +20,20 @@ interface ParsedCertificateMaterial extends InspectedCertificate {
   privateKey: forge.pki.rsa.PrivateKey;
 }
 
+export function normalizeCertificateDomains(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) {
+    throw new AppError(400, '一次需提交 1–20 个证书域名', 'INVALID_CERT_DOMAINS');
+  }
+  const domains = value.map((entry) => {
+    if (typeof entry !== 'string') throw new AppError(400, '证书域名格式无效', 'INVALID_CERT_DOMAINS');
+    const domain = entry.trim().toLowerCase().replace(/\.$/, '');
+    if (!domainPattern.test(domain)) throw new AppError(400, '仅支持有效的 ASCII DNS 域名和单层通配符', 'INVALID_CERT_DOMAINS');
+    return domain;
+  });
+  if (new Set(domains).size !== domains.length) throw new AppError(400, '证书域名不能重复', 'INVALID_CERT_DOMAINS');
+  return domains;
+}
+
 function parseMaterial(fullchain: string, privateKeyPem: string): ParsedCertificateMaterial {
   if (new TextEncoder().encode(fullchain).length > maxFullchainBytes || new TextEncoder().encode(privateKeyPem).length > maxPrivateKeyBytes) {
     throw new AppError(413, '证书链或私钥文件超过允许大小', 'CERTIFICATE_MATERIAL_TOO_LARGE');
