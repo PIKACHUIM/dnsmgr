@@ -51,6 +51,8 @@
 
 `Cert` 的 `account_form`/`order_form`/`deploy_form` 与 `Domain` 的 `domain_add`、`record_import` 等页面方法由 TS 单页路由承载；旧签名 API（`/api/*`）与 `quicklogin` 按[API 兼容策略](#api-兼容策略)保留。
 
+> 平台差异确认：2026-11-13，项目所有者确认接受由运行时能力导致的替代项——ICMP 不适用，SMTP/Sendcloud/阿里云邮件改 Cloudflare Email，SSH/FTP/面板部署驱动改 Webhook 与自托管执行器，腾讯云/阿里云/UCloud 免费证书改 ACME。上述项目不再要求 1:1 重写。
+
 ## 旧版页面功能与当前实现的差异
 
 按 `route/app.php`、`app/controller/*.php` 与 `src/routes/*.ts` 逐项对照，旧版页面与运维工具的当前状态如下（已迁移项注明等价范围，未迁移项标注原因；均不影响 DNS、证书、通知主链路）：
