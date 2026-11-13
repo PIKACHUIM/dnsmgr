@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { InfoTip } from './InfoTip';
 
 interface Config { enabled: boolean; key: string; offset: number; url: string }
 interface Props { session: Session; onExpired: (message: string) => void }
@@ -78,8 +79,7 @@ export function CronSettings({ session, onExpired }: Props) {
         </div>}
     </section>
     <section className="panel" aria-labelledby="cron-note-title">
-      <div className="panel-heading"><div><h2 id="cron-note-title">部署说明</h2></div><span className="panel-meta">外部调度器</span></div>
-      <p>在服务器 crontab 或平台定时器中每分钟请求上面的 URL。除 DNS 定时任务和容灾检查外，每次最多查询一个域名到期信息：优先处理首次/手动排队查询，再复查过去 5 天至未来 30 天内、至少 24 小时未检查的记录；没有 RDAP 查询工作时，才尝试发送一组到期提醒（同一提醒天数最多 10 个域名）。提醒按「时区偏移」在本地 09:00 后触发，单域名发送后冷却 20 小时；失败也会进入冷却。通知会发送至所有已配置的新通知渠道，属于真实外部请求。密钥以明文比较但使用常量时间实现；不要把它放进前端代码或公开日志。时区偏移默认 +480 分钟（UTC+8）。</p>
+      <div className="panel-heading"><div><h2 id="cron-note-title">部署说明</h2><InfoTip label="调度说明" text="在服务器 crontab 或平台定时器中每分钟请求上面的 URL。每次最多查询一个域名到期信息；没有 RDAP 查询工作时才尝试发送一组到期提醒。提醒在本地 09:00 后触发，单域名发送后冷却 20 小时。密钥以明文比较但使用常量时间实现。" /></div><span className="panel-meta">外部调度器</span></div>
       <pre className="mono">* * * * * curl -fsS "https://你的域名{config?.url ?? '/cron?key=...'}" &gt;/dev/null 2&gt;&amp;1</pre>
     </section>
   </>;

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { InfoTip } from './InfoTip';
+import { Modal } from './Modal';
 
 interface OptimizeConfig { api: '0' | '1' | '2'; minMinutes: number; keyConfigured: boolean }
 interface DnsZone { id: number; name: string; thirdId: string | null }
@@ -64,7 +67,7 @@ export function OptimizeIpSettings({ session, onExpired }: Props) {
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="optimize-settings-title">
-      <div className="panel-heading"><div><h2 id="optimize-settings-title">优选设置</h2></div><span className="panel-meta">IP 数据源与执行间隔</span></div>
+      <div className="panel-heading"><div><h2 id="optimize-settings-title">优选设置</h2><InfoTip label="优选设置说明" text="cron 每次只执行一个到期任务，两次执行至少间隔设定分钟数。写入操作单次最多 5 个，超出部分会在下一次继续。" /></div><span className="panel-meta">IP 数据源与执行间隔</span></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取设置…</div>
         : <form className="dns-form" onSubmit={save}>
           <label className="form-field"><span>IP 数据源</span><select value={api} onChange={(event) => setApi(event.target.value as '0' | '1' | '2')}>
@@ -72,13 +75,8 @@ export function OptimizeIpSettings({ session, onExpired }: Props) {
           </select></label>
           <label className="form-field"><span>接口密钥</span><input type="password" value={key} onChange={(event) => setKey(event.target.value)} maxLength={200} autoComplete="new-password" placeholder={keyConfigured ? '已配置，留空保留' : api === '2' ? '当前数据源无需密钥' : '填写接口密钥'} /></label>
           <label className="form-field"><span>执行间隔（分钟）</span><input type="number" inputMode="numeric" min={10} max={1440} value={minMinutes} onChange={(event) => setMinMinutes(event.target.value)} required /></label>
-          <p className="form-hint">cron 每次只执行一个到期任务，且两次执行至少间隔设定分钟数。write 操作单次最多 5 个，超出部分会在下一次继续。</p>
           <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button></div>
         </form>}
-    </section>
-    <section className="panel" aria-labelledby="optimize-note-title">
-      <div className="panel-heading"><div><h2 id="optimize-note-title">说明</h2></div><span className="panel-meta">Cloudflare / CloudFront / Gcore / EdgeOne</span></div>
-      <p>优选任务会把远端接口返回的 IP 写入指定域名的主机记录，并按“记录数量”保持 A/AAAA 记录条数。线路分组对应数据源的 CT（电信）、CU（联通）、CM（移动）；未提供 DEF 时会回退到 CT。任务只修改同域名、同主机记录、同线路与同类型的记录，不会触碰其他解析。</p>
     </section>
   </>;
 }
@@ -99,6 +97,7 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -150,6 +149,7 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
         recordCount: Number(recordCount), ttl: Number(ttl), line,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setRr('');
+      setFormOpen(false);
       setNotice('优选任务已创建；由 cron 按间隔自动执行，也可立即运行一次。');
       await load(controller.signal);
     } catch (failure) { handle(failure); }
@@ -194,34 +194,8 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="optimize-task-title">
-      <div className="panel-heading"><div><h2 id="optimize-task-title">新建优选任务</h2></div><span className="panel-meta">A / AAAA 记录</span></div>
-      {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取任务…</div>
-        : zones.length === 0 ? <div className="panel-empty">请先同步至少一个 DNS 域名。</div>
-          : <form className="dns-form certificate-setup-form" onSubmit={create}>
-            <label className="form-field"><span>域名</span><select value={domainId} onChange={(event) => setDomainId(event.target.value)} required>
-              {zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
-            </select></label>
-            <label className="form-field"><span>主机记录</span><input value={rr} onChange={(event) => setRr(event.target.value)} required maxLength={63} placeholder="cf" /></label>
-            <label className="form-field"><span>记录类型</span><select value={recordType} onChange={(event) => setRecordType(event.target.value as 'A' | 'AAAA')}>
-              <option value="A">A（IPv4）</option><option value="AAAA">AAAA（IPv6）</option>
-            </select></label>
-            <label className="form-field"><span>线路分组</span><select value={ipGroup} onChange={(event) => setIpGroup(event.target.value as 'DEF' | 'CT' | 'CU' | 'CM')}>
-              <option value="DEF">默认</option><option value="CT">电信 CT</option><option value="CU">联通 CU</option><option value="CM">移动 CM</option>
-            </select></label>
-            <label className="form-field"><span>数据源线路</span><select value={cdnType} onChange={(event) => setCdnType(event.target.value)}>
-              {(Object.keys(cdnNames) as string[]).map((value) => <option key={value} value={value}>{cdnNames[Number(value)]}</option>)}
-            </select></label>
-            <label className="form-field"><span>DNS 线路</span><select value={line} onChange={(event) => setLine(event.target.value)}>
-              {lines.length === 0 ? <option value="0">默认</option> : lines.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-            </select></label>
-            <label className="form-field"><span>记录数量</span><input type="number" inputMode="numeric" min={1} max={50} value={recordCount} onChange={(event) => setRecordCount(event.target.value)} required /></label>
-            <label className="form-field"><span>TTL（秒）</span><input type="number" inputMode="numeric" min={1} max={86400} value={ttl} onChange={(event) => setTtl(event.target.value)} required /></label>
-            <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !rr.trim() || !domainId}>{busy ? '正在保存…' : '创建优选任务'}</button><span>相同域名、主机记录、类型、分组与线路只能有一个任务。</span></div>
-          </form>}
-    </section>
     <section className="panel" aria-labelledby="optimize-list-title">
-      <div className="panel-heading"><div><h2 id="optimize-list-title">任务管理</h2></div><span className="panel-meta">共 {tasks.length} 条</span></div>
+      <div className="panel-heading"><div><h2 id="optimize-list-title">任务管理</h2><InfoTip label="优选任务说明" text="任务把远端接口返回的 IP 写入指定域名的主机记录，只修改同域名、同主机记录、同线路与同类型的记录，不会触碰其他解析。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {tasks.length} 条</span><button className="button button-primary" type="button" disabled={loading || zones.length === 0} onClick={() => { setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />新建任务</button></div></div>
       {tasks.length === 0 ? <div className="panel-empty">还没有优选任务。</div>
         : <div className="table-wrap"><table className="data-table certificate-table">
           <thead><tr><th>域名</th><th>记录</th><th>分组 / 线路</th><th>数量</th><th>最近运行</th><th>操作</th></tr></thead>
@@ -238,7 +212,29 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
             </td>
           </tr>)}</tbody>
         </table></div>}
-      <div className="panel-footnote">仅修改与任务匹配的 A/AAAA 记录；IP 优选结果依赖第三方接口，失败会记录在任务状态中并在下一次重试。</div>
     </section>
+    {formOpen && <Modal title="新建优选任务" wide onClose={() => { if (!busy) setFormOpen(false); }}>
+      <form className="dns-form certificate-setup-form" onSubmit={create}>
+        <label className="form-field"><span>域名</span><select value={domainId} onChange={(event) => setDomainId(event.target.value)} required>
+          {zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
+        </select></label>
+        <label className="form-field"><span>主机记录</span><input value={rr} onChange={(event) => setRr(event.target.value)} required maxLength={63} placeholder="cf" /></label>
+        <label className="form-field"><span>记录类型</span><select value={recordType} onChange={(event) => setRecordType(event.target.value as 'A' | 'AAAA')}>
+          <option value="A">A（IPv4）</option><option value="AAAA">AAAA（IPv6）</option>
+        </select></label>
+        <label className="form-field"><span>线路分组</span><select value={ipGroup} onChange={(event) => setIpGroup(event.target.value as 'DEF' | 'CT' | 'CU' | 'CM')}>
+          <option value="DEF">默认</option><option value="CT">电信 CT</option><option value="CU">联通 CU</option><option value="CM">移动 CM</option>
+        </select></label>
+        <label className="form-field"><span>数据源线路</span><select value={cdnType} onChange={(event) => setCdnType(event.target.value)}>
+          {(Object.keys(cdnNames) as string[]).map((value) => <option key={value} value={value}>{cdnNames[Number(value)]}</option>)}
+        </select></label>
+        <label className="form-field"><span>DNS 线路</span><select value={line} onChange={(event) => setLine(event.target.value)}>
+          {lines.length === 0 ? <option value="0">默认</option> : lines.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+        </select></label>
+        <label className="form-field"><span>记录数量</span><input type="number" inputMode="numeric" min={1} max={50} value={recordCount} onChange={(event) => setRecordCount(event.target.value)} required /></label>
+        <label className="form-field"><span>TTL（秒）</span><input type="number" inputMode="numeric" min={1} max={86400} value={ttl} onChange={(event) => setTtl(event.target.value)} required /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !rr.trim() || !domainId}>{busy ? '正在保存…' : '创建优选任务'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }

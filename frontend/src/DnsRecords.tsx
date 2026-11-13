@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { Modal } from './Modal';
 
 interface DomainInfo { id: number; name: string; accountName: string; accountType: string }
 interface DnsLine { id: string; name: string; parent: string | null }
@@ -42,6 +44,8 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editing, setEditing] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [batchAction, setBatchAction] = useState('enable');
   const [batchRemark, setBatchRemark] = useState('');
@@ -128,6 +132,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
       }
       setForm({ ...EMPTY, line: form.line });
       setEditing(null);
+      setFormOpen(false);
       await load(controller.current.signal, page);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -214,6 +219,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
       );
       setNotice(`批量添加完成：成功 ${result.added} 条${result.failed ? `，失败 ${result.failed} 条（${result.errors.join('；')}）` : ''}`);
       setBatchText('');
+      setBatchOpen(false);
       await load(signal.signal, page);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -227,7 +233,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
       weight: record.weight === null ? '' : String(record.weight), remark: record.remark ?? '',
     });
     setNotice('');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setFormOpen(true);
   }
 
   return <>
@@ -247,29 +253,8 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
     </div>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="record-form-title">
-      <div className="panel-heading"><div><h2 id="record-form-title">{editing ? '修改解析记录' : '添加解析记录'}</h2></div><span className="panel-meta">实时写入服务商</span></div>
-      <form className="dns-form" onSubmit={submit}>
-        <label className="form-field"><span>主机记录</span><input value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="@ 或 www" required maxLength={128} /></label>
-        <label className="form-field"><span>类型</span><select value={form.type} onChange={(event) => update('type', event.target.value)}>{TYPES.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}</select></label>
-        <label className="form-field"><span>记录值</span><input value={form.value} onChange={(event) => update('value', event.target.value)} required maxLength={2048} placeholder="IP、目标域名或文本" /></label>
-        <label className="form-field"><span>线路</span><select value={form.line} onChange={(event) => update('line', event.target.value)}>
-          {lines === null
-            ? <option value="default">默认</option>
-            : lines.map((line) => <option key={line.id} value={line.id}>{line.name}</option>)}
-        </select></label>
-        <label className="form-field"><span>TTL</span><input type="number" min={1} max={86400} value={form.ttl} onChange={(event) => update('ttl', event.target.value)} required /></label>
-        <label className="form-field"><span>MX 优先级</span><input type="number" min={0} max={65535} value={form.mx} onChange={(event) => update('mx', event.target.value)} placeholder="仅 MX" /></label>
-        <label className="form-field"><span>权重</span><input type="number" min={0} max={65535} value={form.weight} onChange={(event) => update('weight', event.target.value)} placeholder="仅支持的线路" /></label>
-        <label className="form-field"><span>备注</span><input value={form.remark} onChange={(event) => update('remark', event.target.value)} maxLength={100} /></label>
-        <div className="form-actions">
-          <button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在提交…' : editing ? '保存修改' : '添加记录'}</button>
-          {editing && <button className="button button-secondary" type="button" disabled={busy} onClick={() => { setEditing(null); setForm({ ...EMPTY, line: form.line }); }}>取消编辑</button>}
-        </div>
-      </form>
-    </section>
     <section className="panel" aria-labelledby="record-list-title">
-      <div className="panel-heading"><div><h2 id="record-list-title">解析记录</h2></div><span className="panel-meta">共 {total} 条 · 检查使用 AliDNS 公网 DNS，只读不修改记录</span></div>
+      <div className="panel-heading"><div><h2 id="record-list-title">解析记录</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {total} 条</span><button className="button button-secondary" type="button" disabled={loading || busy} onClick={() => setBatchOpen(true)}>文本批量</button><button className="button button-primary" type="button" disabled={loading || busy} onClick={() => { setEditing(null); setForm({ ...EMPTY, line: form.line }); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />添加记录</button></div></div>
       <form className="dns-search" onSubmit={filterRecords}>
         <input aria-label="主机名筛选" type="search" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} maxLength={128} placeholder="主机名，例如 www 或 @" />
         <button className="button button-secondary" type="submit" disabled={loading || busy}>筛选记录</button>
@@ -326,8 +311,27 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
         <button className="button button-secondary" disabled={page * PAGE_SIZE >= total || loading} onClick={() => setPage((value) => value + 1)}>下一页</button>
       </div>
     </section>
-    <section className="panel" aria-labelledby="record-batch-title">
-      <div className="panel-heading"><div><h2 id="record-batch-title">文本批量添加</h2></div><span className="panel-meta">每行「主机记录 记录值」</span></div>
+    {formOpen && <Modal title={editing ? '修改解析记录' : '添加解析记录'} wide onClose={() => { if (!busy) { setFormOpen(false); setEditing(null); } }}>
+      <form className="dns-form" onSubmit={submit}>
+        <label className="form-field"><span>主机记录</span><input value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="@ 或 www" required maxLength={128} /></label>
+        <label className="form-field"><span>类型</span><select value={form.type} onChange={(event) => update('type', event.target.value)}>{TYPES.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}</select></label>
+        <label className="form-field"><span>记录值</span><input value={form.value} onChange={(event) => update('value', event.target.value)} required maxLength={2048} placeholder="IP、目标域名或文本" /></label>
+        <label className="form-field"><span>线路</span><select value={form.line} onChange={(event) => update('line', event.target.value)}>
+          {lines === null
+            ? <option value="default">默认</option>
+            : lines.map((line) => <option key={line.id} value={line.id}>{line.name}</option>)}
+        </select></label>
+        <label className="form-field"><span>TTL</span><input type="number" min={1} max={86400} value={form.ttl} onChange={(event) => update('ttl', event.target.value)} required /></label>
+        <label className="form-field"><span>MX 优先级</span><input type="number" min={0} max={65535} value={form.mx} onChange={(event) => update('mx', event.target.value)} placeholder="仅 MX" /></label>
+        <label className="form-field"><span>权重</span><input type="number" min={0} max={65535} value={form.weight} onChange={(event) => update('weight', event.target.value)} placeholder="仅支持的线路" /></label>
+        <label className="form-field"><span>备注</span><input value={form.remark} onChange={(event) => update('remark', event.target.value)} maxLength={100} /></label>
+        <div className="form-actions">
+          <button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在提交…' : editing ? '保存修改' : '添加记录'}</button>
+          <button className="button button-quiet" type="button" disabled={busy} onClick={() => { setFormOpen(false); setEditing(null); }}>取消</button>
+        </div>
+      </form>
+    </Modal>}
+    {batchOpen && <Modal title="文本批量添加" onClose={() => { if (!busy) setBatchOpen(false); }}>
       <form className="dns-form" onSubmit={batchAdd}>
         <label className="form-field"><span>默认类型（留空自动判断）</span>
           <select value={batchType} onChange={(event) => setBatchType(event.target.value)}>
@@ -339,8 +343,8 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
           <textarea value={batchText} onChange={(event) => setBatchText(event.target.value)} rows={5} maxLength={20000}
             placeholder={'www 1.1.1.1\n@ 2001:db8::1\nmail mail.example.com'} />
         </label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>批量添加</button></div>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>批量添加</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setBatchOpen(false)}>取消</button></div>
       </form>
-    </section>
+    </Modal>}
   </>;
 }

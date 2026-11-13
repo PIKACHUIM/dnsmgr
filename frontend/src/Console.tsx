@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { ApiError, errorMessage, request, type Bootstrap, type Session } from './api';
 import { Brand, Icon } from './icons';
 import { LanguageToggle, ThemeToggle, usePreferences } from './preferences';
+import { Menu } from './Menu';
+import { InfoTip } from './InfoTip';
 import { navigation, canonicalPath, resolvePage, type Capability } from './navigation';
 import { DnsAccounts } from './DnsAccounts';
 import { DnsCategories } from './DnsCategories';
@@ -68,7 +70,10 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   const previousPath = useRef(path);
   const wasMobileOpen = useRef(false);
   const level = session.user.level;
-  const groups = navigation.filter((group) => !group.adminOnly || level === 2);
+  const groups = navigation
+    .filter((group) => !group.adminOnly || level === 2)
+    .map((group) => ({ ...group, items: group.items.filter((item) => !item.adminOnly || level === 2) }))
+    .filter((group) => group.items.length > 0);
   const page = resolvePage(path, level);
   const route = canonicalPath(path);
   const home = path === '/';
@@ -215,19 +220,25 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
     <div className="workspace" inert={mobileOpen}>
       <header className="topbar">
         <div className="topbar-location"><button ref={menuButton} className="icon-button menu-button" aria-label={t('打开导航菜单')} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={() => setMobileOpen(true)}><Icon name="menu" /></button><button className="icon-button sidebar-toggle" aria-label={t(collapsed ? '展开侧边栏' : '收起侧边栏')} title={t(collapsed ? '展开侧边栏' : '收起侧边栏')} aria-expanded={!collapsed} aria-controls="workspace-navigation" onClick={() => setCollapsed((value) => !value)}><Icon name={collapsed ? 'panel-expand' : 'panel'} /></button><span>{t('控制台')}</span><span className="breadcrumb-divider">/</span><strong>{t(page.group)}</strong></div>
-        <div className="topbar-actions"><span className="session-label"><Icon name="shield" />{t('安全会话')}</span><ThemeToggle /><LanguageToggle /><button className="button button-quiet logout-button" disabled={loggingOut} onClick={logout}><Icon name="logout" />{loggingOut ? t('正在退出…') : t('退出登录')}</button></div>
+        <div className="topbar-actions"><ThemeToggle /><LanguageToggle /><Menu label={t('账户菜单')} className="user-menu" trigger={<span className="menu-avatar" aria-hidden="true">{session.user.username.slice(0, 1).toUpperCase()}</span>}>
+          {(close) => <>
+            <div className="menu-heading"><strong>{session.user.username}</strong><span>{level === 2 ? t('管理员') : t('用户')}</span></div>
+            <a className="menu-item" role="menuitem" href="/setpwd" onClick={(event) => { close(); followLink(event, '/setpwd'); }}><Icon name="key" />{t('修改密码')}</a>
+            <div className="menu-separator" />
+            <button className="menu-item" role="menuitem" type="button" disabled={loggingOut} onClick={() => { close(); void logout(); }}><Icon name="logout" />{loggingOut ? t('正在退出…') : t('退出登录')}</button>
+          </>}
+        </Menu></div>
       </header>
       <main id="main-content" className="main-content" tabIndex={-1}>
-        <div className="page-heading"><div><div className="section-kicker">{t(home ? '工作空间 / WORKSPACE' : '功能模块 / MODULE')}</div><h1 ref={contentTitle} tabIndex={-1}>{t(page.item.label)}</h1><p>{t(home ? '查看当前运行环境、会话与功能迁移状态。' : page.item.scope)}</p></div><span className="phase-badge">{t(home ? 'DNS 已接入' : implemented ? '运行中' : '待移植')}</span></div>
+        <div className="page-heading"><div><div className="section-kicker">{t(home ? '工作空间 / WORKSPACE' : '功能模块 / MODULE')}</div><div className="page-title"><h1 ref={contentTitle} tabIndex={-1}>{t(page.item.label)}</h1>{!home && <InfoTip label={t('页面说明')} text={t(page.item.scope)} />}</div></div><span className="phase-badge">{t(home ? 'DNS 已接入' : implemented ? '运行中' : '待移植')}</span></div>
         {logoutError && <div className="notice notice-error" role="alert"><strong>{t('退出未完成')}</strong><span>{logoutError} {t('可再次点击退出登录重试。')}</span></div>}
         {loadError && <div className="notice notice-error with-action" role="alert"><div><strong>{t('运行环境加载失败')}</strong><span>{loadError}</span></div><button className="button button-secondary" onClick={() => setRetry((value) => value + 1)}>{t('重新加载')}</button></div>}
         {home ? <>
-          <section className="foundation-banner" aria-labelledby="foundation-title"><div className="foundation-index mono">03</div><div><h2 id="foundation-title">{t('DNS 管理与证书订单已接入')}</h2><p>{t('DNS 解析、容灾切换、定时任务与证书安全存储/手动导入已接入；CA 自动申请、续签和部署仍在迁移。')}</p></div><Icon name="shield" /></section>
           <div className="overview-grid">
             <section className="panel environment-panel" aria-labelledby="environment-title"><div className="panel-heading"><div><Icon name="server" /><h2 id="environment-title">{t('运行环境')}</h2></div><span className="panel-meta">{t('来自服务端')}</span></div>{loading ? <div className="panel-loading" role="status"><span className="spinner" />{t('正在读取运行环境…')}</div> : bootstrap ? <dl className="data-list"><div><dt>{t('运行平台')}</dt><dd className="mono">{bootstrap.runtime.platform}</dd></div><div><dt>{t('存储驱动')}</dt><dd className="mono">{bootstrap.runtime.storage.driver}</dd></div><div><dt>{t('存储格式')}</dt><dd className="mono">{bootstrap.runtime.storage.format}</dd></div><div><dt>{t('迁移阶段')}</dt><dd><span className="data-badge mono">{bootstrap.migration.stage}</span></dd></div></dl> : <div className="panel-empty">{t('环境数据不可用，请重新加载。')}</div>}<div className="panel-footnote">{t('数据来源')} <code>/api/v1/bootstrap</code></div></section>
-            <section className="panel session-panel" aria-labelledby="session-title"><div className="panel-heading"><div><Icon name="lock" /><h2 id="session-title">{t('当前会话')}</h2></div><span className="data-badge">{t('已验证')}</span></div><dl className="data-list"><div><dt>{t('用户名')}</dt><dd>{session.user.username}</dd></div><div><dt>{t('账户角色')}</dt><dd>{level === 2 ? t('管理员') : t('用户')}<span className="value-detail mono">LEVEL {level}</span></dd></div><div><dt>{t('会话存储')}</dt><dd>{t('服务端 Cookie')}</dd></div><div><dt>{t('请求保护')}</dt><dd>{t('CSRF 令牌')}<span className="value-detail">{t('仅保存在内存中')}</span></dd></div></dl><div className="panel-footnote">{t('不会在浏览器本地存储用户名、密码或会话令牌。')}</div></section>
+            <section className="panel session-panel" aria-labelledby="session-title"><div className="panel-heading"><div><Icon name="lock" /><h2 id="session-title">{t('当前会话')}</h2></div><span className="data-badge">{t('已验证')}</span></div><dl className="data-list"><div><dt>{t('用户名')}</dt><dd>{session.user.username}</dd></div><div><dt>{t('账户角色')}</dt><dd>{level === 2 ? t('管理员') : t('用户')}<span className="value-detail mono">LEVEL {level}</span></dd></div><div><dt>{t('会话存储')}</dt><dd>{t('服务端 Cookie')}</dd></div><div><dt>{t('请求保护')}</dt><dd>{t('CSRF 令牌')}<span className="value-detail">{t('仅保存在内存中')}</span></dd></div></dl></section>
           </div>
-          <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">{t('功能迁移状态')}</h2></div><span className="panel-meta">{t('不是业务统计')}</span></div><div className="capability-table" role="table" aria-label={t('后端能力状态')}><div className="capability-row capability-header" role="row"><span role="columnheader">{t('模块')}</span><span role="columnheader">{t('后端能力')}</span><span role="columnheader">{t('当前前端')}</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{t(capabilityNames[key])}</strong><span role="cell">{loading ? t('读取中…') : bootstrap ? t(bootstrap.capabilities[key] ? '已声明可用' : '未开放') : t('未知')}</span><span role="cell"><span className="status-label"><span className="status-dot" />{t(bootstrap?.capabilities[key] ? '已上线' : '待移植')}</span></span></div>)}</div><div className="panel-footnote">{t('后端能力不等于页面已完成。左侧保留旧路径，仅提供对应模块的移植说明。')}</div></section>
+          <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">{t('功能迁移状态')}</h2></div><span className="panel-meta">{t('不是业务统计')}</span></div><div className="capability-table" role="table" aria-label={t('后端能力状态')}><div className="capability-row capability-header" role="row"><span role="columnheader">{t('模块')}</span><span role="columnheader">{t('后端能力')}</span><span role="columnheader">{t('当前前端')}</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{t(capabilityNames[key])}</strong><span role="cell">{loading ? t('读取中…') : bootstrap ? t(bootstrap.capabilities[key] ? '已声明可用' : '未开放') : t('未知')}</span><span role="cell"><span className="status-label"><span className="status-dot" />{t(bootstrap?.capabilities[key] ? '已上线' : '待移植')}</span></span></div>)}</div></section>
         </> : path === '/account' && level === 2 ? <DnsAccounts session={session} onExpired={onExpired} />
           : path === '/domain' ? <DnsDomains session={session} navigate={navigate} onExpired={onExpired} />
             : path === '/domain/category' && level === 2 ? <DnsCategories session={session} onExpired={onExpired} />
@@ -260,7 +271,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                     : path === '/record/smartparse' ? <SmartParse session={session} navigate={navigate} onExpired={onExpired} />
                     : recordToolMatch ? <RecordTools session={session} mode={recordToolMatch[1] as 'batchadd' | 'batchedit'} navigate={navigate} onExpired={onExpired} />
                     : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />
-              : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">{t('模块状态 / NOT MIGRATED')}</span><h2 id="module-state-title">{t('此模块尚未移植')}</h2><p>{t('已保留「{label}」的导航入口与访问路径。当前页面只说明迁移边界，不提供业务查询、配置或执行操作。', { label: t(page.item.label) })}</p><dl className="module-details"><div><dt>{t('当前路径')}</dt><dd><code>{path}</code></dd></div><div><dt>{t('功能范围')}</dt><dd>{t(page.item.scope)}</dd></div><div><dt>{t('后端能力')}</dt><dd>{loading ? t('正在读取…') : !bootstrap ? t('读取失败，状态未知') : page.item.capability ? `${t(capabilityNames[page.item.capability])}：${t(bootstrap.capabilities[page.item.capability] ? '已声明可用，页面仍待移植' : '未开放')}` : t('基础阶段未提供此功能的业务接口')}</dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>{t('返回后台首页')}<Icon name="arrow" /></a><span>{t('不会调用旧接口或产生业务变更。')}</span></div></section>}
+              : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">{t('模块状态 / NOT MIGRATED')}</span><h2 id="module-state-title">{t('此模块尚未移植')}</h2><dl className="module-details"><div><dt>{t('当前路径')}</dt><dd><code>{path}</code></dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>{t('返回后台首页')}<Icon name="arrow" /></a></div></section>}
         <footer className="workspace-footer"><span>{t('聚合 DNS 管理系统')}</span><span>{t('安装 · 认证 · 会话基础')} <span className="mono">/ FOUNDATION</span></span></footer>
       </main>
     </div>

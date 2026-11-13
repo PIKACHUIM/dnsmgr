@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, send, type Session } from './api';
+import { InfoTip } from './InfoTip';
 
 interface Props {
   session: Session;
@@ -221,7 +222,7 @@ export function TotpSettings({ session, onExpired, onLoggedOut }: Props) {
   }
 
   return <section className="panel" aria-labelledby="totp-title">
-    <div className="panel-heading"><div><h2 id="totp-title">TOTP 二次验证</h2></div><span className="panel-meta">本人账户</span></div>
+    <div className="panel-heading"><div><h2 id="totp-title">TOTP 二次验证</h2><InfoTip label="动态口令说明" text="开启后，登录需要输入认证器生成的动态口令；绑定完成会撤销所有现有会话并要求重新登录。关闭操作需要当前密码和有效的动态口令。" /></div><span className="panel-meta">本人账户</span></div>
     {error && <div className="notice notice-error" role="alert" aria-live="assertive">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     {outcomeUnknown ? <div className="totp-unknown">
@@ -238,7 +239,6 @@ export function TotpSettings({ session, onExpired, onLoggedOut }: Props) {
         </label>
         <div className="form-actions"><button className="button button-secondary" type="submit" disabled={busy}>{busy ? '正在关闭…' : '关闭动态口令'}</button></div>
       </form>
-      <div className="panel-footnote">关闭操作需要当前密码和有效的动态口令。更换认证设备时，请先关闭后再重新启用；已开启账户的直接重置流程尚未迁移。</div>
     </> : enrollment ? <>
       <div className="totp-enrollment">
         <p role="status">使用认证器扫描二维码；无法扫描时，可手动输入密钥。绑定挑战有效期为 3 分钟，且只能使用一次。</p>
@@ -259,7 +259,6 @@ export function TotpSettings({ session, onExpired, onLoggedOut }: Props) {
         </label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在生成…' : '开启动态口令'}</button></div>
       </form>
-      <div className="panel-footnote">开启后，登录需要输入认证器生成的动态口令。绑定完成会撤销所有现有会话并要求重新登录；请先确认设备时间准确。</div>
     </>}
   </section>;
 }

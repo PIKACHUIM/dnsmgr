@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { InfoTip } from './InfoTip';
 
 interface Config {
   url: string; method: string; headers: string; contentType: string; body: string;
@@ -119,11 +120,10 @@ export function NotifySettings({ session, onExpired }: Props) {
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="notify-title">
-      <div className="panel-heading"><div><h2 id="notify-title">通知渠道</h2></div><span className="panel-meta">凭据使用 AES-GCM 加密</span></div>
+      <div className="panel-heading"><div><h2 id="notify-title">通知渠道</h2><InfoTip label="通知渠道说明" text="定时任务失败、容灾切换/恢复、证书签发与续签结果会发送到已配置渠道；通知失败不会回滚已完成的 DNS 或证书操作。" /></div><span className="panel-meta">凭据使用 AES-GCM 加密</span></div>
       {loading || !config ? <div className="panel-loading" role="status"><span className="spinner" />正在读取设置…</div>
         : <form className="dns-form" onSubmit={save}>
-          <h3>自定义 Webhook</h3>
-          <p className="form-hint">已保存的 URL、请求头和模板不会回显。留空表示保留现有值；勾选清除后保存可删除对应配置。</p>
+          <h3>自定义 Webhook <InfoTip label="Webhook 说明" text="已保存的 URL、请求头和模板不会回显。留空表示保留现有值；勾选清除后保存可删除对应配置。模板支持 {title} 与 {content}；GET 使用查询参数。" /></h3>
           <label className="form-field"><span>Webhook URL</span><input value={config.url} onChange={(event) => update('url', event.target.value)} maxLength={1024} placeholder={config.urlConfigured ? '已配置，留空保留' : 'https://example.com/hook'} /></label>
           <label className="form-field"><span>方法</span><select value={config.method} onChange={(event) => update('method', event.target.value)}>
             <option value="POST">POST</option><option value="PUT">PUT</option><option value="GET">GET</option>
@@ -146,28 +146,23 @@ export function NotifySettings({ session, onExpired }: Props) {
           <label className="form-field"><span>Chat ID</span><input value={config.telegramChatId} onChange={(event) => update('telegramChatId', event.target.value)} maxLength={128} placeholder={config.telegramChatIdConfigured ? '已配置，留空保留' : '数字 ID 或 @channelusername'} /></label>
           <label className="form-field"><span>Topic ID（选填）</span><input value={config.telegramTopicId} onChange={(event) => update('telegramTopicId', event.target.value)} maxLength={12} placeholder={config.telegramTopicIdConfigured ? '已配置，留空保留' : '论坛群组消息主题 ID'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearTelegram} onChange={(event) => setConfig({ ...config, clearTelegram: event.target.checked })} /> 清除 Telegram 凭据</span></label>
-          <h3>企业微信群机器人</h3>
-          <p className="form-hint">仅接受 qyapi.weixin.qq.com 官方 HTTPS 机器人 URL；链接包含密钥，保存后不会回显。</p>
+          <h3>企业微信群机器人 <InfoTip label="企业微信说明" text="仅接受 qyapi.weixin.qq.com 官方 HTTPS 机器人 URL；链接包含密钥，保存后不会回显。" /></h3>
           <label className="form-field"><span>机器人 Webhook URL</span><input value={config.wecomWebhookUrl} onChange={(event) => update('wecomWebhookUrl', event.target.value)} maxLength={1024} placeholder={config.wecomUrlConfigured ? '已配置，留空保留' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearWecom} onChange={(event) => setConfig({ ...config, clearWecom: event.target.checked })} /> 清除企业微信机器人凭据</span></label>
-          <h3>钉钉群机器人</h3>
-          <p className="form-hint">Webhook 只接受 oapi.dingtalk.com 官方 HTTPS 机器人地址。签名密钥选填；凭据保存后不会回显。</p>
+          <h3>钉钉群机器人 <InfoTip label="钉钉说明" text="Webhook 只接受 oapi.dingtalk.com 官方 HTTPS 机器人地址。签名密钥选填；凭据保存后不会回显。" /></h3>
           <label className="form-field"><span>机器人 Webhook URL</span><input value={config.dingtalkWebhookUrl} onChange={(event) => update('dingtalkWebhookUrl', event.target.value)} maxLength={1024} placeholder={config.dingtalkUrlConfigured ? '已配置，留空保留' : 'https://oapi.dingtalk.com/robot/send?access_token=...'} /></label>
           <label className="form-field"><span>签名密钥（选填）</span><input value={config.dingtalkSecret} onChange={(event) => update('dingtalkSecret', event.target.value)} maxLength={256} placeholder={config.dingtalkSecretConfigured ? '已配置，留空保留' : '机器人安全设置中的加签密钥'} /></label>
           <label className="form-field"><span>@用户手机号</span><input value={config.dingtalkAtMobiles} onChange={(event) => update('dingtalkAtMobiles', event.target.value)} maxLength={512} placeholder={config.dingtalkAtMobilesConfigured ? '已配置，留空保留' : '逗号分隔手机号，或填写 all'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearDingtalk} onChange={(event) => setConfig({ ...config, clearDingtalk: event.target.checked })} /> 清除钉钉机器人配置</span></label>
-          <h3>飞书群机器人</h3>
-          <p className="form-hint">Webhook 仅接受 open.feishu.cn 或 open.larksuite.com 官方 HTTPS 机器人地址；链接包含密钥，保存后不会回显。</p>
+          <h3>飞书群机器人 <InfoTip label="飞书说明" text="Webhook 仅接受 open.feishu.cn 或 open.larksuite.com 官方 HTTPS 机器人地址；链接包含密钥，保存后不会回显。" /></h3>
           <label className="form-field"><span>机器人 Webhook URL</span><input value={config.feishuWebhookUrl} onChange={(event) => update('feishuWebhookUrl', event.target.value)} maxLength={1024} placeholder={config.feishuUrlConfigured ? '已配置，留空保留' : 'https://open.feishu.cn/open-apis/bot/v2/hook/...'} /></label>
           <label className="form-field"><span>@用户 user_id（选填）</span><input value={config.feishuUserIds} onChange={(event) => update('feishuUserIds', event.target.value)} maxLength={2048} placeholder={config.feishuUserIdsConfigured ? '已配置，留空保留' : '逗号分隔 user_id，或填写 all'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearFeishu} onChange={(event) => setConfig({ ...config, clearFeishu: event.target.checked })} /> 清除飞书机器人配置</span></label>
-          <h3>邮件（Cloudflare Email）</h3>
-          <p className="form-hint">通过 Worker 的 <code>send_email</code> 绑定发送，发件地址必须是 Cloudflare Email 服务已验证的域名。{config.mailBindingAvailable ? '当前环境已绑定邮件发送服务。' : '当前环境未绑定邮件发送服务，暂不能配置。'}</p>
+          <h3>邮件（Cloudflare Email） <InfoTip label="邮件说明" text={`通过 Worker 的 send_email 绑定发送，发件地址必须是 Cloudflare Email 服务已验证的域名。${config.mailBindingAvailable ? '当前环境已绑定邮件发送服务。' : '当前环境未绑定邮件发送服务，暂不能配置。'}`} /></h3>
           <label className="form-field"><span>收件邮箱</span><input value={config.mailTo} onChange={(event) => update('mailTo', event.target.value)} maxLength={1024} placeholder={config.mailToConfigured ? '已配置，留空保留' : 'ops@example.com，可用逗号分隔'} /></label>
           <label className="form-field"><span>发件邮箱</span><input value={config.mailFrom} onChange={(event) => update('mailFrom', event.target.value)} maxLength={254} placeholder={config.mailFromConfigured ? '已配置，留空保留' : 'dns@example.com'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearMail} onChange={(event) => setConfig({ ...config, clearMail: event.target.checked })} /> 清除邮件通知配置</span></label>
-          <h3>QQ 机器人</h3>
-          <p className="form-hint">使用 QQ 开放平台机器人 API。回调地址为 <code>{config.qqbotWebhookUrl}</code>；与机器人单聊一次即可绑定 OpenID，也可手动填写。</p>
+          <h3>QQ 机器人 <InfoTip label="QQ 机器人说明" text={`使用 QQ 开放平台机器人 API。回调地址为 ${config.qqbotWebhookUrl}；与机器人单聊一次即可绑定 OpenID，也可手动填写。`} /></h3>
           <label className="form-field"><span>AppID</span><input value={config.qqbotAppId} onChange={(event) => update('qqbotAppId', event.target.value)} maxLength={32} placeholder={config.qqbotAppIdConfigured ? '已配置，留空保留' : 'QQ 开放平台 AppID'} /></label>
           <label className="form-field"><span>AppSecret</span><input type="password" value={config.qqbotAppSecret} onChange={(event) => update('qqbotAppSecret', event.target.value)} maxLength={128} autoComplete="new-password" placeholder={config.qqbotAppSecretConfigured ? '已配置，留空保留' : 'QQ 开放平台 AppSecret'} /></label>
           <label className="form-field"><span>绑定 OpenID</span><input value={config.qqbotOpenId} onChange={(event) => update('qqbotOpenId', event.target.value)} maxLength={128} placeholder={config.qqbotOpenIdConfigured ? '已配置，留空保留' : '单聊后自动写入'} /></label>
@@ -175,13 +170,8 @@ export function NotifySettings({ session, onExpired }: Props) {
           <div className="form-actions">
             <button className="button button-primary" type="submit" disabled={busy}>保存</button>
             <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured && !config.wecomConfigured && !config.dingtalkConfigured && !config.feishuConfigured && !config.mailConfigured && !config.qqbotConfigured)} onClick={() => void test()}>发送测试</button>
-            <span>Webhook 模板支持 <code>{'{title}'}</code> 与 <code>{'{content}'}</code>；GET 使用查询参数。</span>
           </div>
         </form>}
-    </section>
-    <section className="panel" aria-labelledby="notify-help-title">
-      <div className="panel-heading"><div><h2 id="notify-help-title">说明</h2></div><span className="panel-meta">当前范围</span></div>
-      <p>支持自定义 Webhook、WxPusher、Telegram、企业微信、钉钉、飞书、邮件与 QQ 机器人；定时任务失败、容灾切换/恢复、证书签发与续签结果会尝试发送已配置渠道。QQ 机器人主动消息受平台配额限制，发送失败会在测试结果中提示。通知失败不会回滚已完成的 DNS 或证书操作。</p>
     </section>
   </>;
 }

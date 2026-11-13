@@ -80,6 +80,14 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
   await expect(page.locator('.environment-panel')).toContainText('local');
   await expect(page.locator('.environment-panel')).toContainText('d1');
+  const systemGroup = page.locator('.nav-group').filter({ has: page.getByRole('heading', { name: '系统设置' }) });
+  await expect(systemGroup.getByRole('link', { name: '操作日志' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '审计账户' })).toHaveCount(0);
+  async function openPasswordPage() {
+    await page.getByRole('button', { name: '账户菜单' }).click();
+    await expect(page.getByRole('menuitem', { name: '退出登录' })).toBeVisible();
+    await page.getByRole('menuitem', { name: '修改密码' }).click();
+  }
   const cookies = await context.cookies();
   expect(cookies.find((cookie) => cookie.name === 'user_token')?.httpOnly).toBe(true);
   const storedKeys = await page.evaluate(() => Object.keys(localStorage));
@@ -115,31 +123,55 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByRole('button', { name: '切换到亮色' }).click();
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('light');
   await page.getByRole('button', { name: '切换语言' }).click();
+  await page.getByRole('menuitemradio', { name: 'English' }).click();
   await expect(page.locator('.nav-group h2').first()).toHaveText('Workspace');
   await expect(page.getByRole('link', { name: 'Orders' })).toHaveCount(1);
-  await page.getByRole('button', { name: 'Switch language' }).click();
+  expect(await page.evaluate(() => document.documentElement.lang)).toBe('en');
+  const languageTrigger = page.locator('.language-menu .menu-trigger');
+  for (const [label, tag] of [['繁體中文', 'zh-TW'], ['日本語', 'ja'], ['한국어', 'ko'], ['Français', 'fr'],
+    ['Deutsch', 'de'], ['Italiano', 'it'], ['Español', 'es'], ['Português', 'pt'], ['Русский', 'ru']]) {
+    await languageTrigger.click();
+    await page.getByRole('menuitemradio', { name: label, exact: true }).click();
+    expect(await page.evaluate(() => document.documentElement.lang)).toBe(tag);
+    await expect(page.locator('.nav-group h2').first()).not.toHaveText('工作空间');
+  }
+  await languageTrigger.click();
+  await page.getByRole('menuitemradio', { name: '简体中文' }).click();
   await expect(page.locator('.nav-group h2').first()).toHaveText('工作空间');
+  expect(await page.evaluate(() => document.documentElement.lang)).toBe('zh-CN');
   await page.getByRole('link', { name: '证书订单' }).click();
-  await expect(page.getByRole('heading', { name: '导入已签发证书' })).toBeVisible();
-  await expect(page.getByLabel('完整证书链 PEM')).toBeVisible();
-  await expect(page.getByLabel('RSA 私钥 PEM')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'ACME 账户' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '申请新证书' })).toBeVisible();
-  await expect(page.getByLabel('CA 环境')).toHaveValue('staging');
   await expect(page.getByText('尚无 ACME 签发任务。')).toBeVisible();
-  await page.getByRole('textbox', { name: '联系邮箱' }).fill('admin@example.test');
-  await page.getByLabel('CA 环境').selectOption('production');
-  await expect(page.getByRole('checkbox', { name: '我明确确认将向 production CA 注册账户' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '创建 ACME 账户' })).toBeDisabled();
-  await page.getByRole('checkbox', { name: '我明确确认将向 production CA 注册账户' }).check();
-  await expect(page.getByRole('button', { name: '创建 ACME 账户' })).toBeEnabled();
-  await page.getByLabel('CA 环境').selectOption('staging');
-  await expect(page.getByRole('button', { name: '创建 ACME 账户' })).toBeEnabled();
+  await page.getByRole('button', { name: '添加账户' }).click();
+  const acmeDialog = page.getByRole('dialog', { name: '创建 ACME 账户' });
+  await expect(acmeDialog).toBeVisible();
+  await expect(acmeDialog.getByLabel('CA 环境')).toHaveValue('staging');
+  await acmeDialog.getByRole('textbox', { name: '联系邮箱' }).fill('admin@example.test');
+  await acmeDialog.getByLabel('CA 环境').selectOption('production');
+  const productionConfirm = acmeDialog.getByRole('checkbox', { name: '我明确确认将向 production CA 注册账户' });
+  await expect(productionConfirm).toBeVisible();
+  await expect(acmeDialog.getByRole('button', { name: '创建 ACME 账户' })).toBeDisabled();
+  await productionConfirm.check();
+  await expect(acmeDialog.getByRole('button', { name: '创建 ACME 账户' })).toBeEnabled();
+  await acmeDialog.getByLabel('CA 环境').selectOption('staging');
+  await expect(acmeDialog.getByRole('button', { name: '创建 ACME 账户' })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await expect(acmeDialog).toHaveCount(0);
+  await page.getByRole('button', { name: '导入证书' }).click();
+  const importDialog = page.getByRole('dialog', { name: '导入已签发证书' });
+  await expect(importDialog).toBeVisible();
+  await expect(importDialog.getByLabel('完整证书链 PEM')).toBeVisible();
+  await expect(importDialog.getByLabel('RSA 私钥 PEM')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(importDialog).toHaveCount(0);
   await page.getByRole('link', { name: '证书账户' }).click();
   await expect(page.getByRole('heading', { name: 'ACME 账户' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '导入已签发证书' })).toHaveCount(0);
   await page.getByRole('link', { name: '证书订单' }).click();
-  await expect(page.getByRole('heading', { name: '导入已签发证书' })).toBeVisible();
+  await page.getByRole('button', { name: '导入证书' }).click();
+  await expect(page.getByRole('dialog', { name: '导入已签发证书' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await page.setViewportSize({ width: 375, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -295,7 +327,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.locator('tr').filter({ hasText: 'mail' })).toContainText('上游超时');
   await expect(page.locator('input[type="file"]')).toBeDisabled();
   await expect(page.locator('.notice[role="status"]')).toContainText('状态未知 1 条');
-  await page.getByRole('link', { name: '修改密码' }).click();
+  await openPasswordPage();
   await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
   const totpPanel = page.locator('section[aria-labelledby="totp-title"]');
   await page.route('**/totp/generate', async (route) => {
@@ -339,7 +371,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '修改密码' }).click();
+  await openPasswordPage();
   await expect(totpPanel.getByText('动态口令已开启')).toBeVisible();
   await page.route('**/totp/close', async (route) => {
     if (failNextTotpClose) {
@@ -371,7 +403,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '修改密码' }).click();
+  await openPasswordPage();
   await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
   failNextTotpBind = true;
   await totpPanel.getByLabel('当前密码').fill('browser-test-password-2026');
@@ -455,7 +487,8 @@ test('initialization, login, session restore, responsive navigation and logout',
     await route.fallback();
   });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await page.getByRole('button', { name: '账户菜单' }).click();
+  await page.getByRole('menuitem', { name: '退出登录' }).click();
   await expect(page.getByRole('heading', { name: '登录控制台' })).toBeVisible();
   await expect(page.getByLabel('图形验证码')).toHaveCount(0);
   mockCaptchaEnabled = true;
@@ -544,7 +577,11 @@ test('record tool pages render and submit against mocked DNS APIs', async ({ pag
   await expect(page.getByRole('heading', { level: 1, name: '记录分组' })).toBeVisible();
   await expect(page.getByRole('cell', { name: '生产' })).toBeVisible();
   await page.getByLabel('选择 www').check();
-  await page.getByRole('button', { name: '移动到「生产」' }).click();
+  await page.getByRole('button', { name: '移动分组' }).click();
+  const groupDialog = page.getByRole('dialog', { name: '移动记录到分组' });
+  await expect(groupDialog).toBeVisible();
+  await groupDialog.getByLabel('目标分组').selectOption('100');
+  await groupDialog.getByRole('button', { name: '移动到「生产」' }).click();
   await expect(page.locator('.notice[role="status"]')).toContainText('已移动 1 条解析记录');
 
   await page.goto('/record/search');

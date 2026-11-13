@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { InfoTip } from './InfoTip';
 
 interface UpdateState {
   code: 0;
@@ -70,7 +71,7 @@ export function SystemUpdate({ session, onExpired }: Props) {
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="update-title">
-      <div className="panel-heading"><div><h2 id="update-title">版本与迁移检查</h2></div><span className="panel-meta">只读检查</span></div>
+      <div className="panel-heading"><div><h2 id="update-title">版本与迁移检查</h2><InfoTip label="迁移说明" text={`${state?.applyHint ?? '迁移命令需在部署环境执行，执行前请先备份 D1。'}`} /></div><span className="panel-meta">只读检查</span></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取版本信息…</div>
         : !state ? <div className="panel-empty" role="status">版本信息读取失败，请刷新重试。</div>
           : <>
@@ -89,7 +90,7 @@ export function SystemUpdate({ session, onExpired }: Props) {
             <div className="form-actions">
               <button className="button button-primary" type="button" disabled={busy} onClick={() => void check()}>{busy ? '正在检查…' : '重新检查'}</button>
             </div>
-            <div className="panel-footnote">{state.applyHint} 迁移命令：<code className="mono">npx wrangler d1 migrations apply &lt;数据库绑定&gt; --remote</code>，执行前请先备份 D1。</div>
+            <div className="panel-footnote"><code className="mono">npx wrangler d1 migrations apply &lt;数据库绑定&gt; --remote</code></div>
           </>}
     </section>
   </>;

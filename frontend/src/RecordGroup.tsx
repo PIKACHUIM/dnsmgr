@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
 import { typeLabel, type DomainSummary, type RecordRow } from './record-utils';
+import { Modal } from './Modal';
 
 interface Props {
   session: Session;
@@ -26,6 +27,7 @@ export function RecordGroup({ session, domainId, navigate, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [moveOpen, setMoveOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -89,6 +91,7 @@ export function RecordGroup({ session, domainId, navigate, onExpired }: Props) {
       );
       setNotice(`已移动 ${result.moved} 条解析记录到目标分组`);
       setSelected([]);
+      setMoveOpen(false);
       await loadGroups(controller.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -117,25 +120,8 @@ export function RecordGroup({ session, domainId, navigate, onExpired }: Props) {
           </tr>)}</tbody>
         </table></div>}
     </section>
-    <section className="panel" aria-labelledby="record-group-move-title">
-      <div className="panel-heading"><div><h2 id="record-group-move-title">移动记录到分组</h2></div><span className="panel-meta">已选 {selected.length} 条</span></div>
-      <form className="dns-form" onSubmit={submit}>
-        <label className="form-field"><span>目标分组</span>
-          <select value={groupId} onChange={(event) => setGroupId(event.target.value)} disabled={groups.length === 0}>
-            {domain?.accountType === 'dnspod' && <option value="">全部记录（未分组）</option>}
-            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}{group.count === null ? '' : `（${group.count}）`}</option>)}
-          </select>
-        </label>
-        <div className="form-actions">
-          <button className="button button-primary" type="submit" disabled={busy || selected.length === 0 || groups.length === 0}>
-            {busy ? '正在移动…' : `移动到${grouped ? `「${grouped.name}」` : '所选分组'}`}
-          </button>
-          <button className="button button-quiet" type="button" disabled={busy} onClick={() => setSelected([])}>清空选择</button>
-        </div>
-      </form>
-    </section>
     <section className="panel" aria-labelledby="record-group-list-title">
-      <div className="panel-heading"><div><h2 id="record-group-list-title">解析记录</h2></div><span className="panel-meta">共 {total} 条</span></div>
+      <div className="panel-heading"><div><h2 id="record-group-list-title">解析记录</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {total} 条 · 已选 {selected.length} 条</span><button className="button button-primary" type="button" disabled={busy || selected.length === 0 || groups.length === 0} onClick={() => { setError(''); setNotice(''); setMoveOpen(true); }}>移动分组</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取解析记录…</div>
         : records.length === 0 ? <div className="panel-empty">该域名暂无解析记录。</div>
           : <div className="table-wrap"><table className="data-table">
@@ -160,5 +146,21 @@ export function RecordGroup({ session, domainId, navigate, onExpired }: Props) {
         <button className="button button-secondary" disabled={page * PAGE_SIZE >= total || loading} onClick={() => { setPage((current) => current + 1); setSelected([]); }}>下一页</button>
       </div>
     </section>
+    {moveOpen && <Modal title="移动记录到分组" onClose={() => { if (!busy) setMoveOpen(false); }}>
+      <form className="dns-form" onSubmit={submit}>
+        <label className="form-field"><span>目标分组</span>
+          <select value={groupId} onChange={(event) => setGroupId(event.target.value)} disabled={groups.length === 0}>
+            {domain?.accountType === 'dnspod' && <option value="">全部记录（未分组）</option>}
+            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}{group.count === null ? '' : `（${group.count}）`}</option>)}
+          </select>
+        </label>
+        <div className="form-actions">
+          <button className="button button-primary" type="submit" disabled={busy || selected.length === 0 || groups.length === 0}>
+            {busy ? '正在移动…' : `移动到${grouped ? `「${grouped.name}」` : '所选分组'}`}
+          </button>
+          <button className="button button-quiet" type="button" disabled={busy} onClick={() => setMoveOpen(false)}>取消</button>
+        </div>
+      </form>
+    </Modal>}
   </>;
 }

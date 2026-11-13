@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { InfoTip } from './InfoTip';
 import { parseDnsImportRows, type ParsedDnsImportRecord } from './record-import';
 
 interface DomainInfo { id: number; name: string; accountName: string; accountType: string }
@@ -242,8 +243,7 @@ export function DnsRecordImport({ session, domainId, navigate, onExpired }: Prop
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="record-import-title">
-      <div className="panel-heading"><div><h2 id="record-import-title">表格导入解析记录</h2></div><span className="panel-meta">单域名 · 逐行结果</span></div>
-      <p>选择 Excel 文件后预览首个工作表。支持主机记录、记录类型、线路类型、记录值、TTL、权重和备注；未匹配线路使用默认线路。最多 5 MiB、100 条记录。确认后会真实写入 DNS 服务商；明确拒绝会显示失败，上游响应不确定时会停止后续批次并要求先核对记录，不会自动重试。</p>
+      <div className="panel-heading"><div><h2 id="record-import-title">表格导入解析记录</h2><InfoTip label="导入说明" text="支持主机记录、记录类型、线路类型、记录值、TTL、权重和备注；未匹配线路使用默认线路。最多 5 MiB、100 条记录。上游响应不确定时会停止后续批次，需先核对记录，不会自动重试。" /></div><span className="panel-meta">单域名 · 逐行结果</span></div>
       <div className="dns-form">
         <label className="form-field"><span>Excel 文件（.xlsx / .xls）</span>
           <input type="file" accept=".xlsx,.xls" disabled={busy || attempted} onChange={(event) => void selectFile(event.currentTarget.files?.[0])} />
@@ -267,7 +267,6 @@ export function DnsRecordImport({ session, domainId, navigate, onExpired }: Prop
           <td><strong>{stateLabel[row.state]}</strong><div>{row.result}</div></td>
         </tr>)}</tbody>
       </table></div>
-      <div className="panel-footnote">状态未知或请求中断时不会自动重试；先在 DNS 服务商确认对应记录是否已创建。</div>
     </section>}
   </>;
 }

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Modal } from './Modal';
+import { InfoTip } from './InfoTip';
 
 interface Task {
   id: number; domainId: number; domainName: string; recordId: string; recordName: string; recordType: string;
@@ -34,6 +36,7 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
   const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const selectedDomainId = useRef('');
@@ -92,6 +95,7 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(`容灾策略 #${result.id} 已创建，首次探测将在下一次 /cron 运行时执行。`);
       setForm((current) => ({ ...current, recordId: '', recordName: '', mainValue: '', backupValue: '', checkUrl: '' }));
+      setFormOpen(false);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -145,50 +149,23 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
   const activeCount = tasks.filter((task) => task.active).length;
   const backupCount = tasks.filter((task) => task.currentBackup).length;
   const errorCount = tasks.filter((task) => Boolean(task.lastError)).length;
-  const selectedRecord = records.find((record) => record.id === form.recordId);
 
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <div className="page-tools">
-      <button className="button button-secondary" type="button" disabled={busy || loading} onClick={() => void refresh()}>刷新</button>
-      <span className="mono">探测由 /cron 触发；手动检查同样受平台请求预算限制</span>
-      {overview && <button className="button button-primary" type="button" onClick={() => navigate('/dmonitor/task')}>管理切换策略</button>}
-    </div>
-    {overview && <div className="overview-grid">
-      <section className="panel"><div className="panel-heading"><h2>启用策略</h2></div><strong className="metric-value">{activeCount}</strong></section>
-      <section className="panel"><div className="panel-heading"><h2>当前备用线路</h2></div><strong className="metric-value">{backupCount}</strong></section>
-      <section className="panel"><div className="panel-heading"><h2>最近有错误</h2></div><strong className="metric-value">{errorCount}</strong></section>
+    {overview && <div className="metric-grid">
+      <section className="panel metric-panel"><div className="metric-row"><h2>启用策略</h2><strong className="metric-value">{activeCount}</strong></div></section>
+      <section className="panel metric-panel"><div className="metric-row"><h2>当前备用线路</h2><strong className="metric-value">{backupCount}</strong></div></section>
+      <section className="panel metric-panel"><div className="metric-row"><h2>最近有错误</h2><strong className="metric-value">{errorCount}</strong></div></section>
     </div>}
-    {!overview && <section className="panel" aria-labelledby="failover-form-title">
-      <div className="panel-heading"><div><h2 id="failover-form-title">新建 HTTP 容灾策略</h2><p>仅支持启用状态的 A、AAAA、CNAME 记录</p></div><span className="panel-meta">公网 HTTP/HTTPS 检测</span></div>
-      <form className="dns-form" onSubmit={create}>
-        <label className="form-field"><span>域名</span><select required value={form.domainId} onChange={(event) => {
-          const domainId = event.target.value;
-          selectedDomainId.current = domainId;
-          setForm((current) => ({ ...current, domainId, recordId: '', recordName: '', mainValue: '' }));
-          void loadRecords(domainId).catch(handle);
-        }}>
-          <option value="">选择域名</option>{domains.map((domain) => <option key={domain.id} value={domain.id}>{domain.name}</option>)}
-        </select></label>
-        <label className="form-field"><span>解析记录</span><select required value={form.recordId} onChange={(event) => {
-          const record = records.find((item) => item.id === event.target.value);
-          setForm((current) => ({ ...current, recordId: record?.id ?? '', recordType: record?.type ?? 'A', recordName: record?.name ?? '', mainValue: record?.value ?? '' }));
-        }}>
-          <option value="">选择记录</option>{records.map((record) => <option key={record.id} value={record.id}>{record.name} · {record.type} · {record.value}</option>)}
-        </select></label>
-        <label className="form-field"><span>主线路值</span><input required value={form.mainValue} onChange={(event) => setForm({ ...form, mainValue: event.target.value })} maxLength={253} /></label>
-        <label className="form-field"><span>备用线路值</span><input required value={form.backupValue} onChange={(event) => setForm({ ...form, backupValue: event.target.value })} maxLength={253} placeholder={form.recordType === 'A' ? '例如 8.8.8.8' : '输入备用地址或目标'} /></label>
-        <label className="form-field"><span>健康检查 URL</span><input required type="url" value={form.checkUrl} onChange={(event) => setForm({ ...form, checkUrl: event.target.value })} maxLength={512} placeholder="https://origin.example.com/health" /></label>
-        <label className="form-field"><span>检测间隔（秒）</span><input required type="number" min={30} max={86400} value={form.intervalSeconds} onChange={(event) => setForm({ ...form, intervalSeconds: event.target.value })} /></label>
-        <label className="form-field"><span>超时（秒）</span><input required type="number" min={1} max={30} value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })} /></label>
-        <label className="form-field"><span>连续失败/恢复阈值</span><input required type="number" min={1} max={10} value={form.failureThreshold} onChange={(event) => setForm({ ...form, failureThreshold: event.target.value })} /></label>
-        {selectedRecord && <p className="form-hint">当前记录值：{selectedRecord.value}；策略会保留线路、TTL、备注等记录属性。</p>}
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !form.domainId || !form.recordId}>创建策略</button></div>
-      </form>
-    </section>}
+    {overview && <div className="page-tools">
+      <button className="button button-secondary" type="button" disabled={busy || loading} onClick={() => void refresh()}>刷新</button>
+      <button className="button button-primary" type="button" onClick={() => navigate('/dmonitor/task')}>管理切换策略</button>
+    </div>}
     <section className="panel" aria-labelledby="failover-list-title">
-      <div className="panel-heading"><div><h2 id="failover-list-title">{overview ? '容灾策略状态' : '切换策略'}</h2></div><span className="panel-meta">共 {tasks.length} 条</span></div>
+      <div className="panel-heading"><div><h2 id="failover-list-title">{overview ? '容灾策略状态' : '切换策略'}</h2></div>{overview
+        ? <span className="panel-meta">共 {tasks.length} 条</span>
+        : <div className="panel-heading-actions"><span className="panel-meta">共 {tasks.length} 条</span><button className="button button-secondary" type="button" disabled={busy || loading} onClick={() => void refresh()}>刷新</button><button className="button button-primary" type="button" disabled={loading} onClick={() => { setError(''); setNotice(''); setFormOpen(true); }}>新建策略</button></div>}</div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取策略…</div>
         : tasks.length === 0 ? <div className="panel-empty">还没有容灾策略。</div>
           : <div className="table-wrap"><table className="data-table">
@@ -216,5 +193,30 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
         <tbody>{logs.map((log) => <tr key={log.id}><td>{timeOf(log.created_at)}</td><td>{EVENT_LABELS[log.event] ?? log.event}</td><td>{log.http_status ?? '—'}</td><td>{log.latency_ms ?? '—'} ms</td><td>{log.message ?? '—'}</td></tr>)}</tbody>
       </table></div>}
     </section>}
+    {formOpen && <Modal title="新建 HTTP 容灾策略" wide onClose={() => { if (!busy) setFormOpen(false); }}>
+      <form className="dns-form" onSubmit={create}>
+        <label className="form-field"><span>域名</span><select required value={form.domainId} onChange={(event) => {
+          const domainId = event.target.value;
+          selectedDomainId.current = domainId;
+          setForm((current) => ({ ...current, domainId, recordId: '', recordName: '', mainValue: '' }));
+          void loadRecords(domainId).catch(handle);
+        }}>
+          <option value="">选择域名</option>{domains.map((domain) => <option key={domain.id} value={domain.id}>{domain.name}</option>)}
+        </select></label>
+        <div className="form-field"><div className="form-label"><label htmlFor="failover-record">解析记录</label><InfoTip label="记录范围" text="仅支持启用状态的 A、AAAA、CNAME 记录。" /></div><select id="failover-record" required value={form.recordId} onChange={(event) => {
+          const record = records.find((item) => item.id === event.target.value);
+          setForm((current) => ({ ...current, recordId: record?.id ?? '', recordType: record?.type ?? 'A', recordName: record?.name ?? '', mainValue: record?.value ?? '' }));
+        }}>
+          <option value="">选择记录</option>{records.map((record) => <option key={record.id} value={record.id}>{record.name} · {record.type} · {record.value}</option>)}
+        </select></div>
+        <label className="form-field"><span>主线路值</span><input required value={form.mainValue} onChange={(event) => setForm({ ...form, mainValue: event.target.value })} maxLength={253} /></label>
+        <label className="form-field"><span>备用线路值</span><input required value={form.backupValue} onChange={(event) => setForm({ ...form, backupValue: event.target.value })} maxLength={253} placeholder={form.recordType === 'A' ? '例如 8.8.8.8' : '输入备用地址或目标'} /></label>
+        <label className="form-field"><span>健康检查 URL</span><input required type="url" value={form.checkUrl} onChange={(event) => setForm({ ...form, checkUrl: event.target.value })} maxLength={512} placeholder="https://origin.example.com/health" /></label>
+        <label className="form-field"><span>检测间隔（秒）</span><input required type="number" min={30} max={86400} value={form.intervalSeconds} onChange={(event) => setForm({ ...form, intervalSeconds: event.target.value })} /></label>
+        <label className="form-field"><span>超时（秒）</span><input required type="number" min={1} max={30} value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })} /></label>
+        <label className="form-field"><span>连续失败/恢复阈值</span><input required type="number" min={1} max={10} value={form.failureThreshold} onChange={(event) => setForm({ ...form, failureThreshold: event.target.value })} /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !form.domainId || !form.recordId}>{busy ? '正在提交…' : '创建策略'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }

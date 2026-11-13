@@ -2,25 +2,26 @@
 
 本文面向接手 `frontend/` 的开发者，说明当前控制台的目录结构、主题与语言机制、导航与布局规范、弹窗约定、已知边界和验证流程。文中的「边界」是刻意保留的取舍，不是遗漏；改动前请先确认是否要突破这些边界，以及需要同步修改哪些测试。
 
-> 对应交付：提交 `823eec7`（侧边栏收窄到 216px 并支持折叠、系统设置合并为 3 页），Worker 版本 `8b175e2a-32e6-4838-81fe-48e179966524`；上一轮主题 / 语言 / 弹窗 / 间距改动为 `39d235a`，版本 `70b07d39-34a1-42a4-8541-eeb489a90624`。
+> 对应交付：本轮前端改版（表单全部弹窗化、说明文字收进图标、头像菜单、十一项语言、指标单行）。上一轮为提交 `823eec7`，Worker 版本 `8b175e2a-32e6-4838-81fe-48e179966524`；再上一轮主题 / 语言 / 弹窗 / 间距改动为 `39d235a`。
 
 ## 本次交付摘要
 
-这一轮前端改动来自五条明确需求：补齐元素边距并统一位置、把「添加账户」这类表单改成弹窗、侧边栏菜单统一四个汉字、亮暗主题切换、中英语言切换。落到代码上包括：
+这一轮前端改动来自四条明确需求：所有新增/编辑表单改成弹窗、同类信息（启用策略/备用线路/最近错误）保持一行、操作日志并入系统设置并把改密/退出收进头像菜单、语言扩到繁体中文与八种外语。落到代码上包括：
 
 | 需求 | 实现 | 主要文件 |
 | --- | --- | --- |
-| 统一边距 | 新增 `--panel-gutter` 栅格变量，面板内边距 / 标题通栏 / 页脚通栏统一，相邻面板补 24px 间距，表格与表单不再贴边 | `styles.css` |
-| 表单弹窗化 | 新增 `Modal`，DNS 账户的新增、用户新增/编辑/域名权限改为弹窗 | `Modal.tsx`、`DnsAccounts.tsx`、`Users.tsx` |
-| 四字导航 | 全部菜单项与分组名改为四个汉字，动态页标题同步 | `navigation.ts` |
-| 亮暗主题 | `PreferencesProvider` + `data-theme` + 暗色 token 覆盖，选择持久化 | `preferences.tsx`、`styles.css`、`main.tsx` |
-| 中英切换 | 中文原文即词条 key，外壳 / 登录 / 首页 / DNS 账户页完成英文化 | `preferences.tsx`、`Console.tsx`、`Auth.tsx` |
+| 表单弹窗化 | 新增通用 `Modal` 调用约定，域名、记录、分类、别名、SaaS、Tunnel、定时任务、容灾策略、证书账户/订单/部署、优选任务、记录分组全部改为「面板标题右侧按钮 + 弹窗」 | `Modal.tsx` 与各业务页 |
+| 说明收进图标 | 新增 `InfoTip`：悬停/聚焦显示提示，点击展开面板；页面正文不再保留解释段落 | `InfoTip.tsx`、`styles.css` |
+| 头像菜单 | 顶栏右侧改为主题 / 语言 / 头像三件套，`Menu` 承载「修改密码」与「退出登录」 | `Menu.tsx`、`Console.tsx` |
+| 导航合并 | 删除「审计账户」分组，「操作日志」并入「系统设置」；`/setpwd` 只由头像菜单进入 | `navigation.ts` |
+| 指标单行 | 指标块改为 `.metric-row`（标签 + 数值同一行、`nowrap`），避免「当前备用线路」之类被拆行 | `styles.css`、`DnsFailover.tsx` |
+| 多语言 | 语言从 zh/en 扩到 `zh-Hans`、`zh-Hant`、`en`、`ja`、`ko`、`fr`、`de`、`it`、`es`、`pt`、`ru`，词条拆到 `locales/*.ts` | `preferences.tsx`、`locales/*` |
 
-同时补充了图标（`sun` / `moon` / `globe` / `plus`），并同步更新了 e2e 断言（导航标签、`localStorage` 键前缀、主题/语言切换、账户弹窗的打开与 Esc 关闭）。
+同时补充了图标（`info` / `alert` / `key`），并同步更新了 e2e（弹窗触发器、头像菜单、语言下拉、导航改名）。
 
-交付验证（在本仓库执行）：`npm run typecheck` 通过；`npm test` 23 个文件 330 条通过；`npm run test:e2e` 2 条通过；`npm run build:cloudflare` 成功并部署。线上 `/health` 返回 `{"code":0,"service":"dnsmgr-serverless","stage":"foundation"}`，`assets/index-MeBz4m5M.css` 已确认包含 `--panel-gutter`、`.modal-backdrop` 与 `:root[data-theme=dark]`。本轮只验证了 Cloudflare 构建，EdgeOne 与 ESA 产物未重新构建。
+交付验证（在本仓库执行）：`npm run typecheck` 通过；`npm run build:frontend` 成功；`npm test` 23 个文件 330 条通过；`npm run test:e2e` 2 条通过。本轮未部署，未跑 `build:cloudflare`。
 
-涉及的是纯前端资源与导航文案，没有新增 D1 迁移，回滚只需 `git revert 39d235a` 后重新部署，或直接回退 Worker 版本；数据库无需处理。
+涉及的是纯前端资源与导航文案，没有新增 D1 迁移，回滚只需回退提交后重新部署，数据库无需处理。
 
 ## 1. 构建与运行
 
@@ -38,12 +39,15 @@ npm run dev:frontend        # Vite 热更新，127.0.0.1:5173，代理到 8787
 | 文件 | 职责 |
 | --- | --- |
 | `main.tsx` | 应用状态机（`loading` / `error` / `install` / `login` / `session`）、`PreferencesProvider` 挂载、`document.title` |
-| `Auth.tsx` | 初始化、登录、TOTP 第二步、图形验证码、登录页主题/语言按钮 |
+| `Auth.tsx` | 初始化、登录、TOTP 第二步、图形验证码、登录页主题/语言控件 |
 | `Console.tsx` | 控制台外壳（侧边栏、顶栏、页脚）、首页面板、按 `canonicalPath(path)` 分发业务组件 |
 | `navigation.ts` | 导航数据（分组、标签、说明、能力位）、`mergedPaths` / `canonicalPath()` 旧路径映射与 `resolvePage()` 动态页解析 |
 | `SystemPages.tsx` | 系统设置的三个聚合页，只做组件组合 |
-| `preferences.tsx` | 主题/语言 Context、英文词条表、`ThemeToggle` / `LanguageToggle` |
+| `preferences.tsx` | 主题/语言 Context、语言清单、`ThemeToggle` / `LanguageToggle` |
+| `locales/*.ts` | 各语言词条表，中文原文为 key；`en.ts` 与另外 9 份词典键一一对应 |
 | `Modal.tsx` | 可访问弹窗（焦点锁定、Esc、遮罩、滚动锁定） |
+| `Menu.tsx` | 通用下拉菜单（`role="menu"`、Esc/外部点击关闭、打开时聚焦首项） |
+| `InfoTip.tsx` | 说明图标：悬停/聚焦提示、点击展开面板 |
 | `icons.tsx` | 图标名到 SVG path 的映射、`Brand` 品牌块 |
 | `styles.css` | 全部样式：设计 token、组件、响应式、暗色主题 |
 | `api.ts` | `request` / `send` / `post`、`ApiError`、`readSession`、统一错误文案 |
@@ -128,37 +132,40 @@ CSS 中 `:root` 定义亮色 token，`:root[data-theme='dark']` 覆盖同名 tok
 - TOTP 二维码容器 `.totp-qr` 固定浅底深码（`--color-qr-*` 局部变量），因为多数扫码器在深底反色下识别率差。
 - 侧边栏在亮色下也是深色导航，暗色只是进一步压深，这是有意的视觉分层。
 
-## 5. 多语言（中文 / 英文）
+## 5. 多语言（11 个语言选项）
 
 ### 5.1 机制
 
-中文原文就是词条 key，英文查表：
+中文原文就是词条 key，其它语言查词典：
 
 ```ts
-t('证书订单')                  // zh: '证书订单'，en: 'Orders'
+t('证书订单')                  // zh-Hans: '证书订单'，en: 'Orders'，ja: '証明書オーダー'
 t('已保留「{label}」的导航入口…', { label: t(page.item.label) })
 ```
 
-- `t()` 只在语言为 `en` 时查表；查不到时原样返回 key，因此**漏翻不会报错，也不会显示 undefined**。
+- 语言清单 `LANGUAGES` 定义在 `preferences.tsx`，顺序即下拉菜单顺序：简体中文、繁體中文、English、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский。
+- 简体中文直接返回 key；其它语言查 `DICTIONARIES`，查不到时回退 key，因此**漏翻不会报错，也不会显示 undefined**。
 - 支持 `{name}` 占位符替换，用于把变量安全插进句子。
-- 语言写在 `document.documentElement.lang`，保存到 `localStorage` 的 `dnsmgr-language`。
-- 无词条文件拆分，全部在 `preferences.tsx` 的 `english` 常量里，按「导航 / 页面说明 / 控制台框架 / 偏好 / 登录 / DNS 账户 / 服务商字段」分区注释。
+- `document.documentElement.lang` 按语言写成 `zh-CN`、`zh-TW`、`en`、`ja` 等 BCP 47 标签；选择保存在 `localStorage` 的 `dnsmgr-language`。
+- 旧版本只存过 `zh` / `en`，`initialLanguage()` 会把 `zh` 映射到 `zh-Hans`，不认识的取值回落到简体中文。
+- 词条全部在 `frontend/src/locales/`：`en.ts`、`zh-Hant.ts`、`ja.ts`、`ko.ts`、`fr.ts`、`de.ts`、`it.ts`、`es.ts`、`pt.ts`、`ru.ts`。新增 key 必须同时补齐 9 份词典，键顺序与 `en.ts` 一致。
 
 ### 5.2 新增文案的两种写法
 
-1. 固定文案：JSX 里直接写 `{t('中文原文')}`，再在 `english` 中补一条。
+1. 固定文案：JSX 里直接写 `{t('中文原文')}`，再在 9 份词典里各补一条。
 2. 动态文案（服务端返回或模板字符串）：服务端文案不要直接当 key 用；需要拼接时先翻译片段再拼接，例如登录过期提示 `setError(`${errorMessage(failure)} ${t('本次验证请求已失效，请重新输入密码登录。')}`)`。
 
 `Auth.tsx` 里存在 `{t(error)}` 的写法：错误状态存中文原文，渲染时尝试翻译。这样做的好处是切换语言时已有错误也能跟着变；风险是如果服务端返回的文案恰好等于某个词条 key，会被误翻。当前没有冲突，新增词条时注意避免与常见服务端错误文案重名。
 
 ### 5.3 覆盖范围边界
 
-已英文化：
+已接入词典：
 
-- 控制台外壳：顶栏、侧边栏分组与菜单、页面标题与说明、状态角标、页脚、未移植占位面板；
+- 控制台外壳：顶栏、侧边栏分组与菜单、页面标题与提示、状态角标、页脚、未移植占位面板；
 - 首页运行环境 / 当前会话 / 功能迁移状态三块面板；
 - 登录、初始化、TOTP、图形验证码整页；
-- DNS 账户页（含服务商凭据字段标签、可选后缀）。
+- DNS 账户页（含服务商凭据字段标签、可选后缀）；
+- 头像菜单、语言菜单、弹窗关闭按钮等公共控件。
 
 **仍为中文**：
 
@@ -167,7 +174,7 @@ t('已保留「{label}」的导航入口…', { label: t(page.item.label) })
 - 浏览器标签标题 `document.title`（`main.tsx` 仍拼中文）；
 - 品牌块 `Brand`（「聚合 DNS」/「管理系统 / CONTROL」）保持中文。
 
-这是有意的分阶段交付：先保证外壳与登录链路完整可用，避免出现「菜单英文、页面半中半英」的错位感。继续扩展时按页面整体翻译，不要逐句零散补。
+这是有意的分阶段交付：先保证外壳与登录链路完整可用，避免出现「菜单日文、页面半中半日」的错位感。继续扩展时按页面整体翻译，不要逐句零散补。
 
 ### 5.4 关于本地存储的硬约束
 
@@ -183,14 +190,14 @@ t('已保留「{label}」的导航入口…', { label: t(page.item.label) })
 grep -oP "label: '[^']*'" frontend/src/navigation.ts | sort -u
 ```
 
-当前分组：工作空间、域名配置、容灾调度、证书管理、优选管理、系统设置、审计账户。菜单项与旧名对照：
+当前分组：工作空间、域名配置、容灾调度、证书管理、优选管理、系统设置。原「审计账户」分组已删除，「操作日志」并入「系统设置」；「修改密码」不再出现在菜单里，只由右上角头像菜单进入（`/setpwd` 仍可直接访问，标题由 `resolvePage()` 特殊分支给出）。菜单项与旧名对照：
 
 | 旧名 | 新名 |
 | --- | --- |
 | 自动部署账户 / 自动部署任务 | 部署账户 / 部署任务 |
 | CNAME 代理 / 自动续签设置 | 证书代理 / 续签设置 |
 | 任务管理（优选） | 优选任务 |
-| 到期提醒设置 | 到期提醒 |
+| 到期提醒设置 / 通知设置 / 定时设置 | 任务通知 |
 | 批量添加解析 / 批量修改解析 | 批量添加 / 批量修改 |
 | 按记录值搜索 / 智能批量添加 | 记录搜索 / 智能添加 |
 | 服务商操作日志 / 解析记录分组 | 服务日志 / 记录分组 |
@@ -204,10 +211,13 @@ grep -oP "label: '[^']*'" frontend/src/navigation.ts | sort -u
 
 `tests/e2e/foundation.spec.ts` 用链接名和一级标题定位页面。改名后必须同步：
 
-- 链接定位：`getByRole('link', { name: '到期提醒' })`；
-- 一级标题：`getByRole('heading', { level: 1, name: '批量添加' })`——标题来自 `navigation.ts` 的 `label`，不是组件内部 `<h2>`。
+- 链接定位：`getByRole('link', { name: '证书订单' })`；
+- 一级标题：`getByRole('heading', { level: 1, name: '批量添加' })`——标题来自 `navigation.ts` 的 `label`，不是组件内部 `<h2>`；
+- 头像菜单：`getByRole('button', { name: '账户菜单' })` 打开后，用 `getByRole('menuitem', { name: '修改密码' | '退出登录' })` 点击。
 
-英文模式下的断言同理（如 `name: 'Orders'`）。
+一级标题旁的 `InfoTip` 必须放在 `<h1>` 之外（`.page-title` 容器），否则标题的可访问名会变成「标题 + 页面说明」，`exact: true` 的断言会全部失败。
+
+英文模式下的断言同理（如 `name: 'Orders'`）；语言切换改为下拉菜单，断言写成 `getByRole('menuitemradio', { name: 'English' })`。
 
 ### 6.3 宽度与折叠
 
@@ -241,6 +251,7 @@ grep -oP "label: '[^']*'" frontend/src/navigation.ts | sort -u
 | `/system/account` 登录账户 | `LoginCaptchaSettings` + `Users` | `/system/loginset`、`/user` |
 | `/system/tasks` 任务通知 | `CronSettings` + `NotifySettings` + `ExpirationNoticeSettings` | `/system/cronset`、`/system/noticeset`、`/domain/expirenotice` |
 | `/system/maintenance` 系统维护 | `ProxySettings` + `SystemUpdate` | `/system/proxyset`、`/system/update` |
+| `/log` 操作日志 | `DnsLogs`（原「审计账户」分组内，现归入系统设置，非管理员也可见） | — |
 
 映射写在 `navigation.ts` 的 `mergedPaths`，由 `canonicalPath()` 查表，`resolvePage()` 与 `Console.tsx` 都先映射再匹配：
 
@@ -285,13 +296,34 @@ export function canonicalPath(path: string): string {
 - 直接放在 `.panel` 里的块级元素会落在栅格内，**不要**再加左右 24px。
 - 需要通栏（贴到面板边框）的元素，用 `margin-inline: calc(var(--panel-gutter) * -1)` 并自己补回左右 padding，参考 `.panel-footnote`。
 - 一行内标签换行会导致输入框错位，`.dns-form .form-field > input/select/textarea { margin-top: auto }` 负责同一行输入框底对齐，新增表单沿用 `.dns-form` 结构即可。
+- 需要说明图标的字段写成 `<div className="form-field"><div className="form-label"><label htmlFor="x">标签</label><InfoTip …/></div><input id="x" …/></div>`。**不要**把 `InfoTip` 放进 `<label>`：标签内含按钮后，输入框拿不到可访问名，`getByLabel()` 会直接失效。
 - 所有新增移动端断点请复用 `--panel-gutter`，不要在组件里写死 16px/24px。
 
 ## 8. 弹窗
 
 ### 8.1 用途与用法
 
-「添加账户」「新增用户」「编辑用户」「域名权限」使用 `Modal`，不再把表单常驻在页面底部。使用方式：
+新增/编辑类表单一律走弹窗，触发器放在面板标题右侧的 `.panel-heading-actions` 里，页面正文只保留列表与查询条件。当前已弹窗化：
+
+| 页面 | 触发器 → 弹窗标题 |
+| --- | --- |
+| `/account` | 添加账户 → 添加 DNS 账户 |
+| `/domain` | 添加域名 → 添加域名 |
+| `/record/:id` | 添加记录 → 添加解析记录（编辑时为「修改解析记录」）；文本批量添加 → 文本批量添加 |
+| `/domain/category` | 新建分类 → 新建分类 |
+| `/record/:id/alias` | 添加别名 → 添加别名 |
+| `/cloudflare/hostnames/:id` | 创建主机名 → 创建自定义主机名 |
+| `/cloudflare/tunnels/:id` | 创建 Tunnel → 创建 Tunnel；添加主机名 → 添加公网主机名 |
+| `/schedule/stask` | 新建任务 → 新建定时切换 |
+| `/dmonitor/task` | 新建策略 → 新建 HTTP 容灾策略 |
+| `/cert/cname` | 添加代理 → 添加 CNAME 代理 |
+| `/cert/certaccount`、`/cert/certorder` | 添加账户 / 申请证书 / 导入证书 → 创建 ACME 账户 / 申请新证书 / 导入已签发证书 |
+| `/cert/deployaccount`、`/cert/deploytask` | 添加账户 → 添加部署账户（编辑时为「编辑部署账户」）；新建任务 → 新建部署任务 |
+| `/optimizeip/opiplist` | 新建任务 → 新建优选任务 |
+| `/record/groups/:id` | 移动分组 → 移动记录到分组 |
+| `/system/account` | 新增用户 / 编辑 / 域名权限 → 对应标题 |
+
+使用方式：
 
 ```tsx
 {formOpen && <Modal title="添加 DNS 账户" description="凭据加密保存" onClose={() => setFormOpen(false)}>
@@ -317,18 +349,18 @@ export function canonicalPath(path: string): string {
 
 ## 9. 设计边界与已知限制（交接重点）
 
-1. **语言覆盖不完整**：见 5.3。业务页仍为中文，英文模式下会出现「外壳英文、正文中文」的混合界面。
-2. **服务端消息不翻译**：后端统一返回中文，`errorMessage()` 直接展示；要在英文界面消除中文错误，需要后端返回错误码并在前端映射。
+1. **语言覆盖不完整**：见 5.3。11 个语言选项里，词典只覆盖外壳、登录链路、DNS 账户页与公共控件；业务页正文仍为中文，非中文模式下会出现「外壳外语、正文中文」的混合界面。9 份词典各 256 条 key，新增文案要同时补 9 处。
+2. **服务端消息不翻译**：后端统一返回中文，`errorMessage()` 直接展示；要消除中文错误，需要后端返回错误码并在前端映射。
 3. **品牌与标题不翻译**：`Brand`、`document.title`、`<meta name="theme-color">` 均为固定中文/固定色。
 4. **主题首帧闪烁**：见 4.3，需要在 `index.html` 加首屏脚本才能彻底消除。
 5. **偏好不同步**：主题与语言只在本机，换设备需重选，服务端无偏好字段。
 6. **弹窗不支持嵌套/叠加**，也不支持从弹窗内跳转到别的弹窗。
 7. **间距方案依赖 DOM 结构**：`.panel` 的内边距 + 标题负外边距是全局约定，直接在 `.panel` 里塞入自带左右 padding 的第三方块会出现 48px 缩进。
 8. **表格仍是普通表格**：无列冻结、无虚拟滚动、无列宽持久化；大数据量靠分页接口。
-9. **单包构建**：`dist/frontend/assets/index-*.js` 约 528KB（gzip 约 141KB），未按路由拆分，构建时的 chunk 体积警告属预期。
-10. **图标集很小**：`icons.tsx` 只有 `grid/dns/shield/menu/close/arrow/logout/server/lock/sun/moon/globe/plus/panel/panel-expand`，新增图标需同时改 `IconName` 与 `paths`。
+9. **单包构建**：`dist/frontend/assets/index-*.js` 约 664KB（gzip 约 173KB），未按路由拆分，构建时的 chunk 体积警告属预期。
+10. **图标集很小**：`icons.tsx` 只有 `grid/dns/shield/menu/close/arrow/logout/server/lock/sun/moon/globe/plus/panel/panel-expand/info/alert/key`，新增图标需同时改 `IconName` 与 `paths`。
 11. **可访问性只做了基础项**：语义角色、焦点可见、焦点陷阱、跳过导航链接、`aria-label` 已覆盖；未做屏幕阅读器实测，也未接入自动对比度审计。
-12. **自动化视觉验证有限**：e2e 只有两条用例（初始化→登录→响应式→证书→DNS 账户→TOTP→改密；解析工具页），其余页面靠手工截图目检。Playwright 固定 `channel: 'chrome'`，未覆盖 Firefox/Safari 与真机。
+12. **自动化视觉验证有限**：e2e 只有两条用例（初始化→登录→响应式→11 语言切换→证书弹窗→到期提醒→登录设置→DNS 账户→解析记录→TOTP→改密；解析工具页），其余页面靠手工截图目检。Playwright 固定 `channel: 'chrome'`，未覆盖 Firefox/Safari 与真机。
 13. **无组件级测试**：`tests/record-import.test.ts` 只覆盖 `frontend/src/record-import.ts` 这类纯函数；`preferences`、`Modal`、`navigation` 与各页面组件没有渲染测试，交互行为依赖 e2e 与手工目检。
 14. **暗色未做打印/导出适配**：打印样式未单独定义，深色界面直接打印会是深底。
 
@@ -351,12 +383,13 @@ npm run docs:build && npm run docs:verify
 
 改动 UI 后建议的手工目检顺序（1440 与 375 两个宽度）：
 
-1. `/login`：亮/暗各一次，验证码换行、密码显示切换、右上角主题与语言按钮；
-2. `/`：三块面板、侧边栏滚动、四字菜单是否换行、桌面端折叠与刷新后保持；
+1. `/login`：亮/暗各一次，验证码换行、密码显示切换、右上角主题与语言菜单（11 项、原生语言名）；
+2. `/`：三块面板、侧边栏滚动、菜单是否换行、桌面端折叠与刷新后保持、头像菜单；
 3. `/account`、`/system/account`：弹窗打开/关闭、Esc、移动端全屏、提交后列表刷新；
-4. `/domain`、`/cert/certorder`：多面板间距、表格左右留白、表单不贴边；
+4. `/domain`、`/cert/certorder`：多面板间距、表格左右留白、弹窗内字段不贴边、标题右侧触发器不换行；
 5. `/system/tasks`、`/system/maintenance`：合并页顺序与间距、375px 下 crontab 代码块只在块内横向滚动、旧路径 `/system/cronset` 直连仍能渲染；
-6. `/setpwd`：TOTP 二维码在暗色下仍可扫描。
+6. `/setpwd`：TOTP 二维码在暗色下仍可扫描；改密入口只走头像菜单；
+7. `/dmonitor/overview`、`/dmonitor/task`：指标标签与数值在同一行，窄屏不出现半行换行。
 
 ## 11. 新页面 Checklist
 
@@ -366,9 +399,10 @@ npm run docs:build && npm run docs:verify
 - [ ] `src/app.ts` 的 `pagePatterns` 加同一条路径正则，否则直连 / 刷新会返回 404 JSON；
 - [ ] 动态路由页面在 `resolvePage()` 增加正则与标题；
 - [ ] 使用 `.panel` + `.panel-heading` + `.dns-form` / `.table-wrap`，不要自写左右 24px；
-- [ ] 新增中文文案若属于已英文化范围，补 `english` 词条；
-- [ ] 增删表单优先用 `Modal`；
-- [ ] 更新 `tests/e2e/foundation.spec.ts` 中受影响的链接名与标题；
+- [ ] 新增中文文案若属于已接入词典的范围，同步补 `frontend/src/locales/` 下 9 份词典（以 `en.ts` 的键为基准）；
+- [ ] 说明文字用 `InfoTip`，不要写成常驻段落；字段标签与图标分开写，见 7.3；
+- [ ] 新增/编辑表单用 `Modal`，触发器放 `.panel-heading-actions`；
+- [ ] 更新 `tests/e2e/foundation.spec.ts` 中受影响的链接名、标题与弹窗流程；
 - [ ] 跑 typecheck / test / test:e2e / build:cloudflare，并按 10 节目检。
 
 ## 12. 常见改动示例
@@ -385,10 +419,10 @@ npm run docs:build && npm run docs:verify
 : path === '/system/audit' && level === 2 ? <AuditExport session={session} onExpired={onExpired} />
 ```
 
-**加一条英文词条**
+**加一条词条**
 
 ```ts
-// preferences.tsx 的 english
+// frontend/src/locales/en.ts（其余 9 份保持同样的键与顺序）
 '审计导图': 'Audit export',
 ```
 

@@ -161,7 +161,7 @@ export function DnsAccounts({ session, onExpired }: Props) {
           />
         </label>)}
         <label className="form-field"><span>{t('备注（可选）')}</span><input value={remark} maxLength={100} onChange={(event) => setRemark(event.target.value)} /></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !type}>{busy ? t('正在验证…') : t('验证并保存')}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>{t('取消')}</button><span>{t('保存前会调用服务商接口校验凭据。')}</span></div>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !type}>{busy ? t('正在验证…') : t('验证并保存')}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>{t('取消')}</button></div>
       </form>
     </Modal>}
   </>;

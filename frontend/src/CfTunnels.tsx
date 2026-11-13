@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { Modal } from './Modal';
 
 interface Tunnel { id: string; name: string; status: string; connections: number; createdAt: string | null }
 interface PublicHostname { hostname: string; service: string; path: string; zoneName: string | null }
@@ -27,6 +29,8 @@ export function CfTunnels({ session, accountId, navigate, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [tunnelOpen, setTunnelOpen] = useState(false);
+  const [publicOpen, setPublicOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -80,6 +84,7 @@ export function CfTunnels({ session, accountId, navigate, onExpired }: Props) {
     try {
       await send(`/api/v1/cloudflare/accounts/${accountId}/tunnels`, 'POST', { name: name.trim() }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setName('');
+      setTunnelOpen(false);
       setNotice('Tunnel 已创建');
       await load(controller.signal);
     } catch (failure) { handle(failure); }
@@ -123,6 +128,7 @@ export function CfTunnels({ session, accountId, navigate, onExpired }: Props) {
       );
       setNotice(`公网主机名已保存，DNS 记录 ${result.dns}`);
       setPublicForm({ hostname: '', service: '', path: '' });
+      setPublicOpen(false);
       await loadDetails(controller.signal, current);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -191,19 +197,12 @@ export function CfTunnels({ session, accountId, navigate, onExpired }: Props) {
   return <>
     <div className="page-tools">
       <a className="button button-secondary" href="/account" onClick={(event) => { event.preventDefault(); navigate('/account'); }}>返回域名账户</a>
-      <span className="mono">Cloudflare Account ID · {cfAccountId || '读取中…'} · 仅支持 API 令牌</span>
+      <span className="mono">Account ID · {cfAccountId || '读取中…'}</span>
     </div>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="tunnel-create-title">
-      <div className="panel-heading"><div><h2 id="tunnel-create-title">创建 Tunnel</h2></div><span className="panel-meta">cloudflared</span></div>
-      <form className="dns-form" onSubmit={create}>
-        <label className="form-field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>创建</button></div>
-      </form>
-    </section>
     <section className="panel" aria-labelledby="tunnel-list-title">
-      <div className="panel-heading"><div><h2 id="tunnel-list-title">Tunnel 列表</h2></div><span className="panel-meta">共 {tunnels.length} 个</span></div>
+      <div className="panel-heading"><div><h2 id="tunnel-list-title">Tunnel 列表</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {tunnels.length} 个</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { setName(''); setError(''); setNotice(''); setTunnelOpen(true); }}><Icon name="plus" />创建 Tunnel</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取 Tunnel…</div>
         : tunnels.length === 0 ? <div className="panel-empty">还没有 Tunnel。</div>
           : <div className="table-wrap"><table className="data-table">
@@ -223,13 +222,7 @@ export function CfTunnels({ session, accountId, navigate, onExpired }: Props) {
     </section>
     {current && <>
       <section className="panel" aria-labelledby="public-title">
-        <div className="panel-heading"><div><h2 id="public-title">公网主机名 · {current.name}</h2></div><span className="panel-meta">自动同步 CNAME</span></div>
-        <form className="dns-form" onSubmit={addPublic}>
-          <label className="form-field"><span>主机名</span><input value={publicForm.hostname} onChange={(event) => setPublicForm({ ...publicForm, hostname: event.target.value })} required maxLength={253} /></label>
-          <label className="form-field"><span>服务</span><input value={publicForm.service} onChange={(event) => setPublicForm({ ...publicForm, service: event.target.value })} required placeholder="http://localhost:8080" maxLength={255} /></label>
-          <label className="form-field"><span>路径</span><input value={publicForm.path} onChange={(event) => setPublicForm({ ...publicForm, path: event.target.value })} maxLength={255} /></label>
-          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>保存</button></div>
-        </form>
+        <div className="panel-heading"><div><h2 id="public-title">公网主机名 · {current.name}</h2></div><button className="button button-primary" type="button" disabled={busy} onClick={() => { setPublicForm({ hostname: '', service: '', path: '' }); setError(''); setNotice(''); setPublicOpen(true); }}><Icon name="plus" />添加主机名</button></div>
         {hostnames.length === 0 ? <div className="panel-empty">没有公网主机名。</div>
           : <div className="table-wrap"><table className="data-table">
             <thead><tr><th>主机名</th><th>路径</th><th>服务</th><th>域名</th><th>操作</th></tr></thead>
@@ -259,5 +252,19 @@ export function CfTunnels({ session, accountId, navigate, onExpired }: Props) {
           : <ul className="route-list">{routes.map((route) => <li key={route.id}><span className="mono">{route.hostname}</span><button className="button button-quiet" disabled={busy} onClick={() => void removeRoute(route)}>删除</button></li>)}</ul>}
       </section>
     </>}
+    {tunnelOpen && <Modal title="创建 Tunnel" onClose={() => { if (!busy) setTunnelOpen(false); }}>
+      <form className="dns-form" onSubmit={create}>
+        <label className="form-field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>创建</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setTunnelOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
+    {publicOpen && <Modal title="添加公网主机名" onClose={() => { if (!busy) setPublicOpen(false); }}>
+      <form className="dns-form" onSubmit={addPublic}>
+        <label className="form-field"><span>主机名</span><input value={publicForm.hostname} onChange={(event) => setPublicForm({ ...publicForm, hostname: event.target.value })} required maxLength={253} /></label>
+        <label className="form-field"><span>服务</span><input value={publicForm.service} onChange={(event) => setPublicForm({ ...publicForm, service: event.target.value })} required placeholder="http://localhost:8080" maxLength={255} /></label>
+        <label className="form-field"><span>路径</span><input value={publicForm.path} onChange={(event) => setPublicForm({ ...publicForm, path: event.target.value })} maxLength={255} /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>保存</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setPublicOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { InfoTip } from './InfoTip';
 
 interface ProxyConfig {
   code: 0;
@@ -83,7 +84,7 @@ export function ProxySettings({ session, onExpired }: Props) {
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="proxy-title">
-      <div className="panel-heading"><div><h2 id="proxy-title">外部请求代理</h2></div><span className="panel-meta">执行器下发</span></div>
+      <div className="panel-heading"><div><h2 id="proxy-title">外部请求代理</h2><InfoTip label="代理说明" text="支持 HTTP、HTTPS、SOCKS5；凭据加密保存，不会回显明文密码。配置会随执行器领取任务时下发，仅用于部署与优选执行器。" /></div><span className="panel-meta">执行器下发</span></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取代理设置…</div>
         : <form className="dns-form" onSubmit={save}>
           <label className="notice-channel-option"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用代理</span></label>
@@ -92,9 +93,8 @@ export function ProxySettings({ session, onExpired }: Props) {
           <label className="form-field"><span>密码（可选）</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={hasPassword ? '已保存，留空保持不变' : '与用户名同时填写'} maxLength={512} autoComplete="new-password" /></label>
           {hasPassword && <label className="notice-channel-option"><input type="checkbox" checked={clearPassword} onChange={(event) => setClearPassword(event.target.checked)} /><span>清除已保存的代理密码</span></label>}
           <label className="form-field"><span>排除列表（可选）</span><input value={noProxy} onChange={(event) => setNoProxy(event.target.value)} placeholder="localhost,127.0.0.1,*.internal" maxLength={2048} /></label>
-          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存代理设置'}</button><span>代理配置会随执行器领取任务时下发，仅用于部署与优选执行器。</span></div>
+          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存代理设置'}</button></div>
         </form>}
-      <div className="panel-footnote">支持 HTTP、HTTPS、SOCKS5；凭据加密保存，不会回显明文密码。</div>
     </section>
   </>;
 }

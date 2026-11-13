@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { InfoTip } from './InfoTip';
+import { Modal } from './Modal';
 
 interface CnameRow {
   id: number; domain: string; target: string; dnsDomainId: number; zoneName: string;
@@ -20,6 +23,7 @@ export function CertificateCname({ session, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -51,6 +55,7 @@ export function CertificateCname({ session, onExpired }: Props) {
         domain: domain.trim(), target: target.trim(), remark: remark.trim() || undefined,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setDomain(''); setTarget(''); setRemark('');
+      setFormOpen(false);
       setNotice('CNAME 代理已保存；请在域名服务商处把 challenge CNAME 手动指向该目标。');
       await load(controller.signal);
     } catch (failure) { handle(failure); }
@@ -84,18 +89,8 @@ export function CertificateCname({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="cname-title">
-      <div className="panel-heading"><div><h2 id="cname-title">CNAME 代理</h2></div><span className="panel-meta">DNS-01 · 外部域名</span></div>
-      <p className="form-hint certificate-security-note">当证书域名不在本系统管理的 Zone 内时，可在自有 Zone 中为 <code>_acme-challenge.&lt;域名&gt;</code> 创建 CNAME，指向这里配置的目标；签发时系统会把 TXT 写入目标所在的 Zone。目标必须位于已同步的 DNS Zone。</p>
-      <form className="dns-form certificate-setup-form" onSubmit={create}>
-        <label className="form-field"><span>证书域名</span><input value={domain} onChange={(event) => setDomain(event.target.value)} required maxLength={253} placeholder="customer.example" /></label>
-        <label className="form-field"><span>CNAME 目标</span><input value={target} onChange={(event) => setTarget(event.target.value)} required maxLength={253} placeholder="_acme-challenge.customer.example.proxy.example" /></label>
-        <label className="form-field"><span>备注（选填）</span><input value={remark} onChange={(event) => setRemark(event.target.value)} maxLength={200} /></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !domain.trim() || !target.trim()}>{busy ? '正在保存…' : '添加 CNAME 代理'}</button><span>证书域名不能包含通配符；通配符证书会自动匹配同名的 CNAME 代理。</span></div>
-      </form>
-    </section>
     <section className="panel" aria-labelledby="cname-list-title">
-      <div className="panel-heading"><div><h2 id="cname-list-title">代理列表</h2></div><span className="panel-meta">共 {items.length} 条</span></div>
+      <div className="panel-heading"><div><h2 id="cname-list-title">代理列表</h2><InfoTip label="CNAME 代理说明" text="当证书域名不在本系统管理的 Zone 内时，在自有 Zone 中为 _acme-challenge.<域名> 创建 CNAME 指向这里配置的目标。目标必须位于已同步的 DNS Zone。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { setDomain(''); setTarget(''); setRemark(''); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />添加代理</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取 CNAME 代理…</div>
         : items.length === 0 ? <div className="panel-empty">还没有配置 CNAME 代理。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">
@@ -112,7 +107,14 @@ export function CertificateCname({ session, onExpired }: Props) {
               </td>
             </tr>)}</tbody>
           </table></div>}
-      <div className="panel-footnote">创建证书订单时，所有域名必须写入同一个 Zone；跨多个代理 Zone 的订单会被拒绝。</div>
     </section>
+    {formOpen && <Modal title="添加 CNAME 代理" onClose={() => { if (!busy) setFormOpen(false); }}>
+      <form className="dns-form certificate-setup-form" onSubmit={create}>
+        <label className="form-field"><span>证书域名</span><input value={domain} onChange={(event) => setDomain(event.target.value)} required maxLength={253} placeholder="customer.example" /></label>
+        <label className="form-field"><span>CNAME 目标</span><input value={target} onChange={(event) => setTarget(event.target.value)} required maxLength={253} placeholder="_acme-challenge.customer.example.proxy.example" /></label>
+        <label className="form-field"><span>备注（选填）</span><input value={remark} onChange={(event) => setRemark(event.target.value)} maxLength={200} /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !domain.trim() || !target.trim()}>{busy ? '正在保存…' : '添加 CNAME 代理'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }

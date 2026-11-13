@@ -15,7 +15,7 @@ const titles: Record<Props['mode'], { title: string; scope: string; action: stri
   batchedit: { title: '批量修改解析', scope: '先选择域名，再勾选记录批量修改类型、记录值或线路', action: '批量修改' },
 };
 
-export function RecordTools({ session, mode, navigate, onExpired }: Props) {
+export function RecordTools({ mode, navigate, onExpired }: Props) {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(true);
@@ -54,7 +54,6 @@ export function RecordTools({ session, mode, navigate, onExpired }: Props) {
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     <section className="panel" aria-labelledby="record-tools-title">
       <div className="panel-heading"><div><h2 id="record-tools-title">{titles[mode].title}</h2></div><span className="panel-meta">{domains.length} 个域名</span></div>
-      <p className="form-hint">{titles[mode].scope}；当前登录用户：{session.user.username}。</p>
       <form className="dns-search" onSubmit={(event) => event.preventDefault()}>
         <input aria-label="筛选域名" type="search" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="按域名或账户筛选" maxLength={128} />
       </form>

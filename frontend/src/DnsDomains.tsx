@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { Modal } from './Modal';
 
 interface Domain {
   id: number; name: string; accountId: number; accountName: string; accountType: string;
@@ -45,6 +47,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [accountId, setAccountId] = useState('');
   const [name, setName] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
   const [batchAction, setBatchAction] = useState('category');
   const [batchCategory, setBatchCategory] = useState('');
@@ -108,6 +111,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
       const result = await send<{ code: 0; name: string }>('/api/v1/dns/domains', 'POST', { accountId: Number(accountId), name }, signal.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(`域名「${result.name}」已添加`);
       setName('');
+      setFormOpen(false);
       setRefresh((value) => value + 1);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -197,22 +201,8 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    {admin && <section className="panel" aria-labelledby="domain-form-title">
-      <div className="panel-heading"><div><h2 id="domain-form-title">添加域名</h2></div><span className="panel-meta">调用服务商接口</span></div>
-      {accounts.length === 0
-        ? <div className="panel-empty">请先在「域名账户」添加 DNS 账户。</div>
-        : <form className="dns-form" onSubmit={submit}>
-          <label className="form-field"><span>所属账户</span>
-            <select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
-              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}（{account.type}）</option>)}
-            </select>
-          </label>
-          <label className="form-field"><span>域名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="example.com" required maxLength={253} /></label>
-          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在提交…' : '添加域名'}</button></div>
-        </form>}
-    </section>}
     <section className="panel" aria-labelledby="domain-list-title">
-      <div className="panel-heading"><div><h2 id="domain-list-title">域名列表</h2></div><span className="panel-meta">共 {total} 个</span></div>
+      <div className="panel-heading"><div><h2 id="domain-list-title">域名列表</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {total} 个</span>{admin && <button className="button button-primary" type="button" disabled={loading} onClick={() => { setName(''); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />添加域名</button>}</div></div>
       <form className="dns-search" onSubmit={search}>
         <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="按域名搜索" maxLength={64} aria-label="按域名搜索" />
         <select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setPage(1); }} aria-label="按分类筛选">
@@ -284,5 +274,18 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
         <button className="button button-secondary" disabled={page * PAGE_SIZE >= total || loading} onClick={() => setPage((value) => value + 1)}>下一页</button>
       </div>
     </section>
+    {admin && formOpen && <Modal title="添加域名" onClose={() => { if (!busy) setFormOpen(false); }}>
+      {accounts.length === 0
+        ? <div className="panel-empty">请先在「域名账户」添加 DNS 账户。</div>
+        : <form className="dns-form" onSubmit={submit}>
+          <label className="form-field"><span>所属账户</span>
+            <select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}（{account.type}）</option>)}
+            </select>
+          </label>
+          <label className="form-field"><span>域名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="example.com" required maxLength={253} /></label>
+          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在提交…' : '添加域名'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+        </form>}
+    </Modal>}
   </>;
 }

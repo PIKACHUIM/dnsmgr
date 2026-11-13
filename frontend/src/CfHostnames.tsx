@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { Modal } from './Modal';
 
 interface Hostname {
   id: string; hostname: string; customOriginServer: string | null;
@@ -28,6 +30,7 @@ export function CfHostnames({ session, domainId, navigate, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -66,6 +69,7 @@ export function CfHostnames({ session, domainId, navigate, onExpired }: Props) {
         hostname: hostname.trim(), customOriginServer: origin.trim(), sslMethod, minTlsVersion: minTls,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setHostname(''); setOrigin('');
+      setFormOpen(false);
       setNotice('自定义主机名已创建');
       await load(controller.signal);
     } catch (failure) { handle(failure); }
@@ -151,7 +155,6 @@ export function CfHostnames({ session, domainId, navigate, onExpired }: Props) {
   return <>
     <div className="page-tools">
       <a className="button button-secondary" href={`/record/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/${domainId}`); }}>返回解析记录</a>
-      <span className="mono">Cloudflare for SaaS · 需套餐与 SSL and Certificates 权限</span>
     </div>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
@@ -169,21 +172,14 @@ export function CfHostnames({ session, domainId, navigate, onExpired }: Props) {
       <div className="panel-heading"><div><h2 id="dcv-title">DCV 委派</h2></div><span className="panel-meta">CNAME 目标后缀</span></div>
       <div className="dns-form">
         <label className="form-field"><span>Delegation UUID</span><input readOnly value={uuid || '未开通或权限不足'} className="mono" /></label>
-        <div className="form-actions"><span>记录名 <code>_acme-challenge.主机名</code>，目标 <code>主机名.{uuid || 'uuid'}.dcv.cloudflare.com</code></span></div>
+        <dl className="data-list">
+          <div><dt>记录名</dt><dd className="mono">_acme-challenge.主机名</dd></div>
+          <div><dt>目标</dt><dd className="mono">主机名.{uuid || 'uuid'}.dcv.cloudflare.com</dd></div>
+        </dl>
       </div>
     </section>
-    <section className="panel" aria-labelledby="hostname-form-title">
-      <div className="panel-heading"><div><h2 id="hostname-form-title">创建自定义主机名</h2></div><span className="panel-meta">创建后不能改名</span></div>
-      <form className="dns-form" onSubmit={create}>
-        <label className="form-field"><span>主机名</span><input value={hostname} onChange={(event) => setHostname(event.target.value)} required maxLength={253} placeholder="app.example.com" /></label>
-        <label className="form-field"><span>自定义源站</span><input value={origin} onChange={(event) => setOrigin(event.target.value)} maxLength={253} placeholder="可留空" /></label>
-        <label className="form-field"><span>验证方式</span><select value={sslMethod} onChange={(event) => setSslMethod(event.target.value)}><option value="txt">TXT</option><option value="http">HTTP</option></select></label>
-        <label className="form-field"><span>最低 TLS</span><select value={minTls} onChange={(event) => setMinTls(event.target.value)}>{['1.0', '1.1', '1.2', '1.3'].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>创建</button></div>
-      </form>
-    </section>
     <section className="panel" aria-labelledby="hostname-list-title">
-      <div className="panel-heading"><div><h2 id="hostname-list-title">自定义主机名</h2></div><span className="panel-meta">共 {items.length} 个</span></div>
+      <div className="panel-heading"><div><h2 id="hostname-list-title">自定义主机名</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 个</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { setHostname(''); setOrigin(''); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />创建主机名</button></div></div>
       {selected.length > 0 && <div className="dns-batch">
         <span className="mono">已选 {selected.length} 项</span>
         <button className="button button-primary" type="button" disabled={busy} onClick={() => void batchDelete()}>批量删除</button>
@@ -215,5 +211,14 @@ export function CfHostnames({ session, domainId, navigate, onExpired }: Props) {
             </tr>)}</tbody>
           </table></div>}
     </section>
+    {formOpen && <Modal title="创建自定义主机名" onClose={() => { if (!busy) setFormOpen(false); }}>
+      <form className="dns-form" onSubmit={create}>
+        <label className="form-field"><span>主机名</span><input value={hostname} onChange={(event) => setHostname(event.target.value)} required maxLength={253} placeholder="app.example.com" /></label>
+        <label className="form-field"><span>自定义源站</span><input value={origin} onChange={(event) => setOrigin(event.target.value)} maxLength={253} placeholder="可留空" /></label>
+        <label className="form-field"><span>验证方式</span><select value={sslMethod} onChange={(event) => setSslMethod(event.target.value)}><option value="txt">TXT</option><option value="http">HTTP</option></select></label>
+        <label className="form-field"><span>最低 TLS</span><select value={minTls} onChange={(event) => setMinTls(event.target.value)}>{['1.0', '1.1', '1.2', '1.3'].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>创建</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }

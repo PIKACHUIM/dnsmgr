@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, send, type Session } from './api';
+import { InfoTip } from './InfoTip';
 import { TotpSettings } from './TotpSettings';
 
 interface Props {
@@ -52,15 +53,14 @@ export function SetPassword({ session, onExpired, onLoggedOut }: Props) {
         <label className="form-field"><span>当前密码</span>
           <input type="password" autoComplete="current-password" maxLength={72} required disabled={busy} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
         </label>
-        <label className="form-field"><span>新密码</span>
-          <input type="password" autoComplete="new-password" maxLength={72} required disabled={busy} value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="set-password-help" />
-        </label>
+        <div className="form-field"><div className="form-label"><label htmlFor="new-password">新密码</label><InfoTip label="密码规则" text="新密码须为 12–72 个 UTF-8 字节；空格会按原样保留。更新后所有现有会话都会失效，需要重新登录。" /></div>
+          <input id="new-password" type="password" autoComplete="new-password" maxLength={72} required disabled={busy} value={password} onChange={(event) => setPassword(event.target.value)} />
+        </div>
         <label className="form-field"><span>确认新密码</span>
           <input type="password" autoComplete="new-password" maxLength={72} required disabled={busy} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
         </label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在更新…' : '更新密码'}</button></div>
       </form>
-      <div className="panel-footnote" id="set-password-help">新密码须为 12–72 个 UTF-8 字节；空格会按原样保留。更新后所有现有会话都会失效，需要重新登录。</div>
       {error && <div className="notice notice-error" role="alert" aria-live="assertive">{error}</div>}
     </section>
     <TotpSettings session={session} onExpired={onExpired} onLoggedOut={onLoggedOut} />

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { InfoTip } from './InfoTip';
+import { Modal } from './Modal';
 
 interface DeployAccount {
   id: number; name: string; type: 'webhook' | 'executor'; remark: string | null;
@@ -46,6 +49,7 @@ export function DeployAccounts({ session, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
   const handleFailure = useSessionError(onExpired);
 
   const handle = useCallback((failure: unknown) => {
@@ -77,6 +81,7 @@ export function DeployAccounts({ session, onExpired }: Props) {
     setName(account.name); setType(account.type); setUrl(account.url); setToken(''); setHeaders('');
     setLabel(account.label); setPath(account.path); setCommand(account.command); setRemark(account.remark ?? '');
     setError(''); setNotice('');
+    setFormOpen(true);
   }
 
   async function save(event: React.FormEvent) {
@@ -97,6 +102,7 @@ export function DeployAccounts({ session, onExpired }: Props) {
       else await send(`/api/v1/cert/deploy/accounts/${editing}`, 'PATCH', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(editing === null ? '部署账户已创建。' : '部署账户已更新。');
       reset();
+      setFormOpen(false);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -117,32 +123,8 @@ export function DeployAccounts({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="deploy-account-title">
-      <div className="panel-heading"><div><h2 id="deploy-account-title">自动部署账户</h2></div><span className="panel-meta">Webhook / 执行器</span></div>
-      <p className="form-hint certificate-security-note">Webhook 账户把完整证书链与私钥以 JSON POST 到 HTTPS 地址；执行器账户把证书交给轮询式执行器，由执行器负责落盘与重载服务。凭据使用 AES-GCM 加密，保存后不回显。</p>
-      <form className="dns-form certificate-setup-form" onSubmit={save}>
-        <label className="form-field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
-        <label className="form-field"><span>类型</span><select value={type} onChange={(event) => setType(event.target.value as 'webhook' | 'executor')} disabled={editing !== null}>
-          <option value="webhook">Webhook（推送证书）</option><option value="executor">执行器（轮询领取）</option>
-        </select></label>
-        {type === 'webhook' ? <>
-          <label className="form-field"><span>Webhook 地址</span><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} required maxLength={2000} placeholder="https://deploy.example/hook" /></label>
-          <label className="form-field"><span>Bearer Token（选填）</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} maxLength={500} autoComplete="new-password" placeholder={editing === null ? '用于 Authorization 头' : '留空保留原值'} /></label>
-          <label className="form-field"><span>附加请求头 JSON（选填）</span><input value={headers} onChange={(event) => setHeaders(event.target.value)} maxLength={2000} placeholder='{"X-Source":"dnsmgr"}' /></label>
-        </> : <>
-          <label className="form-field"><span>执行器标签（选填）</span><input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={100} placeholder="node-1" /></label>
-          <label className="form-field"><span>证书路径（选填）</span><input value={path} onChange={(event) => setPath(event.target.value)} maxLength={500} placeholder="/etc/ssl/dnsmgr" /></label>
-          <label className="form-field"><span>部署后命令（选填）</span><input value={command} onChange={(event) => setCommand(event.target.value)} maxLength={500} placeholder="systemctl reload nginx" /></label>
-        </>}
-        <label className="form-field"><span>备注（选填）</span><input value={remark} onChange={(event) => setRemark(event.target.value)} maxLength={200} /></label>
-        <div className="form-actions">
-          <button className="button button-primary" type="submit" disabled={busy || !name.trim() || (type === 'webhook' && !url.trim())}>{busy ? '正在保存…' : editing === null ? '创建部署账户' : '保存修改'}</button>
-          {editing !== null && <button className="button button-quiet" type="button" onClick={reset}>取消编辑</button>}
-        </div>
-      </form>
-    </section>
     <section className="panel" aria-labelledby="deploy-account-list-title">
-      <div className="panel-heading"><div><h2 id="deploy-account-list-title">账户列表</h2></div><span className="panel-meta">共 {items.length} 条</span></div>
+      <div className="panel-heading"><div><h2 id="deploy-account-list-title">部署账户</h2><InfoTip label="部署账户说明" text="Webhook 账户把完整证书链与私钥以 JSON POST 到 HTTPS 地址；执行器账户把证书交给轮询式执行器，由执行器负责落盘与重载服务。凭据使用 AES-GCM 加密，保存后不回显。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { reset(); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />添加账户</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取部署账户…</div>
         : items.length === 0 ? <div className="panel-empty">还没有部署账户。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">
@@ -160,6 +142,28 @@ export function DeployAccounts({ session, onExpired }: Props) {
             </tr>)}</tbody>
           </table></div>}
     </section>
+    {formOpen && <Modal title={editing === null ? '添加部署账户' : '编辑部署账户'} wide onClose={() => { if (!busy) setFormOpen(false); }}>
+      <form className="dns-form certificate-setup-form" onSubmit={save}>
+        <label className="form-field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
+        <label className="form-field"><span>类型</span><select value={type} onChange={(event) => setType(event.target.value as 'webhook' | 'executor')} disabled={editing !== null}>
+          <option value="webhook">Webhook（推送证书）</option><option value="executor">执行器（轮询领取）</option>
+        </select></label>
+        {type === 'webhook' ? <>
+          <label className="form-field"><span>Webhook 地址</span><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} required maxLength={2000} placeholder="https://deploy.example/hook" /></label>
+          <label className="form-field"><span>Bearer Token（选填）</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} maxLength={500} autoComplete="new-password" placeholder={editing === null ? '用于 Authorization 头' : '留空保留原值'} /></label>
+          <label className="form-field"><span>附加请求头 JSON（选填）</span><input value={headers} onChange={(event) => setHeaders(event.target.value)} maxLength={2000} placeholder='{"X-Source":"dnsmgr"}' /></label>
+        </> : <>
+          <label className="form-field"><span>执行器标签（选填）</span><input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={100} placeholder="node-1" /></label>
+          <label className="form-field"><span>证书路径（选填）</span><input value={path} onChange={(event) => setPath(event.target.value)} maxLength={500} placeholder="/etc/ssl/dnsmgr" /></label>
+          <label className="form-field"><span>部署后命令（选填）</span><input value={command} onChange={(event) => setCommand(event.target.value)} maxLength={500} placeholder="systemctl reload nginx" /></label>
+        </>}
+        <label className="form-field"><span>备注（选填）</span><input value={remark} onChange={(event) => setRemark(event.target.value)} maxLength={200} /></label>
+        <div className="form-actions">
+          <button className="button button-primary" type="submit" disabled={busy || !name.trim() || (type === 'webhook' && !url.trim())}>{busy ? '正在保存…' : editing === null ? '创建部署账户' : '保存修改'}</button>
+          <button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button>
+        </div>
+      </form>
+    </Modal>}
   </>;
 }
 
@@ -177,6 +181,7 @@ export function DeployTasks({ session, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [taskOpen, setTaskOpen] = useState(false);
   const handleFailure = useSessionError(onExpired);
 
   const handle = useCallback((failure: unknown) => {
@@ -233,6 +238,7 @@ export function DeployTasks({ session, onExpired }: Props) {
         name: name.trim(), accountId, certificateOrderId: orderId, target: target.trim() || undefined,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setName(''); setTarget('');
+      setTaskOpen(false);
       setNotice('部署任务已创建；证书更新后由 cron 自动部署。');
       await load(controller.signal);
     } catch (failure) { handle(failure); }
@@ -291,24 +297,8 @@ export function DeployTasks({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="deploy-task-title">
-      <div className="panel-heading"><div><h2 id="deploy-task-title">自动部署任务</h2></div><span className="panel-meta">证书订单 → 部署账户</span></div>
-      <p className="form-hint certificate-security-note">证书签发或续签后 <code>updated_at</code> 变化，cron 会按任务自动部署一次；手动“立即部署”不受证书更新时间限制。</p>
-      {accounts.length === 0 ? <div className="panel-empty">请先在“自动部署账户”创建账户。</div>
-        : <form className="dns-form certificate-setup-form" onSubmit={create}>
-          <label className="form-field"><span>任务名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
-          <label className="form-field"><span>部署账户</span><select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
-            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.type === 'webhook' ? 'Webhook' : '执行器'}</option>)}
-          </select></label>
-          <label className="form-field"><span>证书订单</span><select value={orderId} onChange={(event) => setOrderId(event.target.value)} required>
-            <option value="">选择未吊销的证书</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}
-          </select></label>
-          <label className="form-field"><span>目标标记（选填）</span><input value={target} onChange={(event) => setTarget(event.target.value)} maxLength={500} placeholder="web-1 / 站点名称" /></label>
-          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !name.trim() || !accountId || !orderId}>{busy ? '正在保存…' : '创建部署任务'}</button></div>
-        </form>}
-    </section>
     <section className="panel" aria-labelledby="deploy-task-list-title">
-      <div className="panel-heading"><div><h2 id="deploy-task-list-title">任务列表</h2></div><span className="panel-meta">共 {tasks.length} 条</span></div>
+      <div className="panel-heading"><div><h2 id="deploy-task-list-title">部署任务</h2><InfoTip label="部署任务说明" text="证书签发或续签后 updated_at 变化，cron 会按任务自动部署一次；手动“立即部署”不受证书更新时间限制。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {tasks.length} 条</span><button className="button button-primary" type="button" disabled={loading || accounts.length === 0 || orders.length === 0} onClick={() => { setError(''); setNotice(''); setTaskOpen(true); }}><Icon name="plus" />新建任务</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取部署任务…</div>
         : tasks.length === 0 ? <div className="panel-empty">还没有部署任务。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">
@@ -345,13 +335,24 @@ export function DeployTasks({ session, onExpired }: Props) {
         </table></div>}
     </section>
     <section className="panel" aria-labelledby="executor-token-title">
-      <div className="panel-heading"><div><h2 id="executor-token-title">执行器接入</h2></div><span className="panel-meta">Bearer Token</span></div>
-      <p className="form-hint certificate-security-note">执行器定期调用 <code>POST /api/v1/executor/claim</code> 领取任务，完成后调用 <code>POST /api/v1/executor/report</code> 回报结果。请求头使用 <code>Authorization: Bearer &lt;token&gt;</code>。</p>
+      <div className="panel-heading"><div><h2 id="executor-token-title">执行器接入</h2><InfoTip label="执行器接入说明" text="执行器定期调用 POST /api/v1/executor/claim 领取任务，完成后调用 POST /api/v1/executor/report 回报结果。请求头使用 Authorization: Bearer <token>。轮换后旧令牌立即失效。" /></div><span className="panel-meta">Bearer Token</span></div>
       <div className="executor-token-row">
         <input readOnly value={executorToken} aria-label="执行器令牌" className="mono" />
         <button className="button button-secondary" type="button" disabled={busy} onClick={() => void rotate()}>轮换令牌</button>
       </div>
-      <div className="panel-footnote">令牌保存在服务端加密存储中，轮换后旧令牌立即失效；请只交给可信执行器。</div>
     </section>
+    {taskOpen && <Modal title="新建部署任务" onClose={() => { if (!busy) setTaskOpen(false); }}>
+      <form className="dns-form certificate-setup-form" onSubmit={create}>
+        <label className="form-field"><span>任务名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
+        <label className="form-field"><span>部署账户</span><select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
+          {accounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.type === 'webhook' ? 'Webhook' : '执行器'}</option>)}
+        </select></label>
+        <label className="form-field"><span>证书订单</span><select value={orderId} onChange={(event) => setOrderId(event.target.value)} required>
+          <option value="">选择未吊销的证书</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}
+        </select></label>
+        <label className="form-field"><span>目标标记（选填）</span><input value={target} onChange={(event) => setTarget(event.target.value)} maxLength={500} placeholder="web-1 / 站点名称" /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !name.trim() || !accountId || !orderId}>{busy ? '正在保存…' : '创建部署任务'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setTaskOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }

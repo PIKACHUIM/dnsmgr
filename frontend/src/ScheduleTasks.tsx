@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { Modal } from './Modal';
 
 interface Task {
   id: number; domainId: number; domainName: string; recordId: string | null; recordName: string;
@@ -28,6 +30,7 @@ export function ScheduleTasks({ session, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -69,6 +72,7 @@ export function ScheduleTasks({ session, onExpired }: Props) {
         runTime: form.runTime, value: form.value || undefined, remark: form.remark || undefined,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice('定时任务已创建');
+      setFormOpen(false);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -110,33 +114,9 @@ export function ScheduleTasks({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <div className="page-tools"><button className="button button-secondary" type="button" disabled={busy} onClick={() => void runNow()}>立即执行到期任务</button><span className="mono">执行器需由外部每分钟调用 /cron</span></div>
-    <section className="panel" aria-labelledby="schedule-form-title">
-      <div className="panel-heading"><div><h2 id="schedule-form-title">新建定时切换</h2></div><span className="panel-meta">按本地时区计算</span></div>
-      <form className="dns-form" onSubmit={create}>
-        <label className="form-field"><span>域名</span><select value={form.domainId} onChange={(event) => setForm({ ...form, domainId: event.target.value })} required>
-          {domains.map((domain) => <option key={domain.id} value={domain.id}>{domain.name}</option>)}
-        </select></label>
-        <label className="form-field"><span>主机记录</span><input value={form.recordName} onChange={(event) => setForm({ ...form, recordName: event.target.value })} required placeholder="www" /></label>
-        <label className="form-field"><span>类型</span><input value={form.recordType} onChange={(event) => setForm({ ...form, recordType: event.target.value })} required /></label>
-        <label className="form-field"><span>记录编号</span><input value={form.recordId} onChange={(event) => setForm({ ...form, recordId: event.target.value })} placeholder="启用/暂停/删除时必填" /></label>
-        <label className="form-field"><span>操作</span><select value={form.switchType} onChange={(event) => setForm({ ...form, switchType: event.target.value })}>
-          {SWITCHES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-        </select></label>
-        <label className="form-field"><span>新值</span><input value={form.value} onChange={(event) => setForm({ ...form, value: event.target.value })} placeholder="修改记录值时必填" /></label>
-        <label className="form-field"><span>周期</span><select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
-          {MODES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-        </select></label>
-        {form.mode === 'once' && <label className="form-field"><span>日期</span><input type="date" value={form.runDate} onChange={(event) => setForm({ ...form, runDate: event.target.value })} required /></label>}
-        {form.mode === 'weekly' && <label className="form-field"><span>星期</span><select value={form.weekday} onChange={(event) => setForm({ ...form, weekday: event.target.value })}>{['周日', '周一', '周二', '周三', '周四', '周五', '周六'].map((label, index) => <option key={label} value={index}>{label}</option>)}</select></label>}
-        {form.mode === 'monthly' && <label className="form-field"><span>日期</span><input type="number" min={1} max={31} value={form.monthDay} onChange={(event) => setForm({ ...form, monthDay: event.target.value })} /></label>}
-        <label className="form-field"><span>时间</span><input type="time" value={form.runTime} onChange={(event) => setForm({ ...form, runTime: event.target.value })} required /></label>
-        <label className="form-field"><span>备注</span><input value={form.remark} onChange={(event) => setForm({ ...form, remark: event.target.value })} maxLength={100} /></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !form.domainId}>创建任务</button></div>
-      </form>
-    </section>
+    <div className="page-tools"><button className="button button-secondary" type="button" disabled={busy} onClick={() => void runNow()}>立即执行到期任务</button></div>
     <section className="panel" aria-labelledby="schedule-list-title">
-      <div className="panel-heading"><div><h2 id="schedule-list-title">定时任务</h2></div><span className="panel-meta">共 {tasks.length} 个</span></div>
+      <div className="panel-heading"><div><h2 id="schedule-list-title">定时任务</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {tasks.length} 个</span><button className="button button-primary" type="button" disabled={loading || domains.length === 0} onClick={() => { setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />新建任务</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取任务…</div>
         : tasks.length === 0 ? <div className="panel-empty">还没有定时任务。</div>
           : <div className="table-wrap"><table className="data-table">
@@ -156,5 +136,28 @@ export function ScheduleTasks({ session, onExpired }: Props) {
             </tr>)}</tbody>
           </table></div>}
     </section>
+    {formOpen && <Modal title="新建定时切换" wide onClose={() => { if (!busy) setFormOpen(false); }}>
+      <form className="dns-form" onSubmit={create}>
+        <label className="form-field"><span>域名</span><select value={form.domainId} onChange={(event) => setForm({ ...form, domainId: event.target.value })} required>
+          {domains.map((domain) => <option key={domain.id} value={domain.id}>{domain.name}</option>)}
+        </select></label>
+        <label className="form-field"><span>主机记录</span><input value={form.recordName} onChange={(event) => setForm({ ...form, recordName: event.target.value })} required placeholder="www" /></label>
+        <label className="form-field"><span>类型</span><input value={form.recordType} onChange={(event) => setForm({ ...form, recordType: event.target.value })} required /></label>
+        <label className="form-field"><span>记录编号</span><input value={form.recordId} onChange={(event) => setForm({ ...form, recordId: event.target.value })} placeholder="启用/暂停/删除时必填" /></label>
+        <label className="form-field"><span>操作</span><select value={form.switchType} onChange={(event) => setForm({ ...form, switchType: event.target.value })}>
+          {SWITCHES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+        </select></label>
+        <label className="form-field"><span>新值</span><input value={form.value} onChange={(event) => setForm({ ...form, value: event.target.value })} placeholder="修改记录值时必填" /></label>
+        <label className="form-field"><span>周期</span><select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
+          {MODES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+        </select></label>
+        {form.mode === 'once' && <label className="form-field"><span>日期</span><input type="date" value={form.runDate} onChange={(event) => setForm({ ...form, runDate: event.target.value })} required /></label>}
+        {form.mode === 'weekly' && <label className="form-field"><span>星期</span><select value={form.weekday} onChange={(event) => setForm({ ...form, weekday: event.target.value })}>{['周日', '周一', '周二', '周三', '周四', '周五', '周六'].map((label, index) => <option key={label} value={index}>{label}</option>)}</select></label>}
+        {form.mode === 'monthly' && <label className="form-field"><span>日期</span><input type="number" min={1} max={31} value={form.monthDay} onChange={(event) => setForm({ ...form, monthDay: event.target.value })} /></label>}
+        <label className="form-field"><span>时间</span><input type="time" value={form.runTime} onChange={(event) => setForm({ ...form, runTime: event.target.value })} required /></label>
+        <label className="form-field"><span>备注</span><input value={form.remark} onChange={(event) => setForm({ ...form, remark: event.target.value })} maxLength={100} /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !form.domainId}>创建任务</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }

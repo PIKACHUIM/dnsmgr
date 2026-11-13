@@ -6,6 +6,7 @@ export interface NavigationItem {
   scope: string;
   capability?: Capability;
   implemented?: boolean;
+  adminOnly?: boolean;
 }
 
 export interface NavigationGroup {
@@ -40,14 +41,11 @@ export const navigation: NavigationGroup[] = [
     { path: '/optimizeip/opipset', label: '优选设置', scope: 'Cloudflare IP 优选参数', capability: 'executor', implemented: true },
     { path: '/optimizeip/opiplist', label: '优选任务', scope: 'IP 优选任务与执行情况', capability: 'executor', implemented: true },
   ] },
-  { label: '系统设置', adminOnly: true, items: [
-    { path: '/system/account', label: '登录账户', scope: '图形验证码登录策略与用户、权限维护', implemented: true },
-    { path: '/system/tasks', label: '任务通知', scope: '计划任务、通知渠道与到期提醒策略', capability: 'tasks', implemented: true },
-    { path: '/system/maintenance', label: '系统维护', scope: '外部请求代理与版本更新检查', implemented: true },
-  ] },
-  { label: '审计账户', items: [
+  { label: '系统设置', items: [
+    { path: '/system/account', label: '登录账户', scope: '图形验证码登录策略与用户、权限维护', adminOnly: true, implemented: true },
+    { path: '/system/tasks', label: '任务通知', scope: '计划任务、通知渠道与到期提醒策略', capability: 'tasks', adminOnly: true, implemented: true },
+    { path: '/system/maintenance', label: '系统维护', scope: '外部请求代理与版本更新检查', adminOnly: true, implemented: true },
     { path: '/log', label: '操作日志', scope: '用户操作与变更审计', implemented: true },
-    { path: '/setpwd', label: '修改密码', scope: '当前登录用户修改自己的密码', implemented: true },
   ] },
 ];
 
@@ -66,8 +64,14 @@ export function canonicalPath(path: string): string {
 }
 
 export function resolvePage(path: string, level: number): { item: NavigationItem; group: string } {
-  const visibleGroups = navigation.filter((group) => !group.adminOnly || level === 2);
+  const visibleGroups = navigation
+    .filter((group) => !group.adminOnly || level === 2)
+    .map((group) => ({ ...group, items: group.items.filter((item) => !item.adminOnly || level === 2) }))
+    .filter((group) => group.items.length > 0);
   const visibleItems = visibleGroups.flatMap((group) => group.items);
+  if (path === '/setpwd') {
+    return { item: { path, label: '修改密码', scope: '当前登录用户修改自己的密码', implemented: true } as NavigationItem, group: '账户' };
+  }
   const exact = visibleItems.find((item) => item.path === canonicalPath(path));
   if (exact) return { item: exact, group: visibleGroups.find((group) => group.items.includes(exact))!.label };
   if (/^\/cloudflare\/hostnames\/\d+$/.test(path) && level === 2) {

@@ -170,7 +170,6 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
       <div className="auth-context-body">
         <div className="section-kicker">{t('系统接入 / ACCESS')}</div>
         <h2>{t('从安全会话开始。')}</h2>
-        <p>{t('聚合 DNS 管理系统正在迁移至新的运行平台。安装与身份验证已开放，业务功能将按模块移植。')}</p>
         <ol className="access-steps" aria-label={t('接入步骤')}>
           <li className={installing ? 'current' : 'complete'}><span>01</span><div><strong>{t('初始化系统')}</strong><small>{t('创建首个管理员账户')}</small></div><b>{t(installing ? '当前步骤' : '已初始化')}</b></li>
           <li className={!installing ? 'current' : ''}><span>02</span><div><strong>{t('验证身份')}</strong><small>{t('登录并建立安全会话')}</small></div><b>{t(!installing ? '当前步骤' : '下一步')}</b></li>
@@ -184,7 +183,6 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
       <div className="auth-form-wrap">
         <div className="auth-eyebrow"><span className="status-dot" />{t(installing ? '首次安装' : '身份验证')}</div>
         <h1 id="auth-title">{t(title)}</h1>
-        <p className="auth-description">{t(installing ? '使用部署时配置的安装令牌授权初始化。此步骤只能执行一次。' : challenge ? '请输入验证器应用中的 6 位动态口令。若验证已过期，请返回重新登录。' : '输入系统账户和图形验证码。已启用动态口令的账户会进入第二步验证。')}</p>
         {notice && <div className="notice" role="status">{notice}</div>}
         {error && <div className="notice notice-error" role="alert" tabIndex={-1} ref={errorRef}><strong>{t('操作未完成')}</strong><span>{t(error)}</span></div>}
         {captchaError && <div className="notice notice-error" role="alert">{t(captchaError)}</div>}
@@ -233,7 +231,6 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
             {challenge && <button type="button" className="button button-quiet restart-login" onClick={restartLogin}>{t('返回重新登录')}</button>}
           </fieldset>
         </form>
-        <p className="auth-footnote"><Icon name="lock" />{t('凭证仅发送至当前站点，登录后由服务端维护会话。')}</p>
       </div>
       <footer className="auth-footer"><span>{t('聚合 DNS 管理系统')}</span><span className="mono">FOUNDATION</span></footer>
     </section>

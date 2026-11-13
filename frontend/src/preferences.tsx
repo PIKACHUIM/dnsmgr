@@ -1,283 +1,73 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Icon } from './icons';
+import { Menu } from './Menu';
+import { de } from './locales/de';
+import { en } from './locales/en';
+import { es } from './locales/es';
+import { fr } from './locales/fr';
+import { it } from './locales/it';
+import { ja } from './locales/ja';
+import { ko } from './locales/ko';
+import { pt } from './locales/pt';
+import { ru } from './locales/ru';
+import { zhHant } from './locales/zh-Hant';
 
 export type Theme = 'light' | 'dark';
-export type Language = 'zh' | 'en';
+export type Language = 'zh-Hans' | 'zh-Hant' | 'en' | 'ja' | 'ko' | 'fr' | 'de' | 'it' | 'es' | 'pt' | 'ru';
+
+export interface LanguageOption {
+  id: Language;
+  /** 选项使用的语言自身名称 */
+  label: string;
+  /** 写入 html lang 的 BCP 47 标签 */
+  tag: string;
+  /** 顶栏按钮上的短标识 */
+  short: string;
+}
 
 const THEME_KEY = 'dnsmgr-theme';
 const LANGUAGE_KEY = 'dnsmgr-language';
 
-const english: Record<string, string> = {
-  /* 导航分组 */
-  '工作空间': 'Workspace',
-  '域名配置': 'DNS settings',
-  '容灾调度': 'Failover',
-  '证书管理': 'Certificates',
-  '优选管理': 'IP optimize',
-  '系统设置': 'System',
-  '审计账户': 'Account',
-  '页面状态': 'Page status',
-  /* 导航条目 */
-  '后台首页': 'Dashboard',
-  '域名管理': 'Domains',
-  '域名账户': 'DNS accounts',
-  '域名分类': 'Categories',
-  '运行概览': 'Failover overview',
-  '切换策略': 'Failover policies',
-  '定时切换': 'Schedules',
-  '证书账户': 'ACME accounts',
-  '证书订单': 'Orders',
-  '部署账户': 'Deploy targets',
-  '部署任务': 'Deploy tasks',
-  '证书代理': 'CNAME proxy',
-  '续签设置': 'Renewal',
-  '优选设置': 'IP settings',
-  '优选任务': 'IP tasks',
-  '操作日志': 'Audit log',
-  '修改密码': 'Password',
-  '自定义域': 'SaaS hostnames',
-  '隧道管理': 'Tunnels',
-  '域名别名': 'Domain alias',
-  '批量添加': 'Batch add',
-  '批量修改': 'Batch edit',
-  '记录搜索': 'Record search',
-  '智能添加': 'Smart add',
-  '服务日志': 'Provider logs',
-  '权重配置': 'Line weights',
-  '记录分组': 'Record groups',
-  '导入记录': 'Import records',
-  '解析记录': 'DNS records',
-  '未知页面': 'Unknown page',
-  /* 页面说明 */
-  '运行环境、会话与迁移状态': 'Runtime, session and migration status',
-  '域名、解析记录与平台同步': 'Domains, records and provider sync',
-  'DNS 服务商账户与访问凭证': 'DNS provider accounts and credentials',
-  '域名分类与分组管理': 'Domain categories and groups',
-  '容灾探测与切换运行情况': 'Failover probes and switch history',
-  'HTTP 探测与主备 DNS 故障切换': 'HTTP probes and DNS failover',
-  '定时 DNS 切换任务': 'Scheduled DNS switching',
-  'ACME 账户注册、Directory 与一次性 nonce': 'ACME accounts, directory and one-time nonce',
-  'ACME DNS-01 签发、手动导入与 PFX 导出': 'ACME DNS-01 issuance, manual import and PFX export',
-  '证书部署目标与访问凭证': 'Deployment targets and credentials',
-  '证书自动部署与执行记录': 'Automated certificate deployments',
-  'DNS 验证的 CNAME 代理配置': 'CNAME proxy for DNS validation',
-  '证书续签开关、天数与手动执行': 'Renewal toggle, lead time and manual run',
-  'Cloudflare IP 优选参数': 'Cloudflare IP optimization parameters',
-  'IP 优选任务与执行情况': 'IP optimization tasks and runs',
-  '计划任务与运行器设置': 'Cron jobs and runner settings',
-  '图形验证码登录策略': 'Captcha login policy',
-  '通知渠道与消息模板': 'Notification channels and templates',
-  '域名到期通知提前天数策略': 'Domain expiry notice lead time',
-  '外部请求代理配置': 'Outbound proxy settings',
-  '版本更新与兼容性检查': 'Version and compatibility checks',
-  '用户、权限与账户维护': 'Users, permissions and accounts',
-  '用户操作与变更审计': 'User action audit',
-  '当前登录用户修改自己的密码': 'Change your own password',
-  'SaaS 主机名、证书验证与 Fallback Origin': 'SaaS hostnames, certificate validation and fallback origin',
-  'Tunnel、公网主机名与 Zero Trust 路由': 'Tunnels, public hostnames and Zero Trust routes',
-  'DNSPod 域名别名与解析共用': 'DNSPod domain aliases sharing records',
-  '选择域名后按行批量添加解析记录': 'Add records line by line after choosing a domain',
-  '选择域名后批量修改记录类型、记录值与线路': 'Batch edit record type, value and line for one domain',
-  '跨域名搜索记录值并批量修改或删除': 'Search record values across domains and change or delete them',
-  '解析多域名输入并按域名批量添加记录': 'Parse multi-domain input and add records per domain',
-  '按行批量添加解析记录': 'Add records line by line',
-  '勾选记录批量修改类型、记录值与线路': 'Batch edit the selected records',
-  '读取服务商侧的解析操作日志': 'Read record operation logs from the provider',
-  '阿里云 DNS 线路权重开关与权重值': 'Aliyun line weight toggle and values',
-  '阿里云与 DNSPod 的解析记录分组': 'Aliyun and DNSPod record groups',
-  '单域名 Excel 解析记录预览与逐行导入': 'Single-domain Excel preview and row-by-row import',
-  '域名解析记录的查询与变更': 'Query and change DNS records',
-  '此路径尚未提供可用的前端功能': 'No frontend feature is available at this path yet',
-  /* 控制台框架 */
-  '控制台': 'Console',
-  '安全会话': 'Secure session',
-  '退出登录': 'Sign out',
-  '正在退出…': 'Signing out…',
-  '管理员': 'Administrator',
-  '用户': 'User',
-  '已登录': 'Signed in',
-  '跳到主要内容': 'Skip to main content',
-  '关闭导航菜单': 'Close navigation',
-  '打开导航菜单': 'Open navigation',
-  '关闭': 'Close',
-  '功能导航': 'Navigation',
-  '功能分组': 'Navigation groups',
-  '迁移进行中': 'Migration in progress',
-  '工作空间 / WORKSPACE': 'WORKSPACE',
-  '功能模块 / MODULE': 'MODULE',
-  '运行中': 'Live',
-  '待移植': 'Pending',
-  'DNS 已接入': 'DNS connected',
-  '查看当前运行环境、会话与功能迁移状态。': 'Inspect the runtime, session and migration status.',
-  '运行环境加载失败': 'Failed to load runtime',
-  '重新加载': 'Reload',
-  '退出未完成': 'Sign-out incomplete',
-  '可再次点击退出登录重试。': 'Try signing out again.',
-  '运行环境': 'Runtime',
-  '当前会话': 'Current session',
-  '功能迁移状态': 'Feature migration',
-  '来自服务端': 'From the server',
-  '不是业务统计': 'Not business statistics',
-  '运行平台': 'Platform',
-  '存储驱动': 'Storage driver',
-  '存储格式': 'Storage format',
-  '迁移阶段': 'Migration stage',
-  '环境数据不可用，请重新加载。': 'Runtime data unavailable, reload.',
-  '数据来源': 'Data source',
-  '已验证': 'Verified',
-  '用户名': 'Username',
-  '账户角色': 'Role',
-  '会话存储': 'Session store',
-  '服务端 Cookie': 'Server cookie',
-  '请求保护': 'Request protection',
-  'CSRF 令牌': 'CSRF token',
-  '仅保存在内存中': 'In memory only',
-  '不会在浏览器本地存储用户名、密码或会话令牌。': 'No username, password or session token is kept in the browser.',
-  '模块': 'Module',
-  '后端能力': 'Backend',
-  '当前前端': 'Frontend',
-  '已声明可用': 'Available',
-  '未开放': 'Not enabled',
-  '未知': 'Unknown',
-  '已上线': 'Live',
-  '读取中…': 'Loading…',
-  '正在读取运行环境…': 'Loading runtime…',
-  '正在读取…': 'Loading…',
-  '读取失败，状态未知': 'Load failed, status unknown',
-  '后端能力状态': 'Backend capability status',
-  '聚合 DNS 管理系统': 'Unified DNS manager',
-  '安装 · 认证 · 会话基础': 'Install · auth · session foundation',
-  'DNS 管理与证书订单已接入': 'DNS management and certificate orders are connected',
-  'DNS 解析、容灾切换、定时任务与证书安全存储/手动导入已接入；CA 自动申请、续签和部署仍在迁移。': 'DNS records, failover, cron jobs, certificate storage and manual import are connected. Automatic CA issuance, renewal and deployment are still migrating.',
-  '后端能力不等于页面已完成。左侧保留旧路径，仅提供对应模块的移植说明。': 'Backend capabilities do not mean the page is done. Legacy paths are kept with migration notes only.',
-  '模块状态 / NOT MIGRATED': 'MODULE STATUS',
-  '此模块尚未移植': 'This module is not migrated yet',
-  '当前路径': 'Path',
-  '功能范围': 'Scope',
-  '返回后台首页': 'Back to dashboard',
-  '不会调用旧接口或产生业务变更。': 'No legacy interface is called and nothing is changed.',
-  '已保留「{label}」的导航入口与访问路径。当前页面只说明迁移边界，不提供业务查询、配置或执行操作。': 'The navigation entry and path for "{label}" are kept. This page only documents the migration boundary; it offers no queries, settings or actions.',
-  '已声明可用，页面仍待移植': 'available, page still migrating',
-  '基础阶段未提供此功能的业务接口': 'No business API is provided at this stage',
-  'DNS 管理': 'DNS management',
-  'SSL 证书': 'SSL certificates',
-  '任务调度': 'Task scheduling',
-  '执行器': 'Executor',
-  /* 偏好设置 */
-  '切换到暗色': 'Switch to dark theme',
-  '切换到亮色': 'Switch to light theme',
-  '切换语言': 'Switch language',
-  '收起侧边栏': 'Collapse sidebar',
-  '展开侧边栏': 'Expand sidebar',
-  '登录账户': 'Login & accounts',
-  '任务通知': 'Jobs & alerts',
-  '系统维护': 'Maintenance',
-  /* 登录 / 初始化 */
-  '初始化管理系统': 'Initialize the console',
-  '验证动态口令': 'Verify one-time code',
-  '登录控制台': 'Sign in',
-  '系统信息': 'System information',
-  '系统接入 / ACCESS': 'ACCESS',
-  '从安全会话开始。': 'Start with a secure session.',
-  '聚合 DNS 管理系统正在迁移至新的运行平台。安装与身份验证已开放，业务功能将按模块移植。': 'The unified DNS manager is migrating to a new runtime. Installation and authentication are available; features land module by module.',
-  '接入步骤': 'Access steps',
-  '初始化系统': 'Initialize',
-  '创建首个管理员账户': 'Create the first administrator',
-  '当前步骤': 'Current',
-  '已初始化': 'Done',
-  '验证身份': 'Verify identity',
-  '登录并建立安全会话': 'Sign in and start a secure session',
-  '下一步': 'Next',
-  '进入控制台': 'Open console',
-  '查看真实环境与迁移状态': 'Inspect runtime and migration status',
-  '待登录': 'Requires sign-in',
-  'Cookie 会话 · CSRF 保护 · 不在本地保存凭证': 'Cookie session · CSRF protection · no credentials stored locally',
-  '首次安装': 'First-time install',
-  '身份验证': 'Authentication',
-  '使用部署时配置的安装令牌授权初始化。此步骤只能执行一次。': 'Authorize installation with the deployment SETUP_TOKEN. This runs once.',
-  '请输入验证器应用中的 6 位动态口令。若验证已过期，请返回重新登录。': 'Enter the 6-digit code from your authenticator. If it expired, start over.',
-  '输入系统账户和图形验证码。已启用动态口令的账户会进入第二步验证。': 'Enter your account and captcha. Accounts with TOTP continue to a second step.',
-  '操作未完成': 'Action not completed',
-  '动态口令': 'One-time code',
-  '6 位数字，请使用当前有效的口令。': '6 digits from the currently valid code.',
-  '安装令牌': 'Setup token',
-  '对应后端配置的 SETUP_TOKEN，至少 32 字符，仅用于首次初始化。': 'Matches the backend SETUP_TOKEN, at least 32 characters, used once.',
-  '管理员用户名': 'Admin username',
-  '3–64 位字母、数字或 _.@-，不含空格。': '3–64 letters, digits or _.@-, no spaces.',
-  '密码': 'Password',
-  '隐藏密码': 'Hide password',
-  '显示密码': 'Show password',
-  '隐藏': 'Hide',
-  '显示': 'Show',
-  '12–72 个 UTF-8 字节；中文通常占 3 字节。建议使用唯一的长密码。': '12–72 UTF-8 bytes; CJK characters usually take 3. Use a unique long password.',
-  '图形验证码': 'Captcha',
-  '登录验证码': 'Login captcha',
-  '正在加载验证码…': 'Loading captcha…',
-  '验证码不可用': 'Captcha unavailable',
-  '刷新验证码': 'Refresh',
-  '输入图中 4 位数字；每次登录尝试后验证码会刷新。': 'Enter the 4 digits shown; the challenge refreshes after each attempt.',
-  '确认密码': 'Confirm password',
-  '正在初始化…': 'Initializing…',
-  '正在验证…': 'Verifying…',
-  '初始化并创建账户': 'Initialize and create account',
-  '验证并登录': 'Verify and sign in',
-  '返回重新登录': 'Back to sign in',
-  '凭证仅发送至当前站点，登录后由服务端维护会话。': 'Credentials go only to this site; the server keeps the session.',
-  '两次输入的密码不一致，请重新确认。': 'The passwords do not match.',
-  '请输入用户名。': 'Enter a username.',
-  '用户名需为 3–64 位字母、数字或 _.@-，不能包含空格。': 'Username must be 3–64 letters, digits or _.@- without spaces.',
-  '密码需要 12–72 个 UTF-8 字节，中文等字符会占用多个字节。': 'Password must be 12–72 UTF-8 bytes; CJK characters take several bytes.',
-  '密码不能超过 72 个 UTF-8 字节。': 'Password must not exceed 72 UTF-8 bytes.',
-  '请等待验证码加载完成，或点击刷新验证码重试。': 'Wait for the captcha to load, or refresh it.',
-  '请输入图中 4 位数字验证码。': 'Enter the 4-digit captcha.',
-  '验证码加载失败，请点击“刷新验证码”重试。': 'Captcha failed to load. Refresh to retry.',
-  '本次验证请求已失效，请重新输入密码登录。': 'This verification request has expired; sign in again.',
-  /* DNS 账户 */
-  '已配置账户': 'Configured accounts',
-  '添加账户': 'Add account',
-  '添加 DNS 账户': 'Add DNS account',
-  '凭据加密保存': 'Credentials encrypted at rest',
-  '账户名称': 'Account name',
-  '例如 主账号': 'e.g. primary account',
-  '可选': 'optional',
-  '未移植': 'not migrated',
-  '取消': 'Cancel',
-  '服务商': 'Provider',
-  '备注（可选）': 'Note (optional)',
-  '验证并保存': 'Validate and save',
-  '保存前会调用服务商接口校验凭据。': 'Credentials are validated against the provider before saving.',
-  '正在读取账户…': 'Loading accounts…',
-  '还没有 DNS 账户。添加后即可同步域名。': 'No DNS accounts yet. Add one to sync domains.',
-  '名称': 'Name',
-  '域名': 'Domains',
-  '备注': 'Note',
-  '操作': 'Actions',
-  '同步域名': 'Sync domains',
-  '删除': 'Delete',
-  '个': 'total',
-  '关闭弹窗': 'Close dialog',
-  '保存': 'Save',
-  '账户信息': 'Account details',
-  /* 服务商凭据字段 */
-  '账号邮箱（仅 Global API Key 需要）': 'Account email (Global API Key only)',
-  '站点类型（intl 表示国际站）': 'Site type (intl for the international site)',
-  '地域（可选，如 ap-southeast-1）': 'Region (optional, e.g. ap-southeast-1)',
-  'AccessKey 类型（admin/user）': 'AccessKey type (admin/user)',
-  '用户 ID（管理员代管时填写）': 'User ID (for administrator-managed accounts)',
-  'DNS 集群 ID': 'DNS cluster ID',
-  '面板地址': 'Panel URL',
-  'API 地址': 'API URL',
-  'API 端口': 'API port',
-  '通信密钥': 'Communication key',
-  'API 密码': 'API password',
+/** 界面语言清单；顺序即切换菜单的显示顺序。 */
+const ZH_HANS: LanguageOption = { id: 'zh-Hans', label: '简体中文', tag: 'zh-CN', short: '简中' };
+
+export const LANGUAGES: readonly LanguageOption[] = [
+  ZH_HANS,
+  { id: 'zh-Hant', label: '繁體中文', tag: 'zh-TW', short: '繁中' },
+  { id: 'en', label: 'English', tag: 'en', short: 'EN' },
+  { id: 'ja', label: '日本語', tag: 'ja', short: 'JA' },
+  { id: 'ko', label: '한국어', tag: 'ko', short: 'KO' },
+  { id: 'fr', label: 'Français', tag: 'fr', short: 'FR' },
+  { id: 'de', label: 'Deutsch', tag: 'de', short: 'DE' },
+  { id: 'it', label: 'Italiano', tag: 'it', short: 'IT' },
+  { id: 'es', label: 'Español', tag: 'es', short: 'ES' },
+  { id: 'pt', label: 'Português', tag: 'pt', short: 'PT' },
+  { id: 'ru', label: 'Русский', tag: 'ru', short: 'RU' },
+];
+
+/** 简体中文即源码中的原始文案，其余语言查词典；缺少条目时回退到中文原文。 */
+const DICTIONARIES: Partial<Record<Language, Record<string, string>>> = {
+  'zh-Hant': zhHant,
+  en,
+  ja,
+  ko,
+  fr,
+  de,
+  it,
+  es,
+  pt,
+  ru,
 };
+
+/** 旧版本只存过 zh / en，读取时映射到新的语言标识。 */
+const LEGACY_LANGUAGES: Record<string, Language> = { zh: 'zh-Hans', en: 'en' };
 
 interface Preferences {
   theme: Theme;
   language: Language;
   t: (key: string, params?: Record<string, string | number>) => string;
   toggleTheme: () => void;
-  toggleLanguage: () => void;
+  setLanguage: (language: Language) => void;
 }
 
 const PreferencesContext = createContext<Preferences | null>(null);
@@ -292,10 +82,17 @@ function initialTheme(): Theme {
 
 function initialLanguage(): Language {
   try {
-    return localStorage.getItem(LANGUAGE_KEY) === 'en' ? 'en' : 'zh';
+    const saved = localStorage.getItem(LANGUAGE_KEY);
+    if (!saved) return 'zh-Hans';
+    if (LEGACY_LANGUAGES[saved]) return LEGACY_LANGUAGES[saved];
+    return LANGUAGES.some((item) => item.id === saved) ? (saved as Language) : 'zh-Hans';
   } catch {
-    return 'zh';
+    return 'zh-Hans';
   }
+}
+
+function languageTag(language: Language): string {
+  return LANGUAGES.find((item) => item.id === language)?.tag ?? 'zh-CN';
 }
 
 export function PreferencesProvider({ children }: { children: ReactNode }) {
@@ -309,12 +106,12 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   useEffect(() => {
-    document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
+    document.documentElement.lang = languageTag(language);
     try { localStorage.setItem(LANGUAGE_KEY, language); } catch { /* storage may be blocked */ }
   }, [language]);
 
   const t = useCallback((key: string, params?: Record<string, string | number>) => {
-    let text = language === 'en' ? english[key] ?? key : key;
+    let text = DICTIONARIES[language]?.[key] ?? key;
     if (params) for (const [name, value] of Object.entries(params)) text = text.replaceAll(`{${name}}`, String(value));
     return text;
   }, [language]);
@@ -323,7 +120,7 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     language,
     t,
     toggleTheme: () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
-    toggleLanguage: () => setLanguage((current) => (current === 'zh' ? 'en' : 'zh')),
+    setLanguage,
   }), [theme, language, t]);
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
@@ -344,10 +141,15 @@ export function ThemeToggle() {
 }
 
 export function LanguageToggle() {
-  const { language, t, toggleLanguage } = usePreferences();
-  return <button type="button" className="button button-quiet preference-button language-button" aria-label={t('切换语言')} title={t('切换语言')} onClick={toggleLanguage}>
-    <Icon name="globe" /><span>{language === 'zh' ? 'EN' : '中文'}</span>
-  </button>;
+  const { language, t, setLanguage } = usePreferences();
+  const current = LANGUAGES.find((item) => item.id === language) ?? ZH_HANS;
+  const label = t('切换语言');
+  return <Menu label={label} className="language-menu" trigger={<><Icon name="globe" /><span className="language-code">{current.short}</span></>}>
+    {(close) => LANGUAGES.map((item) => <button
+      key={item.id} type="button" role="menuitemradio" aria-checked={item.id === language} lang={item.tag}
+      className="menu-item" onClick={() => { setLanguage(item.id); close(); }}
+    >{item.label}</button>)}
+  </Menu>;
 }
 
 export function PreferenceToggles() {

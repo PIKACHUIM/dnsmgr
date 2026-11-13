@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { Modal } from './Modal';
 
 interface Category { id: number; name: string; sort: number; domainCount: number }
 
@@ -16,6 +18,7 @@ export function DnsCategories({ session, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -51,6 +54,7 @@ export function DnsCategories({ session, onExpired }: Props) {
       await send('/api/v1/dns/categories', 'POST', { name: name.trim(), sort: Number(sort) }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(`分类「${name.trim()}」已创建`);
       setName('');
+      setFormOpen(false);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -85,16 +89,8 @@ export function DnsCategories({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="category-form-title">
-      <div className="panel-heading"><div><h2 id="category-form-title">新建分类</h2></div><span className="panel-meta">用于域名分组与筛选</span></div>
-      <form className="dns-form" onSubmit={create}>
-        <label className="form-field"><span>分类名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={50} placeholder="例如：生产环境" /></label>
-        <label className="form-field"><span>排序</span><input value={sort} onChange={(event) => setSort(event.target.value)} type="number" min={-1000000} max={1000000} /></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>创建分类</button></div>
-      </form>
-    </section>
     <section className="panel" aria-labelledby="category-list-title">
-      <div className="panel-heading"><div><h2 id="category-list-title">分类列表</h2></div><span className="panel-meta">共 {categories.length} 个</span></div>
+      <div className="panel-heading"><div><h2 id="category-list-title">分类列表</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {categories.length} 个</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { setName(''); setSort('0'); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />新建分类</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取分类…</div>
         : categories.length === 0 ? <div className="panel-empty">还没有分类。</div>
           : <div className="table-wrap"><table className="data-table">
@@ -110,5 +106,12 @@ export function DnsCategories({ session, onExpired }: Props) {
             </tr>)}</tbody>
           </table></div>}
     </section>
+    {formOpen && <Modal title="新建分类" onClose={() => { if (!busy) setFormOpen(false); }}>
+      <form className="dns-form" onSubmit={create}>
+        <label className="form-field"><span>分类名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={50} placeholder="例如：生产环境" /></label>
+        <label className="form-field"><span>排序</span><input value={sort} onChange={(event) => setSort(event.target.value)} type="number" min={-1000000} max={1000000} /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>创建分类</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
   </>;
 }
