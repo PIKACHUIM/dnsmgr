@@ -32,7 +32,7 @@ declare const __APP_SHELL__: string;
 const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
 
 const pagePatterns = [
-  /^\/$/, /^\/(install|login|setpwd)$/, /^\/user$/, /^\/log$/,
+  /^\/$/, /^\/(install|login|setpwd)$/, /^\/user$/, /^\/log$/, /^\/record$/,
   /^\/account(?:\/(add|edit))?$/, /^\/domain(?:\/(add|category|expirenotice))?$/,
   /^\/record\/(\d+|batchadd|batchedit|search|smartparse)$/,
   /^\/record\/(batchadd|batchedit|log|weight|groups|alias|import)\/\d+$/,

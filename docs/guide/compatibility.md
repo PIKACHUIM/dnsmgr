@@ -30,6 +30,24 @@
 
 旧 route 中 `/domain/dnscheck` 指向的方法在旧控制器中不存在，`huoshan` 证书 PHP 实现文件不在常规注册清单中。这些均为静态基线诊断，不应被当成新实现的需求完成项。
 
+## 旧版页面功能与当前实现的差异
+
+按 `route/app.php`、`app/controller/*.php` 与 `src/routes/*.ts` 逐项对照，旧版有入口但当前没有对应能力的功能如下（均为页面/运维工具，不影响 DNS、证书、通知主链路）：
+
+| 旧版功能 | 旧入口 | 当前状态 |
+| --- | --- | --- |
+| 在线自动更新 | `POST /system/doupdate` | 只做版本与迁移检查（`POST /api/v1/system/update/check`）；Worker 无法自我替换，升级改为重新部署 |
+| 运行时缓存清理 | `GET /cleancache` | 不适用：没有 PHP runtime 缓存目录，数据在 D1 / KV |
+| 服务端皮肤切换 | `POST /changeskin` | 主题只存浏览器 `localStorage`，不再写入服务端配置 |
+| 代理连通性测试 | `POST /system/proxytest` | 未实现；代理设置只保存并下发给执行器 |
+| 逐渠道通知测试 | `/system/mailtest`、`/system/tgbottest`、`/system/webhooktest`、`/system/customwebhooktest` | 合并为 `POST /api/v1/system/notify/test`，一次发往所有已配置渠道，不能只测单个渠道 |
+| 优选数据源积分查询 | `POST /optimizeip/queryapi` | 未实现；只保存数据源与密钥 |
+| 容灾日志按天清理 | `POST /dmonitor/clean` | 未实现；每条任务的日志在写入时只保留最近 500 条（`src/schedule/failover.ts`） |
+| 外部状态探针 | `/dmtask/status`、`/optimizeip/status` | 未实现；健康检查用 `GET /health`，任务运行情况在页面查看 |
+| 旧调试页 | `GET /test` | 未迁移（旧实现为空方法） |
+
+另有几类旧端点属于页面内部 AJAX 辅助，已被新接口取代、无需单独移植：`/domain/list` 与 `/domain/data` → `GET /api/v1/dns/domains`，`/domain/updatedate` 与 `/domain/setcategory` → `POST /api/v1/dns/domains/batch` / `PATCH /api/v1/dns/domains/:id`，`/record/list` → `GET /api/v1/dns/domains/:id/records?name=`，`/record/quickinfo/:id` → `GET /api/v1/dns/domains/:id/lines`。`/domain/dnscheck` 旧版即无实现，属于死路由。
+
 ## 重跑基线与上游差异扫描
 
 在仓库根目录：

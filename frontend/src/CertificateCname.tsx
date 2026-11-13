@@ -90,7 +90,7 @@ export function CertificateCname({ session, onExpired }: Props) {
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="cname-list-title">
-      <div className="panel-heading"><div><h2 id="cname-list-title">代理列表</h2><InfoTip label="CNAME 代理说明" text="当证书域名不在本系统管理的 Zone 内时，在自有 Zone 中为 _acme-challenge.<域名> 创建 CNAME 指向这里配置的目标。目标必须位于已同步的 DNS Zone。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { setDomain(''); setTarget(''); setRemark(''); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />添加代理</button></div></div>
+      <div className="panel-heading"><div><h2 id="cname-list-title">CNAME 代理</h2><InfoTip label="CNAME 代理说明" text="当证书域名不在本系统管理的 Zone 内时，在自有 Zone 中为 _acme-challenge.<域名> 创建 CNAME 指向这里配置的目标。目标必须位于已同步的 DNS Zone。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { setDomain(''); setTarget(''); setRemark(''); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />添加代理</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取 CNAME 代理…</div>
         : items.length === 0 ? <div className="panel-empty">还没有配置 CNAME 代理。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">

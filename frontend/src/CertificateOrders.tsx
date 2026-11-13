@@ -3,6 +3,8 @@ import { ApiError, errorMessage, request, send, type Session } from './api';
 import { Icon } from './icons';
 import { InfoTip } from './InfoTip';
 import { Modal } from './Modal';
+import { CertificateCname } from './CertificateCname';
+import { CertificateSettings } from './CertificateSettings';
 
 interface CertificateOrder {
   id: number;
@@ -117,6 +119,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const [accountOpen, setAccountOpen] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [renewOpen, setRenewOpen] = useState(false);
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -332,6 +335,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
         </div>
       </article>)}</div>}
     </section>
+    {accountsOnly && <CertificateCname session={session} onExpired={onExpired} />}
     {!accountsOnly && <>
     <section className="panel" aria-labelledby="acme-issuance-title">
       <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2><InfoTip label="签发说明" text="每个订单分步推进，自动写入并清理本系统创建的 TXT challenge。CA 请求结果未知时必须先核对状态，不会自动重试。" /></div><button className="button button-primary" type="button" disabled={busy || accounts.every((account) => account.status !== 'ready')} onClick={() => { setError(''); setNotice(''); setOrderOpen(true); }}><Icon name="plus" />申请证书</button></div>
@@ -354,7 +358,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
       </div>
     </section>
     <section className="panel" aria-labelledby="certificate-orders-title">
-      <div className="panel-heading"><div><h2 id="certificate-orders-title">证书订单</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-primary" type="button" disabled={busy} onClick={() => { setFullchain(''); setPrivateKey(''); setError(''); setNotice(''); setImportOpen(true); }}><Icon name="plus" />导入证书</button></div></div>
+      <div className="panel-heading"><div><h2 id="certificate-orders-title">证书订单</h2></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-secondary" type="button" disabled={busy} onClick={() => { setError(''); setNotice(''); setRenewOpen(true); }}><Icon name="sliders" />续签设置</button><button className="button button-primary" type="button" disabled={busy} onClick={() => { setFullchain(''); setPrivateKey(''); setError(''); setNotice(''); setImportOpen(true); }}><Icon name="plus" />导入证书</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取证书订单…</div>
         : items.length === 0 ? <div className="panel-empty">还没有证书订单。可导入一份已签发的 PEM 证书和匹配私钥。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">
@@ -418,6 +422,9 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
         <label className="form-field"><span>未加密 RSA 私钥（PEM）</span><textarea value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} required maxLength={16 * 1024} autoComplete="off" spellCheck={false} aria-label="RSA 私钥 PEM" placeholder="-----BEGIN PRIVATE KEY-----" /></label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !fullchain.trim() || !privateKey.trim()}>{busy ? '正在处理…' : '验证并导入'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setImportOpen(false)}>取消</button></div>
       </form>
+    </Modal>}
+    {renewOpen && <Modal title="续签设置" onClose={() => { if (!busy) setRenewOpen(false); }}>
+      <CertificateSettings session={session} onExpired={onExpired} onSaved={() => { setRenewOpen(false); setNotice('自动续签设置已保存'); }} />
     </Modal>}
   </>;
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
 import { Icon } from './icons';
 import { Modal } from './Modal';
+import { DnsCategories } from './DnsCategories';
 import { usePreferences } from './preferences';
 
 interface ProviderField { key: string; label: string; required: boolean; secret?: boolean }
@@ -145,6 +146,7 @@ export function DnsAccounts({ session, onExpired }: Props) {
           </table></div>}
       {unported.length > 0 && <div className="panel-footnote">尚未移植的驱动：{unported.join('、')}</div>}
     </section>
+    <DnsCategories session={session} onExpired={onExpired} />
     {formOpen && <Modal title={t('添加 DNS 账户')} description={t('凭据加密保存')} onClose={() => setFormOpen(false)}>
       <form className="dns-form" onSubmit={submit}>
         <label className="form-field"><span>{t('账户名称')}</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={64} required placeholder={t('例如 主账号')} autoComplete="off" /></label>

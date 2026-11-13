@@ -3,9 +3,9 @@ import { ApiError, errorMessage, request, send, type Session } from './api';
 import { InfoTip } from './InfoTip';
 
 interface Config { enabled: boolean; days: number; notifyEnabled: boolean }
-interface Props { session: Session; onExpired: (message: string) => void }
+interface Props { session: Session; onExpired: (message: string) => void; onSaved?: () => void }
 
-export function CertificateSettings({ session, onExpired }: Props) {
+export function CertificateSettings({ session, onExpired, onSaved }: Props) {
   const [enabled, setEnabled] = useState(true);
   const [notifyEnabled, setNotifyEnabled] = useState(true);
   const [days, setDays] = useState('7');
@@ -53,6 +53,7 @@ export function CertificateSettings({ session, onExpired }: Props) {
       setNotifyEnabled(result.notifyEnabled);
       setDays(String(result.days));
       setNotice('自动续签设置已保存');
+      onSaved?.();
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
   }
@@ -73,21 +74,18 @@ export function CertificateSettings({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="certificate-renew-title">
-      <div className="panel-heading"><div><h2 id="certificate-renew-title">自动续签设置</h2><InfoTip label="续签说明" text="只处理已开启“自动续签”的证书订单。cron 每次最多推进一步 CA/DNS 操作；结果未知或失败时停止，等待人工核对。TXT 创建后至少等待 60 秒再通知 CA 验证。吊销、失败或结果未知的订单不会自动重试。" /></div><span className="panel-meta">ACME DNS-01</span></div>
-      {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取设置…</div>
-        : !loaded ? <div className="panel-empty" role="status">设置读取失败，保存操作已禁用，请刷新页面重试。</div>
-          : <form className="dns-form" onSubmit={save}>
-            <label className="form-field"><span>到期前续签天数</span>
-              <input type="number" inputMode="numeric" min={1} max={60} value={days} onChange={(event) => setDays(event.target.value)} disabled={busy} required />
-            </label>
-            <label className="certificate-confirm"><input type="checkbox" checked={enabled} disabled={busy} onChange={(event) => setEnabled(event.target.checked)} />启用证书自动续签</label>
-            <label className="certificate-confirm"><input type="checkbox" checked={notifyEnabled} disabled={busy} onChange={(event) => setNotifyEnabled(event.target.checked)} />签发、续签与续签失败时发送通知</label>
-            <div className="form-actions">
-              <button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button>
-              <button className="button button-secondary" type="button" disabled={busy} onClick={() => void runOnce()}>立即检查一次</button>
-            </div>
-          </form>}
-    </section>
+    {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取设置…</div>
+      : !loaded ? <div className="panel-empty" role="status">设置读取失败，保存操作已禁用，请刷新页面重试。</div>
+        : <form className="dns-form" onSubmit={save}>
+          <div className="form-field"><div className="form-label"><label htmlFor="renew-days">到期前续签天数</label><InfoTip label="续签说明" text="只处理已开启“自动续签”的证书订单。cron 每次最多推进一步 CA/DNS 操作；结果未知或失败时停止，等待人工核对。TXT 创建后至少等待 60 秒再通知 CA 验证。吊销、失败或结果未知的订单不会自动重试。" /></div>
+            <input id="renew-days" type="number" inputMode="numeric" min={1} max={60} value={days} onChange={(event) => setDays(event.target.value)} disabled={busy} required />
+          </div>
+          <label className="certificate-confirm"><input type="checkbox" checked={enabled} disabled={busy} onChange={(event) => setEnabled(event.target.checked)} />启用证书自动续签</label>
+          <label className="certificate-confirm"><input type="checkbox" checked={notifyEnabled} disabled={busy} onChange={(event) => setNotifyEnabled(event.target.checked)} />签发、续签与续签失败时发送通知</label>
+          <div className="form-actions">
+            <button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button>
+            <button className="button button-secondary" type="button" disabled={busy} onClick={() => void runOnce()}>立即检查一次</button>
+          </div>
+        </form>}
   </>;
 }

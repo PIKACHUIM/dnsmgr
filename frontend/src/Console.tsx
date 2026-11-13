@@ -6,10 +6,9 @@ import { Menu } from './Menu';
 import { InfoTip } from './InfoTip';
 import { navigation, canonicalPath, resolvePage, type Capability } from './navigation';
 import { DnsAccounts } from './DnsAccounts';
-import { DnsCategories } from './DnsCategories';
 import { DnsDomains } from './DnsDomains';
 import { DnsLogs } from './DnsLogs';
-import { DnsRecords } from './DnsRecords';
+import { DnsRecords, RecordExplorer } from './DnsRecords';
 import { DnsRecordImport } from './DnsRecordImport';
 import { DnsAliases } from './DnsAliases';
 import { CfHostnames } from './CfHostnames';
@@ -18,8 +17,6 @@ import { ScheduleTasks } from './ScheduleTasks';
 import { DnsFailover } from './DnsFailover';
 import { SetPassword } from './SetPassword';
 import { CertificateOrders } from './CertificateOrders';
-import { CertificateSettings } from './CertificateSettings';
-import { CertificateCname } from './CertificateCname';
 import { DeployAccounts, DeployTasks } from './CertificateDeploy';
 import { OptimizeIpTasks } from './OptimizeIp';
 import { SystemAccount, SystemMaintenance, SystemTasks } from './SystemPages';
@@ -230,7 +227,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
         </Menu></div>
       </header>
       <main id="main-content" className="main-content" tabIndex={-1}>
-        <div className="page-heading"><div><div className="section-kicker">{t(home ? '工作空间 / WORKSPACE' : '功能模块 / MODULE')}</div><div className="page-title"><h1 ref={contentTitle} tabIndex={-1}>{t(page.item.label)}</h1>{!home && <InfoTip label={t('页面说明')} text={t(page.item.scope)} />}</div></div><span className="phase-badge">{t(home ? 'DNS 已接入' : implemented ? '运行中' : '待移植')}</span></div>
+        <div className="page-heading"><div><div className="section-kicker">{t(home ? '系统概览 / OVERVIEW' : '功能模块 / MODULE')}</div><div className="page-title"><h1 ref={contentTitle} tabIndex={-1}>{t(page.item.label)}</h1>{!home && <InfoTip label={t('页面说明')} text={t(page.item.scope)} />}</div></div><span className="phase-badge">{t(home ? 'DNS 已接入' : implemented ? '运行中' : '待移植')}</span></div>
         {logoutError && <div className="notice notice-error" role="alert"><strong>{t('退出未完成')}</strong><span>{logoutError} {t('可再次点击退出登录重试。')}</span></div>}
         {loadError && <div className="notice notice-error with-action" role="alert"><div><strong>{t('运行环境加载失败')}</strong><span>{loadError}</span></div><button className="button button-secondary" onClick={() => setRetry((value) => value + 1)}>{t('重新加载')}</button></div>}
         {home ? <>
@@ -238,10 +235,9 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
             <section className="panel environment-panel" aria-labelledby="environment-title"><div className="panel-heading"><div><Icon name="server" /><h2 id="environment-title">{t('运行环境')}</h2></div><span className="panel-meta">{t('来自服务端')}</span></div>{loading ? <div className="panel-loading" role="status"><span className="spinner" />{t('正在读取运行环境…')}</div> : bootstrap ? <dl className="data-list"><div><dt>{t('运行平台')}</dt><dd className="mono">{bootstrap.runtime.platform}</dd></div><div><dt>{t('存储驱动')}</dt><dd className="mono">{bootstrap.runtime.storage.driver}</dd></div><div><dt>{t('存储格式')}</dt><dd className="mono">{bootstrap.runtime.storage.format}</dd></div><div><dt>{t('迁移阶段')}</dt><dd><span className="data-badge mono">{bootstrap.migration.stage}</span></dd></div></dl> : <div className="panel-empty">{t('环境数据不可用，请重新加载。')}</div>}<div className="panel-footnote">{t('数据来源')} <code>/api/v1/bootstrap</code></div></section>
             <section className="panel session-panel" aria-labelledby="session-title"><div className="panel-heading"><div><Icon name="lock" /><h2 id="session-title">{t('当前会话')}</h2></div><span className="data-badge">{t('已验证')}</span></div><dl className="data-list"><div><dt>{t('用户名')}</dt><dd>{session.user.username}</dd></div><div><dt>{t('账户角色')}</dt><dd>{level === 2 ? t('管理员') : t('用户')}<span className="value-detail mono">LEVEL {level}</span></dd></div><div><dt>{t('会话存储')}</dt><dd>{t('服务端 Cookie')}</dd></div><div><dt>{t('请求保护')}</dt><dd>{t('CSRF 令牌')}<span className="value-detail">{t('仅保存在内存中')}</span></dd></div></dl></section>
           </div>
-          <section className="panel capability-panel" aria-labelledby="capability-title"><div className="panel-heading"><div><Icon name="grid" /><h2 id="capability-title">{t('功能迁移状态')}</h2></div><span className="panel-meta">{t('不是业务统计')}</span></div><div className="capability-table" role="table" aria-label={t('后端能力状态')}><div className="capability-row capability-header" role="row"><span role="columnheader">{t('模块')}</span><span role="columnheader">{t('后端能力')}</span><span role="columnheader">{t('当前前端')}</span></div>{(Object.keys(capabilityNames) as Capability[]).map((key) => <div className="capability-row" role="row" key={key}><strong role="cell">{t(capabilityNames[key])}</strong><span role="cell">{loading ? t('读取中…') : bootstrap ? t(bootstrap.capabilities[key] ? '已声明可用' : '未开放') : t('未知')}</span><span role="cell"><span className="status-label"><span className="status-dot" />{t(bootstrap?.capabilities[key] ? '已上线' : '待移植')}</span></span></div>)}</div></section>
-        </> : path === '/account' && level === 2 ? <DnsAccounts session={session} onExpired={onExpired} />
-          : path === '/domain' ? <DnsDomains session={session} navigate={navigate} onExpired={onExpired} />
-            : path === '/domain/category' && level === 2 ? <DnsCategories session={session} onExpired={onExpired} />
+        </> : route === '/account' && level === 2 ? <DnsAccounts session={session} onExpired={onExpired} />
+          : route === '/domain' ? <DnsDomains session={session} navigate={navigate} onExpired={onExpired} />
+            : route === '/record' ? <RecordExplorer session={session} navigate={navigate} onExpired={onExpired} />
               : path === '/log' ? <DnsLogs session={session} onExpired={onExpired} />
                 : path === '/dmonitor/overview' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} overview />
                   : path === '/dmonitor/task' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} />
@@ -249,10 +245,8 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                     : route === '/system/account' && level === 2 ? <SystemAccount session={session} onExpired={onExpired} />
                     : route === '/system/tasks' && level === 2 ? <SystemTasks session={session} onExpired={onExpired} />
                     : route === '/system/maintenance' && level === 2 ? <SystemMaintenance session={session} onExpired={onExpired} />
-                    : path === '/cert/certaccount' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} section="accounts" />
-                    : path === '/cert/certorder' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} />
-                    : path === '/cert/certset' && level === 2 ? <CertificateSettings session={session} onExpired={onExpired} />
-                    : path === '/cert/cname' && level === 2 ? <CertificateCname session={session} onExpired={onExpired} />
+                    : route === '/cert/certaccount' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} section="accounts" />
+                    : route === '/cert/certorder' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} />
                     : path === '/cert/deployaccount' && level === 2 ? <DeployAccounts session={session} onExpired={onExpired} />
                     : path === '/cert/deploytask' && level === 2 ? <DeployTasks session={session} onExpired={onExpired} />
                     : route === '/optimizeip/opiplist' && level === 2 ? <OptimizeIpTasks session={session} onExpired={onExpired} />

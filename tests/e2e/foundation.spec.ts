@@ -77,12 +77,25 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
-  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
   await expect(page.locator('.environment-panel')).toContainText('local');
   await expect(page.locator('.environment-panel')).toContainText('d1');
   const systemGroup = page.locator('.nav-group').filter({ has: page.getByRole('heading', { name: '系统设置' }) });
   await expect(systemGroup.getByRole('link', { name: '操作日志' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '审计账户' })).toHaveCount(0);
+  const domainGroup = page.locator('.nav-group').filter({ has: page.getByRole('heading', { name: '域名管理' }) });
+  for (const label of ['系统概览', '域名账号', '域名管理', '解析管理']) {
+    await expect(domainGroup.getByRole('link', { name: label, exact: true })).toBeVisible();
+  }
+  await expect(domainGroup.getByRole('link', { name: '域名分类' })).toHaveCount(0);
+  await expect(page.locator('.nav-group').filter({ has: page.getByRole('heading', { name: '域名配置' }) })).toHaveCount(0);
+  const certGroup = page.locator('.nav-group').filter({ has: page.getByRole('heading', { name: '证书管理' }) });
+  await expect(certGroup.getByRole('link', { name: '证书账户' })).toBeVisible();
+  await expect(certGroup.getByRole('link', { name: '证书订单' })).toBeVisible();
+  await expect(certGroup.getByRole('link', { name: '证书代理' })).toHaveCount(0);
+  await expect(certGroup.getByRole('link', { name: '续签设置' })).toHaveCount(0);
+  await expect(page.getByText('功能迁移状态')).toHaveCount(0);
+  await expect(page.locator('.capability-panel')).toHaveCount(0);
   async function openPasswordPage() {
     await page.getByRole('button', { name: '账户菜单' }).click();
     await expect(page.getByRole('menuitem', { name: '退出登录' })).toBeVisible();
@@ -93,7 +106,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   const storedKeys = await page.evaluate(() => Object.keys(localStorage));
   expect(storedKeys.every((key) => key.startsWith('dnsmgr-'))).toBe(true);
   await page.reload();
-  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
   for (const width of [1440, 768, 375]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect(page.locator('.environment-panel')).toContainText('local');
@@ -124,7 +137,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('light');
   await page.getByRole('button', { name: '切换语言' }).click();
   await page.getByRole('menuitemradio', { name: 'English' }).click();
-  await expect(page.locator('.nav-group h2').first()).toHaveText('Workspace');
+  await expect(page.locator('.nav-group h2').first()).toHaveText('Domains');
   await expect(page.getByRole('link', { name: 'Orders' })).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.lang)).toBe('en');
   const languageTrigger = page.locator('.language-menu .menu-trigger');
@@ -133,11 +146,11 @@ test('initialization, login, session restore, responsive navigation and logout',
     await languageTrigger.click();
     await page.getByRole('menuitemradio', { name: label, exact: true }).click();
     expect(await page.evaluate(() => document.documentElement.lang)).toBe(tag);
-    await expect(page.locator('.nav-group h2').first()).not.toHaveText('工作空间');
+    await expect(page.locator('.nav-group h2').first()).not.toHaveText('域名管理');
   }
   await languageTrigger.click();
   await page.getByRole('menuitemradio', { name: '简体中文' }).click();
-  await expect(page.locator('.nav-group h2').first()).toHaveText('工作空间');
+  await expect(page.locator('.nav-group h2').first()).toHaveText('域名管理');
   expect(await page.evaluate(() => document.documentElement.lang)).toBe('zh-CN');
   await page.getByRole('link', { name: '证书订单' }).click();
   await expect(page.getByRole('heading', { name: 'ACME 账户' })).toBeVisible();
@@ -165,9 +178,26 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(importDialog.getByLabel('RSA 私钥 PEM')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(importDialog).toHaveCount(0);
+  await page.getByRole('button', { name: '续签设置' }).click();
+  const renewDialog = page.getByRole('dialog', { name: '续签设置' });
+  await expect(renewDialog).toBeVisible();
+  await expect(renewDialog.getByLabel('到期前续签天数')).toBeVisible();
+  await expect(renewDialog.getByRole('button', { name: '立即检查一次' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(renewDialog).toHaveCount(0);
   await page.getByRole('link', { name: '证书账户' }).click();
   await expect(page.getByRole('heading', { name: 'ACME 账户' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'CNAME 代理' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '导入已签发证书' })).toHaveCount(0);
+  await page.goto('/cert/cname');
+  await expect(page.getByRole('heading', { level: 1, name: '证书账户' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'CNAME 代理' })).toBeVisible();
+  await page.goto('/cert/certset');
+  await expect(page.getByRole('heading', { level: 1, name: '证书订单' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '续签设置' })).toBeVisible();
+  await page.goto('/domain/category');
+  await expect(page.getByRole('heading', { level: 1, name: '域名账号' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '分类列表' })).toBeVisible();
   await page.getByRole('link', { name: '证书订单' }).click();
   await page.getByRole('button', { name: '导入证书' }).click();
   await expect(page.getByRole('dialog', { name: '导入已签发证书' })).toBeVisible();
@@ -176,7 +206,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
   await page.getByRole('link', { name: '任务通知' }).click();
   await expect(page.getByRole('heading', { name: '域名到期提醒设置' })).toBeVisible();
   const noticeDays = page.getByLabel('到期提前提醒天数');
@@ -383,7 +413,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
-  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
   await openPasswordPage();
   await expect(totpPanel.getByText('动态口令已开启')).toBeVisible();
   await page.route('**/totp/close', async (route) => {
@@ -415,7 +445,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByLabel('用户名', { exact: true }).fill('browser-admin');
   await page.getByLabel('密码', { exact: true }).fill('browser-test-password-2026');
   await page.getByRole('button', { name: '登录控制台' }).click();
-  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
   await openPasswordPage();
   await expect(page.getByRole('heading', { name: '修改密码', exact: true, level: 1 })).toBeVisible();
   failNextTotpBind = true;
@@ -477,7 +507,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.getByRole('alert')).toContainText('用户名或密码错误');
   await page.getByLabel('密码', { exact: true }).fill(newPasswordValue);
   await page.getByRole('button', { name: '登录控制台' }).click();
-  await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
   await page.getByRole('link', { name: '登录账户' }).click();
   await captchaToggle.uncheck();
   await page.getByRole('button', { name: '保存登录设置' }).click();
@@ -558,6 +588,15 @@ test('record tool pages render and submit against mocked DNS APIs', async ({ pag
     code: 0, added: 1, failed: 0, errors: [], results: [{ index: 0, ok: true }],
   })));
   await page.route('**/api/v1/dns/domains/1/weights', (route) => route.fulfill(json({ code: 0, updated: 1 })));
+
+  await page.goto('/record');
+  await expect(page.getByRole('heading', { level: 1, name: '解析管理' })).toBeVisible();
+  await expect(page.getByText('请先在顶部选择域名，再管理解析记录。')).toBeVisible();
+  await expect(page.getByRole('link', { name: '返回域名列表' })).toHaveCount(0);
+  await page.getByLabel('选择域名').selectOption('1');
+  await expect(page.getByRole('heading', { name: '解析记录', level: 2 })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'www', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: '返回域名列表' })).toHaveCount(0);
 
   await page.goto('/record/batchadd/1');
   await expect(page.getByRole('heading', { level: 1, name: '批量添加' })).toBeVisible();

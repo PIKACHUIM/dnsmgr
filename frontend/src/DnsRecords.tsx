@@ -25,9 +25,10 @@ interface Props {
   domainId: number;
   navigate: (path: string) => void;
   onExpired: (message: string) => void;
+  embedded?: boolean;
 }
 
-export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
+export function DnsRecords({ session, domainId, navigate, onExpired, embedded = false }: Props) {
   const [domain, setDomain] = useState<DomainInfo | null>(null);
   const [records, setRecords] = useState<Record[]>([]);
   const [recordChecks, setRecordChecks] = useState<{ [id: string]: RecordCheck }>({});
@@ -238,7 +239,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
 
   return <>
     <div className="page-tools">
-      <a className="button button-secondary" href="/domain" onClick={(event) => { event.preventDefault(); navigate('/domain'); }}>返回域名列表</a>
+      {!embedded && <a className="button button-secondary" href="/domain" onClick={(event) => { event.preventDefault(); navigate('/domain'); }}>返回域名列表</a>}
       <a className="button button-secondary" href={`/record/batchadd/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/batchadd/${domainId}`); }}>批量添加</a>
       <a className="button button-secondary" href={`/record/batchedit/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/batchedit/${domainId}`); }}>批量修改</a>
       <a className="button button-secondary" href={`/record/log/${domainId}`} onClick={(event) => { event.preventDefault(); navigate(`/record/log/${domainId}`); }}>操作日志</a>
@@ -346,5 +347,48 @@ export function DnsRecords({ session, domainId, navigate, onExpired }: Props) {
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>批量添加</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setBatchOpen(false)}>取消</button></div>
       </form>
     </Modal>}
+  </>;
+}
+
+interface ExplorerZone { id: number; name: string; accountName: string }
+
+/** 解析管理：先选域名，再复用 DnsRecords 的增删改查。 */
+export function RecordExplorer({ session, navigate, onExpired }: Omit<Props, 'domainId' | 'embedded'>) {
+  const [zones, setZones] = useState<ExplorerZone[]>([]);
+  const [domainId, setDomainId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const handle = useCallback((failure: unknown) => {
+    if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
+    else setError(errorMessage(failure));
+  }, [onExpired]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    request<{ code: 0; items: ExplorerZone[] }>('/api/v1/dns/domains?page=1&pageSize=200', { signal: controller.signal })
+      .then((result) => { if (!controller.signal.aborted) setZones(result.items); })
+      .catch((failure) => { if (!controller.signal.aborted) handle(failure); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [handle]);
+
+  return <>
+    <div className="page-tools">
+      <label className="tool-field"><span>域名</span>
+        <select aria-label="选择域名" value={domainId} disabled={loading} onChange={(event) => setDomainId(event.target.value)}>
+          <option value="">{loading ? '正在读取域名…' : '请选择域名'}</option>
+          {zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name} · {zone.accountName}</option>)}
+        </select>
+      </label>
+      {zones.length === 0 && !loading && <span>还没有已同步的域名。</span>}
+    </div>
+    {error && <div className="notice notice-error" role="alert">{error}</div>}
+    {domainId
+      ? <DnsRecords key={domainId} session={session} domainId={Number(domainId)} navigate={navigate} onExpired={onExpired} embedded />
+      : <section className="panel" aria-labelledby="record-explorer-title">
+        <div className="panel-heading"><div><h2 id="record-explorer-title">解析记录</h2></div></div>
+        <div className="panel-empty">{loading ? '正在读取域名…' : '请先在顶部选择域名，再管理解析记录。'}</div>
+      </section>}
   </>;
 }

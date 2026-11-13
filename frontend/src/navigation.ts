@@ -16,13 +16,11 @@ export interface NavigationGroup {
 }
 
 export const navigation: NavigationGroup[] = [
-  { label: '工作空间', items: [
-    { path: '/', label: '后台首页', scope: '运行环境、会话与迁移状态', implemented: true },
+  { label: '域名管理', items: [
+    { path: '/', label: '系统概览', scope: '运行环境、会话与迁移状态', implemented: true },
+    { path: '/account', label: '域名账号', scope: 'DNS 服务商账户、凭证与域名分类', capability: 'dns', adminOnly: true, implemented: true },
     { path: '/domain', label: '域名管理', scope: '域名、解析记录与平台同步', capability: 'dns', implemented: true },
-  ] },
-  { label: '域名配置', adminOnly: true, items: [
-    { path: '/account', label: '域名账户', scope: 'DNS 服务商账户与访问凭证', capability: 'dns', implemented: true },
-    { path: '/domain/category', label: '域名分类', scope: '域名分类与分组管理', capability: 'dns', implemented: true },
+    { path: '/record', label: '解析管理', scope: '选择域名后管理解析记录', capability: 'dns', implemented: true },
   ] },
   { label: '容灾调度', adminOnly: true, items: [
     { path: '/dmonitor/overview', label: '运行概览', scope: '容灾探测与切换运行情况', capability: 'tasks', implemented: true },
@@ -35,8 +33,6 @@ export const navigation: NavigationGroup[] = [
     { path: '/cert/certorder', label: '证书订单', scope: 'ACME DNS-01 签发、手动导入与 PFX 导出', capability: 'cert', implemented: true },
     { path: '/cert/deployaccount', label: '部署账户', scope: '证书部署目标与访问凭证', capability: 'executor', implemented: true },
     { path: '/cert/deploytask', label: '部署任务', scope: '证书自动部署与执行记录', capability: 'executor', implemented: true },
-    { path: '/cert/cname', label: '证书代理', scope: 'DNS 验证的 CNAME 代理配置', capability: 'cert', implemented: true },
-    { path: '/cert/certset', label: '续签设置', scope: '证书续签开关、天数与手动执行', capability: 'cert', implemented: true },
   ] },
   { label: '系统设置', items: [
     { path: '/system/account', label: '登录账户', scope: '图形验证码登录策略与用户、权限维护', adminOnly: true, implemented: true },
@@ -52,9 +48,12 @@ const mergedPaths: Record<string, string> = {
   '/system/cronset': '/system/tasks',
   '/system/noticeset': '/system/tasks',
   '/domain/expirenotice': '/system/tasks',
+  '/domain/category': '/account',
   '/system/proxyset': '/system/maintenance',
   '/system/update': '/system/maintenance',
   '/optimizeip/opipset': '/optimizeip/opiplist',
+  '/cert/cname': '/cert/certaccount',
+  '/cert/certset': '/cert/certorder',
 };
 
 export function canonicalPath(path: string): string {
@@ -75,13 +74,13 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
   if (/^\/cloudflare\/hostnames\/\d+$/.test(path) && level === 2) {
     return {
       item: { path, label: '自定义域', scope: 'SaaS 主机名、证书验证与 Fallback Origin', capability: 'dns', implemented: true },
-      group: '域名配置',
+      group: '域名管理',
     };
   }
   if (/^\/cloudflare\/tunnels\/\d+$/.test(path) && level === 2) {
     return {
       item: { path, label: '隧道管理', scope: 'Tunnel、公网主机名与 Zero Trust 路由', capability: 'dns', implemented: true },
-      group: '域名配置',
+      group: '域名管理',
     };
   }
   if (/^\/record\/\d+\/alias$/.test(path)) {
@@ -96,7 +95,7 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
     '/record/smartparse': { label: '智能添加', scope: '解析多域名输入并按域名批量添加记录' },
   };
   if (fixedRecordPages[path]) {
-    return { item: { path, ...fixedRecordPages[path]!, capability: 'dns', implemented: true }, group: '工作空间' };
+    return { item: { path, ...fixedRecordPages[path]!, capability: 'dns', implemented: true }, group: '域名管理' };
   }
   const recordPage = /^\/record\/(batchadd|batchedit|log|weight|groups)\/\d+$/.exec(path);
   if (recordPage) {
@@ -107,7 +106,7 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
       weight: { label: '权重配置', scope: '阿里云 DNS 线路权重开关与权重值' },
       groups: { label: '记录分组', scope: '阿里云与 DNSPod 的解析记录分组' },
     };
-    return { item: { path, ...labels[recordPage[1]!]!, capability: 'dns', implemented: true }, group: '工作空间' };
+    return { item: { path, ...labels[recordPage[1]!]!, capability: 'dns', implemented: true }, group: '域名管理' };
   }
   if (/^\/record\/import\/\d+$/.test(path)) {
     const domainItem = visibleItems.find((item) => item.path === '/domain')!;
