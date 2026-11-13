@@ -7,6 +7,7 @@ import { decrypt } from '../security/crypto';
 import type { SqlDatabase } from '../storage/sql';
 import { sendConfiguredNotifications } from '../notify/settings';
 import { loadChannelSwitches, switchChannels } from '../notify/channels';
+import { tcpConnect } from '../net/tcp';
 
 interface FailoverTask extends Record<string, unknown> {
   id: number;
@@ -89,13 +90,8 @@ function publicIpv6(host: string): boolean {
   return true;
 }
 
-export function normalizeProbeUrl(value: string): string {
-  let url: URL;
-  try { url = new URL(value); } catch { throw new AppError(400, '探测地址格式无效', 'INVALID_PROBE_URL'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hostname === '') {
-    throw new AppError(400, '探测地址仅支持无凭据的 HTTP/HTTPS 公网地址', 'INVALID_PROBE_URL');
-  }
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+function normalizeProbeHost(raw: string): string {
+  const host = raw.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   const ipv4 = ipv4Parts(host);
   if (ipv4) {
     if (!publicIpv4(host)) throw new AppError(400, '探测地址不能指向私有或保留 IP', 'INVALID_PROBE_URL');
@@ -107,8 +103,35 @@ export function normalizeProbeUrl(value: string): string {
   ) {
     throw new AppError(400, '探测地址必须使用公网主机名', 'INVALID_PROBE_URL');
   }
+  return host;
+}
+
+export function normalizeProbeUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new AppError(400, '探测地址格式无效', 'INVALID_PROBE_URL'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hostname === '') {
+    throw new AppError(400, '探测地址仅支持无凭据的 HTTP/HTTPS 公网地址', 'INVALID_PROBE_URL');
+  }
+  normalizeProbeHost(url.hostname);
   url.hash = '';
   return url.toString();
+}
+
+/** 支持 http(s):// 健康检查 URL，或旧版 TCP 检测的 tcp://主机:端口 目标。 */
+export function normalizeProbeTarget(value: string): string {
+  if (!/^tcp:\/\//i.test(value)) return normalizeProbeUrl(value);
+  let url: URL;
+  try { url = new URL(value); } catch { throw new AppError(400, 'TCP 探测地址格式无效', 'INVALID_PROBE_URL'); }
+  if (url.protocol !== 'tcp:' || url.username || url.password
+    || (url.pathname !== '' && url.pathname !== '/') || url.search || url.hash) {
+    throw new AppError(400, 'TCP 探测地址应为 tcp://主机:端口', 'INVALID_PROBE_URL');
+  }
+  const host = normalizeProbeHost(url.hostname);
+  const port = Number(url.port);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new AppError(400, 'TCP 端口必须在 1–65535 之间', 'INVALID_PROBE_URL');
+  }
+  return `tcp://${host.includes(':') ? `[${host}]` : host}:${port}`;
 }
 
 export function validateFailoverValue(type: string, value: string): boolean {
@@ -153,6 +176,45 @@ export async function probeHttp(
       error: error instanceof Error && error.name === 'TimeoutError' ? '探测超时' : '探测连接失败',
     };
   }
+}
+
+export async function probeTcp(value: string, timeoutSeconds: number): Promise<ProbeResult> {
+  const normalized = normalizeProbeTarget(value);
+  const url = new URL(normalized);
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  const port = Number(url.port);
+  const started = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      tcpConnect(host, port),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('PROBE_TIMEOUT')), timeoutSeconds * 1000);
+      }),
+    ]);
+    return { ok: true, httpStatus: null, latencyMs: Math.max(0, Date.now() - started), error: null };
+  } catch (error) {
+    const timeout = error instanceof Error && error.message === 'PROBE_TIMEOUT';
+    const unsupported = error instanceof Error && error.message === '当前运行时不支持 TCP 探测';
+    return {
+      ok: false,
+      httpStatus: null,
+      latencyMs: Math.max(0, Date.now() - started),
+      error: timeout ? '探测超时' : unsupported ? '当前运行时不支持 TCP 探测' : '探测连接失败',
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function probeTarget(
+  value: string,
+  timeoutSeconds: number,
+  fetchImpl: typeof fetch,
+): Promise<ProbeResult> {
+  return value.startsWith('tcp://')
+    ? probeTcp(value, timeoutSeconds)
+    : probeHttp(value, timeoutSeconds, fetchImpl);
 }
 
 function errorText(error: unknown): string {
@@ -232,7 +294,7 @@ export async function executeFailoverDue(
     let taskFailed = false;
     try {
       const checkUrl = await decrypt(task.check_url_cipher, c.env.APP_KEY, `dns-failover/${task.domain_id}/${task.record_id}`);
-      probe = await probeHttp(checkUrl, task.timeout_seconds, c.env.BUDGET.fetch);
+      probe = await probeTarget(checkUrl, task.timeout_seconds, c.env.BUDGET.fetch);
       const shouldRecover = task.current_backup === 1 && probe.ok;
       const shouldFailover = task.current_backup === 0 && !probe.ok;
       nextCount = shouldRecover || shouldFailover ? task.consecutive_count + 1 : 0;

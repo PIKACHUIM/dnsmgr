@@ -45,7 +45,7 @@
 | 自定义 Webhook 内容格式 | `custom_webhook_content_format` | 已迁移：`GET|PUT /api/v1/system/notify` 读写 `html` / `markdown` / `text`（缺省 `text`），发送前按旧版规则把 `<b>` 转 `**`、`<br/>` 转换行并去除标签；请求头同时接受旧版每行 `Key: Value` 与 JSON 对象；GET 按请求体模板展开查询参数，模板 JSON 无效时回退 `title`/`content` |
 | Telegram 代理/反代 | `tgbot_proxy`、`tgbot_url` | 部分等价：Worker 无法使用系统代理，`tgbot_proxy=1` 不适用；自定义反代地址已迁移为 `telegramApiBase`（设置键 `tgbot_url`，`GET|PUT /api/v1/system/notify`），留空使用 `https://api.telegram.org`，保存前校验 http/https |
 | 群机器人通用 Webhook | `webhook_url`、`webhook_user` | 已迁移为独立渠道：企业微信、钉钉、飞书分别保存 URL 与 @ 目标。首次读取旧设置时按域名自动拆分（钉钉/飞书同时迁移 `webhook_user`），随后删除旧键；旧版单一入口不再保留 |
-| 容灾检测协议 | `checktype` 0/1/2（ping / TCP / HTTP） | 部分等价：当前只实现 HTTP(S) 健康检查（旧版 `checktype=2`），按状态码 2xx/3xx 判定并支持超时、失败阈值与主备切换。Serverless 运行时没有 ICMP，TCP 探测也无法跨 Cloudflare/ESA/EdgeOne 统一提供，因此 `checktype` 0/1 不迁移 |
+| 容灾检测协议 | `checktype` 0/1/2（ping / TCP / HTTP） | 部分等价：HTTP(S) 健康检查（`checktype=2`）全平台可用，按状态码 2xx/3xx 判定并支持超时、失败阈值与主备切换；TCP 端口探测（`checktype=1`）在 Cloudflare 平台通过 `cloudflare:sockets` 提供，其他运行时创建 TCP 任务返回 400 `TCP_PROBE_UNSUPPORTED`；ICMP（`checktype=0`）不可用 |
 | 邮件发送通道 | `mail_type`、SMTP / Sendcloud / 阿里云邮件推送 | 平台差异：Worker 没有原始 TCP，改用 Cloudflare Email `send_email` 绑定；收件人与已验证发件地址在 `GET|PUT /api/v1/system/notify` 配置，未绑定发信服务时拒绝启用 |
 | 证书部署时间窗 | `deploy_hour_start`、`deploy_hour_end` | 已迁移：`GET|PUT /api/v1/system/certificate-renew` 读写 0–23 时，cron 按 `schedule_tz_offset` 换算本地小时，仅窗口内执行自动部署，跨天按环绕处理（如 22–6），起止相同表示只允许该小时；管理员手动「立即检查一次」与单任务运行不受窗口限制。非法小时返回 400 `INVALID_CERT_RENEW_SETTINGS` |
 | 云厂商免费证书 | CertHelper 的 `tencent`、`aliyun`、`ucloud` | 未迁移：这些渠道依赖云厂商证书 API、账号授权与免费额度。当前统一走 ACME（Let's Encrypt、ZeroSSL、Google、LiteSSL、自定义 ACME），减少多套账号与签名模型；已有证书仍可手动导入并部署 |

@@ -19,6 +19,7 @@ await mkdir(assetOutput, { recursive: true });
 await cp(join(root, 'dist/frontend/assets'), assetOutput, { recursive: true });
 const output = join(root, outputs[platform]);
 await mkdir(dirname(output), { recursive: true });
+const externalModules = platform === 'cloudflare' ? ['cloudflare:sockets'] : [];
 const result = await build({
   absWorkingDir: root,
   entryPoints: [`src/platform/${platform}.ts`],
@@ -30,15 +31,19 @@ const result = await build({
   minify: true,
   sourcemap: false,
   metafile: true,
+  external: externalModules,
   define: { __APP_SHELL__: JSON.stringify(shell) },
 });
 for (const path of Object.keys(result.metafile.inputs)) {
   if (/executor|node:|\.php$|\.sql$/.test(path)) throw new Error(`Invalid edge dependency: ${path}`);
 }
 for (const outputMetadata of Object.values(result.metafile.outputs)) {
-  if (outputMetadata.imports.some((entry) => entry.external)) throw new Error('Platform artifact contains unresolved imports');
+  if (outputMetadata.imports.some((entry) => entry.external && !externalModules.includes(entry.path))) {
+    throw new Error('Platform artifact contains unresolved imports');
+  }
 }
 if (platform === 'esa' && (await stat(output)).size > 4 * 1024 * 1024) throw new Error('ESA bundle exceeds 4MB');
 const assets = await readdir(assetOutput);
 if (assets.some((asset) => /\.(php|sql|map|env)$/i.test(asset))) throw new Error('Private files in asset directory');
-console.log(`${platform}: ${outputs[platform]} (${(await stat(output)).size} bytes), ${assets.length} hashed assets; no external imports`);
+const externalNote = externalModules.length ? `external imports: ${externalModules.join(', ')}` : 'no external imports';
+console.log(`${platform}: ${outputs[platform]} (${(await stat(output)).size} bytes), ${assets.length} hashed assets; ${externalNote}`);

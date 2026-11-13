@@ -35,7 +35,8 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [form, setForm] = useState({
     domainId: '', recordId: '', recordType: 'A', recordName: '', mainValue: '', backupValue: '',
-    checkUrl: '', intervalSeconds: '60', timeoutSeconds: '5', failureThreshold: '3',
+    checkUrl: '', probeType: 'http', tcpHost: '', tcpPort: '443',
+    intervalSeconds: '60', timeoutSeconds: '5', failureThreshold: '3',
   });
   const [logsTask, setLogsTask] = useState<number | null>(null);
   const [logs, setLogs] = useState<Log[]>([]);
@@ -96,14 +97,17 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
     try {
+      const rawHost = form.tcpHost.trim() || form.mainValue.trim();
+      const tcpHost = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost;
+      const checkUrl = form.probeType === 'tcp' ? `tcp://${tcpHost}:${Number(form.tcpPort)}` : form.checkUrl;
       const result = await send<{ code: 0; id: number }>('/api/v1/failover/tasks', 'POST', {
         domainId: Number(form.domainId), recordId: form.recordId, recordType: form.recordType, recordName: form.recordName,
-        mainValue: form.mainValue, backupValue: form.backupValue, checkUrl: form.checkUrl,
+        mainValue: form.mainValue, backupValue: form.backupValue, checkUrl,
         intervalSeconds: Number(form.intervalSeconds), timeoutSeconds: Number(form.timeoutSeconds),
         failureThreshold: Number(form.failureThreshold),
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(`容灾策略 #${result.id} 已创建，首次探测将在下一次 /cron 运行时执行。`);
-      setForm((current) => ({ ...current, recordId: '', recordName: '', mainValue: '', backupValue: '', checkUrl: '' }));
+      setForm((current) => ({ ...current, recordId: '', recordName: '', mainValue: '', backupValue: '', checkUrl: '', tcpHost: '' }));
       setFormOpen(false);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
@@ -247,7 +251,7 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
         <tbody>{logs.map((log) => <tr key={log.id}><td>{timeOf(log.created_at)}</td><td>{EVENT_LABELS[log.event] ?? log.event}</td><td>{log.http_status ?? '—'}</td><td>{log.latency_ms ?? '—'} ms</td><td>{log.message ?? '—'}</td></tr>)}</tbody>
       </table></div>}
     </section>}
-    {formOpen && <Modal title="新建 HTTP 容灾策略" wide onClose={() => { if (!busy) setFormOpen(false); }}>
+    {formOpen && <Modal title="新建容灾策略" wide onClose={() => { if (!busy) setFormOpen(false); }}>
       <form className="dns-form" onSubmit={create}>
         <label className="form-field"><span>域名</span><select required value={form.domainId} onChange={(event) => {
           const domainId = event.target.value;
@@ -265,7 +269,13 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
         </select></div>
         <label className="form-field"><span>主线路值</span><input required value={form.mainValue} onChange={(event) => setForm({ ...form, mainValue: event.target.value })} maxLength={253} /></label>
         <label className="form-field"><span>备用线路值</span><input required value={form.backupValue} onChange={(event) => setForm({ ...form, backupValue: event.target.value })} maxLength={253} placeholder={form.recordType === 'A' ? '例如 8.8.8.8' : '输入备用地址或目标'} /></label>
-        <label className="form-field"><span>健康检查 URL</span><input required type="url" value={form.checkUrl} onChange={(event) => setForm({ ...form, checkUrl: event.target.value })} maxLength={512} placeholder="https://origin.example.com/health" /></label>
+        <label className="form-field"><span>检测方式</span><select value={form.probeType} onChange={(event) => setForm({ ...form, probeType: event.target.value })}>
+          <option value="http">HTTP(S) 健康检查</option><option value="tcp">TCP 端口</option>
+        </select></label>
+        {form.probeType === 'tcp' ? <>
+          <label className="form-field"><span>检测主机</span><input required value={form.tcpHost} onChange={(event) => setForm({ ...form, tcpHost: event.target.value })} maxLength={253} placeholder="留空时使用主线路值的 IP/域名" /></label>
+          <label className="form-field"><span>TCP 端口</span><input required type="number" min={1} max={65535} value={form.tcpPort} onChange={(event) => setForm({ ...form, tcpPort: event.target.value })} /></label>
+        </> : <label className="form-field"><span>健康检查 URL</span><input required type="url" value={form.checkUrl} onChange={(event) => setForm({ ...form, checkUrl: event.target.value })} maxLength={512} placeholder="https://origin.example.com/health" /></label>}
         <label className="form-field"><span>检测间隔（秒）</span><input required type="number" min={30} max={86400} value={form.intervalSeconds} onChange={(event) => setForm({ ...form, intervalSeconds: event.target.value })} /></label>
         <label className="form-field"><span>超时（秒）</span><input required type="number" min={1} max={30} value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })} /></label>
         <label className="form-field"><span>连续失败/恢复阈值</span><input required type="number" min={1} max={10} value={form.failureThreshold} onChange={(event) => setForm({ ...form, failureThreshold: event.target.value })} /></label>

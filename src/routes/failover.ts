@@ -7,7 +7,8 @@ import { decrypt, encrypt } from '../security/crypto';
 import { createProvider } from '../dns/registry';
 import { DnsError, type DnsDomain, type DnsRecord } from '../dns/types';
 import type { SqlDatabase } from '../storage/sql';
-import { executeFailoverDue, normalizeProbeUrl, validateFailoverValue } from '../schedule/failover';
+import { executeFailoverDue, normalizeProbeTarget, validateFailoverValue } from '../schedule/failover';
+import { tcpProbeAvailable } from '../net/tcp';
 
 interface DomainRow extends Record<string, unknown> {
   id: number;
@@ -124,7 +125,10 @@ export function failoverRoutes() {
       throw new AppError(400, '主备地址必须是对应记录类型的公网地址', 'INVALID_RECORD_VALUE');
     }
     if (recordValueEqual(recordType, mainValue, backupValue)) throw new AppError(400, '主备地址不能相同', 'INVALID_RECORD_VALUE');
-    const checkUrl = normalizeProbeUrl(text(body, 'checkUrl', 512).trim());
+    const checkUrl = normalizeProbeTarget(text(body, 'checkUrl', 512).trim());
+    if (checkUrl.startsWith('tcp://') && !tcpProbeAvailable()) {
+      throw new AppError(400, '当前运行时不支持 TCP 探测，请改用 HTTP(S) 健康检查', 'TCP_PROBE_UNSUPPORTED');
+    }
     const intervalSeconds = integer(body, 'intervalSeconds', 30, 86400);
     const timeoutSeconds = integer(body, 'timeoutSeconds', 1, 30);
     const failureThreshold = integer(body, 'failureThreshold', 1, 10);

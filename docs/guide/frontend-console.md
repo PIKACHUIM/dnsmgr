@@ -11,6 +11,7 @@
 | 站点默认皮肤 | 管理员在主题菜单点「设为站点默认」，写入 `app_settings.default_skin`；没有本地 `dnsmgr-skin` 的浏览器读取 `GET /api/v1/preferences/skin` 后应用，选择过皮肤的用户仍以本地值为准 | `ThemeMenu`、`preferences.tsx`、`Console.tsx` |
 | 分用途通知渠道 | 证书设置弹窗内按渠道选择「关闭 / 开启 / 仅失败时」，容灾概览页「通知渠道」弹窗控制切换/恢复通知；全部关闭时通知标记 `DISABLED` | `CertificateSettings.tsx`、`DnsFailover.tsx`、`src/notify/channels.ts` |
 | 证书部署时间窗 | 证书设置弹窗新增「部署时间窗」两个下拉（0–23 时），保存到 `deploy_hour_start`/`deploy_hour_end`；cron 只在该时段自动部署，手动运行不受限 | `CertificateSettings.tsx`、`src/routes/schedule.ts`、`src/deploy.ts` |
+| 容灾 TCP 探测 | 新建策略可选 HTTP(S) 健康检查或 TCP 端口；TCP 目标由主机与端口组成，留空主机时使用主线路值；Cloudflare 平台通过 `cloudflare:sockets` 连接，其他运行时由 API 返回 400 `TCP_PROBE_UNSUPPORTED` | `DnsFailover.tsx`、`src/net/tcp.ts`、`src/schedule/failover.ts`、`src/platform/cloudflare.ts` |
 | 运维工具入口 | 通知设置增加单渠道测试下拉、内容格式选择（HTML/Markdown/纯文本，请求头兼容行式写法）与 Telegram 反代地址；优选设置增加「查询积分」；容灾概览增加「清理日志」；代理设置增加「测试连通性」 | `NotifySettings.tsx`、`OptimizeIp.tsx`、`DnsFailover.tsx`、`ProxySettings.tsx` |
 
 验证：typecheck、build:frontend、`npm test`、`npm run test:e2e`、`docs:build`/`docs:verify` 均通过（见提交说明）。
@@ -395,7 +396,7 @@ export function canonicalPath(path: string): string {
 | `/cloudflare/hostnames/:id` | 创建主机名 → 创建自定义主机名 |
 | `/cloudflare/tunnels/:id` | 创建 Tunnel → 创建 Tunnel；添加主机名 → 添加公网主机名 |
 | `/schedule/stask` | 新建任务 → 新建定时切换 |
-| `/dmonitor/task` | 新建策略 → 新建 HTTP 容灾策略；通知渠道 → 容灾通知渠道；清理日志 → 清理容灾日志 |
+| `/dmonitor/task` | 新建策略 → 新建容灾策略（HTTP(S) 健康检查或 TCP 端口）；通知渠道 → 容灾通知渠道；清理日志 → 清理容灾日志 |
 | `/cert/certaccount` | 添加账户 → 创建 ACME 账户；添加代理 → 添加 CNAME 代理 |
 | `/cert/certorder` | 申请证书 → 申请新证书；导入证书 → 导入已签发证书；续签设置 → 续签设置（含通知渠道与部署时间窗） |
 | `/cert/deployaccount`、`/cert/deploytask` | 添加账户 → 添加部署账户（编辑时为「编辑部署账户」）；新建任务 → 新建部署任务 |

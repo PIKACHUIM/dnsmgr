@@ -3,7 +3,8 @@ import { createApp } from '../src/app';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { AppError } from '../src/core/errors';
 import { environment } from '../src/platform/runtime';
-import { normalizeProbeUrl, probeHttp, validateFailoverValue } from '../src/schedule/failover';
+import { normalizeProbeTarget, normalizeProbeUrl, probeHttp, probeTcp, validateFailoverValue } from '../src/schedule/failover';
+import { setTcpConnect } from '../src/net/tcp';
 import { createTestDatabase } from './helpers/sqlite';
 
 const credentials = { username: 'admin', password: 'test-password-2026!' };
@@ -29,6 +30,27 @@ describe('failover input validation and HTTP probe', () => {
     const result = await probeHttp('https://health.example.com/', 2, transport);
     expect(result).toMatchObject({ ok: true, httpStatus: 302 });
     expect(transport).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ redirect: 'manual' }));
+  });
+
+  it('normalizes TCP targets and probes them through the platform adapter', async () => {
+    expect(normalizeProbeTarget('tcp://health.example.com:443')).toBe('tcp://health.example.com:443');
+    expect(normalizeProbeTarget('tcp://[2606:4700:4700::1111]:53')).toBe('tcp://[2606:4700:4700::1111]:53');
+    for (const value of [
+      'tcp://127.0.0.1:80', 'tcp://health.example.com', 'tcp://health.example.com:0',
+      'tcp://health.example.com:70000', 'tcp://health.example.com:443/path',
+      'tcp://user:pass@health.example.com:443',
+    ]) expect(() => normalizeProbeTarget(value)).toThrow();
+
+    const seen: [string, number][] = [];
+    setTcpConnect(async (host, port) => { seen.push([host, port]); });
+    expect(await probeTcp('tcp://health.example.com:443', 2)).toMatchObject({ ok: true, httpStatus: null });
+    expect(seen).toEqual([['health.example.com', 443]]);
+
+    setTcpConnect(async () => { throw new Error('connection refused'); });
+    expect(await probeTcp('tcp://health.example.com:443', 2)).toMatchObject({ ok: false, error: '探测连接失败' });
+
+    setTcpConnect(null);
+    expect(await probeTcp('tcp://health.example.com:443', 2)).toMatchObject({ ok: false, error: '当前运行时不支持 TCP 探测' });
   });
 });
 
@@ -94,7 +116,7 @@ describe('failover API', () => {
     domainId = domains.items[0]!.id;
   });
 
-  afterEach(() => { testDb.close(); });
+  afterEach(() => { testDb.close(); setTcpConnect(null); });
 
   function request(path: string, init: RequestInit = {}) {
     return app.request(`https://panel.example${path}`, init, environment(bindings, 'local'));
@@ -149,6 +171,27 @@ describe('failover API', () => {
     expect(logs.total).toBe(4);
     expect(logs.items.map((item) => item.event)).toEqual(['recover_main', 'healthy', 'switch_backup', 'unhealthy']);
     expect(calls.filter((call) => call.method === 'PATCH').map((call) => JSON.parse(call.body).content)).toEqual(['8.8.8.8', '1.1.1.1']);
+  });
+
+  it('creates TCP policies only with socket support and records probe results without HTTP status', async () => {
+    const unsupported = await post('/api/v1/failover/tasks', newTask({ checkUrl: 'tcp://health.example.com:443' }));
+    expect(unsupported.status).toBe(400);
+    expect((await unsupported.json()).reason).toBe('TCP_PROBE_UNSUPPORTED');
+
+    const connected: [string, number][] = [];
+    setTcpConnect(async (host, port) => { connected.push([host, port]); });
+    const created = await post('/api/v1/failover/tasks', newTask({
+      checkUrl: 'tcp://health.example.com:443', failureThreshold: 1,
+    }));
+    expect(created.status, await created.clone().text()).toBe(200);
+    const task = await created.json() as { id: number };
+    const run = await post(`/api/v1/failover/tasks/${task.id}/run`, {});
+    expect(await run.json()).toMatchObject({ checked: 1, switched: 0, failed: 0 });
+    expect(connected).toEqual([['health.example.com', 443]]);
+    const logs = await (await request(
+      `/api/v1/failover/tasks/${task.id}/logs?page=1&pageSize=10`, { headers: { cookie } },
+    )).json() as { items: { event: string; http_status: number | null }[] };
+    expect(logs.items[0]).toMatchObject({ event: 'healthy', http_status: null });
   });
 
   it('prevents duplicate policies for a DNS record and rejects invalid backup values', async () => {
