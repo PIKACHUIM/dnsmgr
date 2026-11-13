@@ -601,7 +601,7 @@ export function dnsRoutes() {
     const row = rows[0];
     if (!row) throw new AppError(404, '域名不存在或无权访问', 'DOMAIN_NOT_FOUND');
     if (c.env.RUNTIME.platform === 'esa' && LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS.has(row.owner_type)) {
-      throw new AppError(501, '当前 ESA 请求预算无法读取此服务商的完整解析线路详情', 'LEGACY_DETAIL_BUDGET_UNSUPPORTED');
+      throw new AppError(501, 'ESA 单请求 4 次 fetch 上限无法读取 GoEdge 完整线路，请在支持更多子请求的平台或服务商面板查看', 'LEGACY_DETAIL_BUDGET_UNSUPPORTED');
     }
 
     const owner: AccountRow = {
