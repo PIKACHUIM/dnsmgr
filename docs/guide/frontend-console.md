@@ -4,6 +4,24 @@
 
 > 对应交付：提交 `39d235a`，Worker 版本 `70b07d39-34a1-42a4-8541-eeb489a90624`（2026-11-13）。
 
+## 本次交付摘要
+
+这一轮前端改动来自五条明确需求：补齐元素边距并统一位置、把「添加账户」这类表单改成弹窗、侧边栏菜单统一四个汉字、亮暗主题切换、中英语言切换。落到代码上包括：
+
+| 需求 | 实现 | 主要文件 |
+| --- | --- | --- |
+| 统一边距 | 新增 `--panel-gutter` 栅格变量，面板内边距 / 标题通栏 / 页脚通栏统一，相邻面板补 24px 间距，表格与表单不再贴边 | `styles.css` |
+| 表单弹窗化 | 新增 `Modal`，DNS 账户的新增、用户新增/编辑/域名权限改为弹窗 | `Modal.tsx`、`DnsAccounts.tsx`、`Users.tsx` |
+| 四字导航 | 全部菜单项与分组名改为四个汉字，动态页标题同步 | `navigation.ts` |
+| 亮暗主题 | `PreferencesProvider` + `data-theme` + 暗色 token 覆盖，选择持久化 | `preferences.tsx`、`styles.css`、`main.tsx` |
+| 中英切换 | 中文原文即词条 key，外壳 / 登录 / 首页 / DNS 账户页完成英文化 | `preferences.tsx`、`Console.tsx`、`Auth.tsx` |
+
+同时补充了图标（`sun` / `moon` / `globe` / `plus`），并同步更新了 e2e 断言（导航标签、`localStorage` 键前缀、主题/语言切换、账户弹窗的打开与 Esc 关闭）。
+
+交付验证（在本仓库执行）：`npm run typecheck` 通过；`npm test` 23 个文件 330 条通过；`npm run test:e2e` 2 条通过；`npm run build:cloudflare` 成功并部署。线上 `/health` 返回 `{"code":0,"service":"dnsmgr-serverless","stage":"foundation"}`，`assets/index-MeBz4m5M.css` 已确认包含 `--panel-gutter`、`.modal-backdrop` 与 `:root[data-theme=dark]`。本轮只验证了 Cloudflare 构建，EdgeOne 与 ESA 产物未重新构建。
+
+涉及的是纯前端资源与导航文案，没有新增 D1 迁移，回滚只需 `git revert 39d235a` 后重新部署，或直接回退 Worker 版本；数据库无需处理。
+
 ## 1. 构建与运行
 
 ```bash
