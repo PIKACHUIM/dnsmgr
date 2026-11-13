@@ -5,10 +5,17 @@ import { InfoTip } from './InfoTip';
 interface Config { enabled: boolean; days: number; notifyEnabled: boolean }
 interface Props { session: Session; onExpired: (message: string) => void; onSaved?: () => void }
 
+const CHANNELS = [
+  ['webhook', '自定义 Webhook'], ['wxpusher', 'WxPusher'], ['telegram', 'Telegram'], ['wecom', '企业微信'],
+  ['dingtalk', '钉钉'], ['feishu', '飞书'], ['mail', '邮件'], ['qqbot', 'QQ 机器人'],
+] as const;
+type ChannelMode = '0' | '1' | '2';
+
 export function CertificateSettings({ session, onExpired, onSaved }: Props) {
   const [enabled, setEnabled] = useState(true);
   const [notifyEnabled, setNotifyEnabled] = useState(true);
   const [days, setDays] = useState('7');
+  const [channels, setChannels] = useState<Record<string, ChannelMode>>({});
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -23,11 +30,15 @@ export function CertificateSettings({ session, onExpired, onSaved }: Props) {
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     try {
-      const result = await request<{ code: 0 } & Config>('/api/v1/system/certificate-renew', { signal });
+      const [result, notice] = await Promise.all([
+        request<{ code: 0 } & Config>('/api/v1/system/certificate-renew', { signal }),
+        request<{ code: 0; channels: Record<string, ChannelMode> }>('/api/v1/system/cert-notice', { signal }),
+      ]);
       if (!signal.aborted) {
         setEnabled(result.enabled);
         setNotifyEnabled(result.notifyEnabled);
         setDays(String(result.days));
+        setChannels(notice.channels);
         setLoaded(true);
       }
     } catch (failure) { if (!signal.aborted) handle(failure); }
@@ -49,9 +60,13 @@ export function CertificateSettings({ session, onExpired, onSaved }: Props) {
       const result = await send<{ code: 0 } & Config>('/api/v1/system/certificate-renew', 'PUT', {
         enabled, days: Number(days), notifyEnabled,
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      const updated = await send<{ code: 0; channels: Record<string, ChannelMode> }>('/api/v1/system/cert-notice', 'PUT', {
+        channels,
+      }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setEnabled(result.enabled);
       setNotifyEnabled(result.notifyEnabled);
       setDays(String(result.days));
+      setChannels(updated.channels);
       setNotice('自动续签设置已保存');
       onSaved?.();
     } catch (failure) { handle(failure); }
@@ -82,6 +97,20 @@ export function CertificateSettings({ session, onExpired, onSaved }: Props) {
           </div>
           <label className="certificate-confirm"><input type="checkbox" checked={enabled} disabled={busy} onChange={(event) => setEnabled(event.target.checked)} />启用证书自动续签</label>
           <label className="certificate-confirm"><input type="checkbox" checked={notifyEnabled} disabled={busy} onChange={(event) => setNotifyEnabled(event.target.checked)} />签发、续签与续签失败时发送通知</label>
+          <fieldset className="form-field" style={{ gridColumn: '1 / -1' }}>
+            <legend>证书通知渠道</legend>
+            <div className="dns-search">
+              {CHANNELS.map(([id, label]) => <label key={id} className="notice-channel-option">
+                <span>{label}</span>
+                <select value={channels[id] ?? '1'} disabled={busy} aria-label={`${label} 通知方式`}
+                  onChange={(event) => setChannels({ ...channels, [id]: event.target.value as ChannelMode })}>
+                  <option value="0">关闭</option>
+                  <option value="1">开启</option>
+                  <option value="2">仅失败时</option>
+                </select>
+              </label>)}
+            </div>
+          </fieldset>
           <div className="form-actions">
             <button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button>
             <button className="button button-secondary" type="button" disabled={busy} onClick={() => void runOnce()}>立即检查一次</button>

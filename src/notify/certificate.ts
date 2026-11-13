@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import type { AppEnv, Bindings } from '../core/types';
 import type { SqlDatabase, SqlStatement } from '../storage/sql';
 import { nowSeconds } from '../security/auth';
+import { allowedChannels, loadChannelModes } from './channels';
 import { sendConfiguredNotifications } from './settings';
 
 export const CERT_NOTIFY_ENABLED = 'cert_notify_enabled';
@@ -64,18 +65,20 @@ export async function deliverQueuedNotifications(
     return { delivered: 0, failed: 0, pending: 0 };
   }
   const certEnabled = await certificateNotifyEnabled(db);
+  const certChannels = allowedChannels(await loadChannelModes(db), true);
   const context = notificationContext(env, db);
   let delivered = 0;
   let failed = 0;
   let pending = 0;
   for (const row of rows) {
-    if (row.topic === 'certificate' && !certEnabled) {
+    const certTopic = row.topic === 'certificate' || row.topic === 'deploy';
+    if (certTopic && (!certEnabled || certChannels.size === 0)) {
       await db.execute('UPDATE notification_outbox SET sent_at=?,last_error=? WHERE id=?', [nowSeconds(), 'DISABLED', row.id]);
       continue;
     }
     let deliveries: Awaited<ReturnType<typeof sendConfiguredNotifications>>;
     try {
-      deliveries = await sendConfiguredNotifications(context, row.title, row.content);
+      deliveries = await sendConfiguredNotifications(context, row.title, row.content, certTopic ? certChannels : undefined);
     } catch {
       deliveries = [];
     }

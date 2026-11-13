@@ -178,6 +178,38 @@ describe('legacy tool parity endpoints', () => {
     expect(missing.status).toBe(400);
   });
 
+  it('stores per-purpose notification channel settings and drops disabled certificate notices', async () => {
+    const defaults = await request('/api/v1/system/cert-notice', { headers: { cookie } });
+    expect(defaults.status).toBe(200);
+    expect((await defaults.json()).channels).toEqual({
+      webhook: '1', wxpusher: '1', telegram: '1', wecom: '1', dingtalk: '1', feishu: '1', mail: '1', qqbot: '1',
+    });
+
+    const updated = await put('/api/v1/system/cert-notice', { channels: { telegram: '2', mail: '0' } });
+    expect(updated.status, await updated.clone().text()).toBe(200);
+    const channels = (await updated.json()).channels as Record<string, string>;
+    expect(channels.telegram).toBe('2');
+    expect(channels.mail).toBe('0');
+    expect(channels.webhook).toBe('1');
+
+    const failoverDefaults = await request('/api/v1/system/failover-notice', { headers: { cookie } });
+    expect((await failoverDefaults.json()).channels).toMatchObject({ webhook: true, telegram: true });
+    const failover = await put('/api/v1/system/failover-notice', { channels: { telegram: false, mail: '0' } });
+    expect((await failover.json()).channels).toMatchObject({ telegram: false, mail: false, webhook: true });
+
+    await put('/api/v1/system/cert-notice', {
+      channels: { webhook: '0', wxpusher: '0', telegram: '0', wecom: '0', dingtalk: '0', feishu: '0', mail: '0', qqbot: '0' },
+    });
+    await testDb.db.execute("INSERT INTO notification_outbox (topic,title,content,created_at) VALUES ('certificate','x','y',1)");
+    const flush = await post('/api/v1/system/notify/flush', {});
+    expect(flush.status, await flush.clone().text()).toBe(200);
+    const row = await testDb.db.query<{ sent_at: number | null; last_error: string | null }>(
+      'SELECT sent_at,last_error FROM notification_outbox WHERE id=1',
+    );
+    expect(row[0]!.last_error).toBe('DISABLED');
+    expect(row[0]!.sent_at).not.toBeNull();
+  });
+
   it('stores the instance default skin for browsers without a local choice', async () => {
     const initial = await request('/api/v1/preferences/skin');
     expect(initial.status).toBe(200);

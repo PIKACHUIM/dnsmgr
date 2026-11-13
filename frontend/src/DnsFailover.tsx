@@ -20,6 +20,11 @@ const EVENT_LABELS: Record<string, string> = {
   recover_main: '恢复主线路', dns_update_failed: 'DNS 更新失败', runtime_error: '运行错误',
 };
 
+const NOTICE_CHANNELS = [
+  ['webhook', '自定义 Webhook'], ['wxpusher', 'WxPusher'], ['telegram', 'Telegram'], ['wecom', '企业微信'],
+  ['dingtalk', '钉钉'], ['feishu', '飞书'], ['mail', '邮件'], ['qqbot', 'QQ 机器人'],
+] as const;
+
 function timeOf(seconds: number | null): string {
   return seconds && seconds > 0 ? new Date(seconds * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
 }
@@ -39,6 +44,8 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
   const [formOpen, setFormOpen] = useState(false);
   const [cleanOpen, setCleanOpen] = useState(false);
   const [cleanDays, setCleanDays] = useState('30');
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [noticeChannels, setNoticeChannels] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const selectedDomainId = useRef('');
@@ -125,6 +132,32 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
     finally { setBusy(false); }
   }
 
+  async function openNotice() {
+    setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      const result = await request<{ code: 0; channels: Record<string, boolean> }>('/api/v1/system/failover-notice', { signal: controller.signal });
+      setNoticeChannels(result.channels);
+      setNoticeOpen(true);
+    } catch (failure) { handle(failure); }
+  }
+
+  async function saveNotice(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await send<{ code: 0; channels: Record<string, boolean> }>(
+        '/api/v1/system/failover-notice', 'PUT', { channels: noticeChannels },
+        new AbortController().signal, { 'X-CSRF-Token': session.csrfToken },
+      );
+      setNoticeChannels(result.channels);
+      setNoticeOpen(false);
+      setNotice('容灾通知渠道已保存');
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
   async function clean(event: React.FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -179,6 +212,7 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
     </div>}
     {overview && <div className="page-tools">
       <button className="button button-secondary" type="button" disabled={busy || loading} onClick={() => void refresh()}>刷新</button>
+      <button className="button button-secondary" type="button" disabled={busy} onClick={() => void openNotice()}>通知渠道</button>
       <button className="button button-secondary" type="button" disabled={busy} onClick={() => { setError(''); setNotice(''); setCleanOpen(true); }}>清理日志</button>
       <button className="button button-primary" type="button" onClick={() => navigate('/dmonitor/task')}>管理切换策略</button>
     </div>}
@@ -243,6 +277,19 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
         <label className="form-field"><span>保留天数</span><input type="number" min={0} max={3650} value={cleanDays} onChange={(event) => setCleanDays(event.target.value)} required /></label>
         <p className="panel-footnote">早于保留天数的运行日志会被删除；填 0 表示清空全部历史日志。策略本身不会被删除。</p>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在清理…' : '开始清理'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setCleanOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
+    {noticeOpen && <Modal title="容灾通知渠道" onClose={() => { if (!busy) setNoticeOpen(false); }}>
+      <form className="dns-form" onSubmit={saveNotice}>
+        <p className="panel-footnote">容灾切换与恢复通知会发送到勾选的渠道；全部关闭时不发送通知。</p>
+        <div className="dns-search">
+          {NOTICE_CHANNELS.map(([id, label]) => <label key={id} className="notice-channel-option">
+            <input type="checkbox" checked={noticeChannels[id] ?? true} disabled={busy}
+              onChange={(event) => setNoticeChannels({ ...noticeChannels, [id]: event.target.checked })} />
+            <span>{label}</span>
+          </label>)}
+        </div>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setNoticeOpen(false)}>取消</button></div>
       </form>
     </Modal>}
   </>;

@@ -12,6 +12,10 @@ import {
 } from '../notify/settings';
 import { qqBotValidationSignature, sendQqBotMessage, verifyQqBotSignature } from '../notify/qqbot';
 import { deliverQueuedNotifications } from '../notify/certificate';
+import {
+  CERT_NOTICE_CHANNELS, FAILOVER_NOTICE_CHANNELS, loadChannelModes, loadChannelSwitches,
+  normalizeChannelModes, normalizeChannelSwitches,
+} from '../notify/channels';
 
 function normalizeTelegramBotToken(value: string): string {
   if (!/^\d{5,15}:[A-Za-z0-9_-]{20,128}$/.test(value)) {
@@ -181,6 +185,52 @@ export function notifyRoutes() {
       channel: requested || 'all',
       channels: deliveries.map(({ channel, status }) => ({ channel, status })),
     });
+  });
+
+  routes.get('/api/v1/system/cert-notice', requireSession, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    return c.json({ code: 0, channels: await loadChannelModes(c.get('db')) });
+  });
+
+  routes.put('/api/v1/system/cert-notice', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    const channels = normalizeChannelModes(body.channels);
+    await c.get('db').execute(
+      'INSERT INTO app_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
+      [CERT_NOTICE_CHANNELS, JSON.stringify(channels), nowSeconds()],
+    );
+    await c.get('db').execute(
+      'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
+      [c.get('principal').user.id, 'notify.cert-channels', 'system',
+        NOTIFICATION_CHANNELS.filter((channel) => channels[channel] !== '0').join(',') || 'none', nowSeconds()],
+    );
+    return c.json({ code: 0, channels });
+  });
+
+  routes.get('/api/v1/system/failover-notice', requireSession, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    return c.json({ code: 0, channels: await loadChannelSwitches(c.get('db')) });
+  });
+
+  routes.put('/api/v1/system/failover-notice', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    const channels = normalizeChannelSwitches(body.channels);
+    await c.get('db').execute(
+      'INSERT INTO app_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
+      [FAILOVER_NOTICE_CHANNELS, JSON.stringify(channels), nowSeconds()],
+    );
+    await c.get('db').execute(
+      'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
+      [c.get('principal').user.id, 'notify.failover-channels', 'system',
+        NOTIFICATION_CHANNELS.filter((channel) => channels[channel]).join(',') || 'none', nowSeconds()],
+    );
+    return c.json({ code: 0, channels });
   });
 
   routes.post('/api/v1/system/notify/flush', requireSession, requireCsrf, async (c) => {

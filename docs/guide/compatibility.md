@@ -41,6 +41,7 @@
 | 服务端皮肤切换 | `POST /changeskin` | 已迁移为「站点默认皮肤」：管理员在主题菜单选「设为站点默认」，写入 `app_settings.default_skin`（`PUT /api/v1/system/skin`，审计 `system.skin`）；没有本地选择的浏览器读取 `GET /api/v1/preferences/skin` 后应用。个人切换仍存 `localStorage`（等价旧版非管理员 cookie） |
 | 代理连通性测试 | `POST /system/proxytest` | 部分等价：`POST /api/v1/system/proxy/test` 校验代理地址格式并探测代理端口是否应答（HTTP/HTTPS）。Worker 运行时无法用代理发起出站请求，因此不验证出口 IP 与代理账号；SOCKS5 只校验配置，返回 `reachable: null` |
 | 逐渠道通知测试 | `/system/mailtest`、`/system/tgbottest`、`/system/webhooktest`、`/system/customwebhooktest` | `POST /api/v1/system/notify/test` 支持 `channel`（`webhook`/`wxpusher`/`telegram`/`wecom`/`dingtalk`/`feishu`/`mail`/`qqbot`）单渠道发送；省略时发往全部已配置渠道。未配置的渠道返回 400 `NOTIFICATION_NOT_CONFIGURED`，未知渠道返回 400 `INVALID_NOTIFICATION_CHANNEL` |
+| 分用途通知渠道开关 | `cert_notice_*`、`notice_*`、`expire_notice_*` | 已迁移：证书与部署通知用 `GET|PUT /api/v1/system/cert-notice`（`0` 关闭 / `1` 开启 / `2` 仅失败时），容灾切换通知用 `GET|PUT /api/v1/system/failover-notice`（开关两态），到期提醒沿用 `expire_notice_channels`；设置入口分别在证书设置弹窗与容灾概览页「通知渠道」。所有渠道关闭时，证书通知直接标记 `DISABLED`，不无限重试 |
 | 优选数据源积分查询 | `POST /optimizeip/queryapi` | 已迁移为 `POST /api/v1/optimize/credit`（管理员 + CSRF，审计 `optimize.credit`）：wetest.vip 与 hostmonit 返回剩余次数；xingpingcn.top 无密钥免费源返回 400 `OPTIMIZE_CREDIT_NOT_APPLICABLE`。优选设置弹窗提供「查询积分」按钮 |
 | 容灾日志按天清理 | `POST /dmonitor/clean` | 已迁移为 `POST /api/v1/failover/logs/clean`（`days` 0–3650，审计 `failover.clean`），容灾概览页「清理日志」弹窗；写入时仍保留每任务最近 500 条 |
 | 外部状态探针 | `/dmtask/status`、`/optimizeip/status` | 已迁移，返回纯文本 `ok`/`error`：容灾按启用任务的 `last_check_at` 与 `2×间隔+60s` 判定，优选按启用任务的 `last_run_at` 与 3600 秒判定 |
