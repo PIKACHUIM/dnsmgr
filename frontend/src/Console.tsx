@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { ApiError, errorMessage, request, type Bootstrap, type Session } from './api';
 import { Brand, Icon } from './icons';
 import { LanguageToggle, ThemeToggle, usePreferences } from './preferences';
-import { navigation, resolvePage, type Capability } from './navigation';
+import { navigation, canonicalPath, resolvePage, type Capability } from './navigation';
 import { DnsAccounts } from './DnsAccounts';
 import { DnsCategories } from './DnsCategories';
 import { DnsDomains } from './DnsDomains';
@@ -13,10 +13,6 @@ import { DnsAliases } from './DnsAliases';
 import { CfHostnames } from './CfHostnames';
 import { CfTunnels } from './CfTunnels';
 import { ScheduleTasks } from './ScheduleTasks';
-import { CronSettings } from './CronSettings';
-import { NotifySettings } from './NotifySettings';
-import { ExpirationNoticeSettings } from './ExpirationNoticeSettings';
-import { LoginCaptchaSettings } from './LoginCaptchaSettings';
 import { DnsFailover } from './DnsFailover';
 import { SetPassword } from './SetPassword';
 import { CertificateOrders } from './CertificateOrders';
@@ -24,9 +20,7 @@ import { CertificateSettings } from './CertificateSettings';
 import { CertificateCname } from './CertificateCname';
 import { DeployAccounts, DeployTasks } from './CertificateDeploy';
 import { OptimizeIpSettings, OptimizeIpTasks } from './OptimizeIp';
-import { Users } from './Users';
-import { ProxySettings } from './ProxySettings';
-import { SystemUpdate } from './SystemUpdate';
+import { SystemAccount, SystemMaintenance, SystemTasks } from './SystemPages';
 import { RecordTools } from './RecordTools';
 import { RecordBatchAdd } from './RecordBatchAdd';
 import { RecordBatchEdit } from './RecordBatchEdit';
@@ -46,6 +40,16 @@ interface ConsoleProps {
 
 const capabilityNames: Record<Capability, string> = { dns: 'DNS 管理', cert: 'SSL 证书', tasks: '任务调度', executor: '执行器' };
 
+const SIDEBAR_KEY = 'dnsmgr-sidebar';
+
+function initialCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) === 'collapsed';
+  } catch {
+    return false;
+  }
+}
+
 export function Console({ session, path, navigate, onExpired, onLoggedOut }: ConsoleProps) {
   const { t } = usePreferences();
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
@@ -55,6 +59,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   const [loggingOut, setLoggingOut] = useState(false);
   const [retry, setRetry] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
   const navRef = useRef<HTMLElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -65,6 +70,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   const level = session.user.level;
   const groups = navigation.filter((group) => !group.adminOnly || level === 2);
   const page = resolvePage(path, level);
+  const route = canonicalPath(path);
   const home = path === '/';
   const recordMatch = /^\/record\/(\d+)$/.exec(path);
   const batchAddMatch = /^\/record\/batchadd\/(\d+)$/.exec(path);
@@ -133,6 +139,12 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   }, []);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_KEY, collapsed ? 'collapsed' : 'expanded');
+    } catch { /* storage may be blocked */ }
+  }, [collapsed]);
+
+  useEffect(() => {
     if (!mobileOpen) return;
     closeButton.current?.focus();
     const originalOverflow = document.body.style.overflow;
@@ -186,10 +198,10 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
     }
   }
 
-  return <div className={`console-layout ${mobileOpen ? 'navigation-open' : ''}`}>
+  return <div className={`console-layout ${mobileOpen ? 'navigation-open' : ''} ${collapsed ? 'sidebar-collapsed' : ''}`}>
     <a className="skip-link" href="#main-content" inert={mobileOpen}>{t('跳到主要内容')}</a>
     {mobileOpen && <button className="navigation-backdrop" aria-label={t('关闭导航菜单')} tabIndex={-1} onClick={closeNavigation} />}
-    <aside id="workspace-navigation" className="sidebar" ref={navRef} role={mobileOpen ? 'dialog' : undefined} aria-modal={mobileOpen ? true : undefined} aria-label={t('功能导航')}>
+    <aside id="workspace-navigation" className="sidebar" ref={navRef} role={mobileOpen ? 'dialog' : undefined} aria-modal={mobileOpen ? true : undefined} aria-label={t('功能导航')} inert={!mobileOpen && collapsed}>
       <div className="sidebar-brand"><Brand compact /><button ref={closeButton} className="icon-button sidebar-close" aria-label={t('关闭导航菜单')} onClick={closeNavigation}><Icon name="close" /></button></div>
       <div className="workspace-label"><span className="status-dot" />{t('迁移进行中')}<span className="mono">W4</span></div>
       <nav aria-label={t('功能分组')} className="sidebar-nav">
@@ -202,7 +214,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
     </aside>
     <div className="workspace" inert={mobileOpen}>
       <header className="topbar">
-        <div className="topbar-location"><button ref={menuButton} className="icon-button menu-button" aria-label={t('打开导航菜单')} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={() => setMobileOpen(true)}><Icon name="menu" /></button><span>{t('控制台')}</span><span className="breadcrumb-divider">/</span><strong>{t(page.group)}</strong></div>
+        <div className="topbar-location"><button ref={menuButton} className="icon-button menu-button" aria-label={t('打开导航菜单')} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={() => setMobileOpen(true)}><Icon name="menu" /></button><button className="icon-button sidebar-toggle" aria-label={t(collapsed ? '展开侧边栏' : '收起侧边栏')} title={t(collapsed ? '展开侧边栏' : '收起侧边栏')} aria-expanded={!collapsed} aria-controls="workspace-navigation" onClick={() => setCollapsed((value) => !value)}><Icon name={collapsed ? 'panel-expand' : 'panel'} /></button><span>{t('控制台')}</span><span className="breadcrumb-divider">/</span><strong>{t(page.group)}</strong></div>
         <div className="topbar-actions"><span className="session-label"><Icon name="shield" />{t('安全会话')}</span><ThemeToggle /><LanguageToggle /><button className="button button-quiet logout-button" disabled={loggingOut} onClick={logout}><Icon name="logout" />{loggingOut ? t('正在退出…') : t('退出登录')}</button></div>
       </header>
       <main id="main-content" className="main-content" tabIndex={-1}>
@@ -223,10 +235,9 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                 : path === '/dmonitor/overview' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} overview />
                   : path === '/dmonitor/task' && level === 2 ? <DnsFailover session={session} navigate={navigate} onExpired={onExpired} />
                     : path === '/schedule/stask' && level === 2 ? <ScheduleTasks session={session} onExpired={onExpired} />
-                    : path === '/system/loginset' && level === 2 ? <LoginCaptchaSettings session={session} onExpired={onExpired} />
-                    : path === '/system/cronset' && level === 2 ? <CronSettings session={session} onExpired={onExpired} />
-                  : path === '/system/noticeset' && level === 2 ? <NotifySettings session={session} onExpired={onExpired} />
-                      : path === '/domain/expirenotice' && level === 2 ? <ExpirationNoticeSettings session={session} onExpired={onExpired} />
+                    : route === '/system/account' && level === 2 ? <SystemAccount session={session} onExpired={onExpired} />
+                    : route === '/system/tasks' && level === 2 ? <SystemTasks session={session} onExpired={onExpired} />
+                    : route === '/system/maintenance' && level === 2 ? <SystemMaintenance session={session} onExpired={onExpired} />
                     : path === '/cert/certaccount' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} section="accounts" />
                     : path === '/cert/certorder' && level === 2 ? <CertificateOrders session={session} onExpired={onExpired} />
                     : path === '/cert/certset' && level === 2 ? <CertificateSettings session={session} onExpired={onExpired} />
@@ -235,9 +246,6 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                     : path === '/cert/deploytask' && level === 2 ? <DeployTasks session={session} onExpired={onExpired} />
                     : path === '/optimizeip/opipset' && level === 2 ? <OptimizeIpSettings session={session} onExpired={onExpired} />
                     : path === '/optimizeip/opiplist' && level === 2 ? <OptimizeIpTasks session={session} onExpired={onExpired} />
-                    : path === '/system/proxyset' && level === 2 ? <ProxySettings session={session} onExpired={onExpired} />
-                    : path === '/system/update' && level === 2 ? <SystemUpdate session={session} onExpired={onExpired} />
-                    : path === '/user' && level === 2 ? <Users session={session} onExpired={onExpired} />
                     : path === '/setpwd' ? <SetPassword session={session} onExpired={onExpired} onLoggedOut={onLoggedOut} />
                     : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
                   : tunnelMatch && level === 2 ? <CfTunnels session={session} accountId={Number(tunnelMatch[1])} navigate={navigate} onExpired={onExpired} />

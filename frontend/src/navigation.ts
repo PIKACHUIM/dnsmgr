@@ -41,13 +41,9 @@ export const navigation: NavigationGroup[] = [
     { path: '/optimizeip/opiplist', label: '优选任务', scope: 'IP 优选任务与执行情况', capability: 'executor', implemented: true },
   ] },
   { label: '系统设置', adminOnly: true, items: [
-    { path: '/system/cronset', label: '计划任务', scope: '计划任务与运行器设置', capability: 'tasks', implemented: true },
-    { path: '/system/loginset', label: '登录设置', scope: '图形验证码登录策略', implemented: true },
-    { path: '/system/noticeset', label: '通知设置', scope: '通知渠道与消息模板', implemented: true },
-    { path: '/domain/expirenotice', label: '到期提醒', scope: '域名到期通知提前天数策略', implemented: true },
-    { path: '/system/proxyset', label: '代理设置', scope: '外部请求代理配置', implemented: true },
-    { path: '/system/update', label: '在线更新', scope: '版本更新与兼容性检查', implemented: true },
-    { path: '/user', label: '用户管理', scope: '用户、权限与账户维护', implemented: true },
+    { path: '/system/account', label: '登录账户', scope: '图形验证码登录策略与用户、权限维护', implemented: true },
+    { path: '/system/tasks', label: '任务通知', scope: '计划任务、通知渠道与到期提醒策略', capability: 'tasks', implemented: true },
+    { path: '/system/maintenance', label: '系统维护', scope: '外部请求代理与版本更新检查', implemented: true },
   ] },
   { label: '审计账户', items: [
     { path: '/log', label: '操作日志', scope: '用户操作与变更审计', implemented: true },
@@ -55,10 +51,24 @@ export const navigation: NavigationGroup[] = [
   ] },
 ];
 
+const mergedPaths: Record<string, string> = {
+  '/system/loginset': '/system/account',
+  '/user': '/system/account',
+  '/system/cronset': '/system/tasks',
+  '/system/noticeset': '/system/tasks',
+  '/domain/expirenotice': '/system/tasks',
+  '/system/proxyset': '/system/maintenance',
+  '/system/update': '/system/maintenance',
+};
+
+export function canonicalPath(path: string): string {
+  return mergedPaths[path] ?? path;
+}
+
 export function resolvePage(path: string, level: number): { item: NavigationItem; group: string } {
   const visibleGroups = navigation.filter((group) => !group.adminOnly || level === 2);
   const visibleItems = visibleGroups.flatMap((group) => group.items);
-  const exact = visibleItems.find((item) => item.path === path);
+  const exact = visibleItems.find((item) => item.path === canonicalPath(path));
   if (exact) return { item: exact, group: visibleGroups.find((group) => group.items.includes(exact))!.label };
   if (/^\/cloudflare\/hostnames\/\d+$/.test(path) && level === 2) {
     return {

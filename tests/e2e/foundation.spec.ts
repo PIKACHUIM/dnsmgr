@@ -100,6 +100,15 @@ test('initialization, login, session restore, responsive navigation and logout',
     }
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '收起侧边栏' }).click();
+  await expect(page.locator('.sidebar')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.querySelector('.workspace')!).marginLeft)).toBe('0px');
+  await page.reload();
+  await expect(page.getByRole('button', { name: '展开侧边栏' })).toBeVisible();
+  await expect(page.locator('.sidebar')).toBeHidden();
+  await page.getByRole('button', { name: '展开侧边栏' }).click();
+  await expect(page.locator('.sidebar')).toBeVisible();
+  await expect(page.getByRole('button', { name: '收起侧边栏' })).toBeVisible();
   await page.getByRole('button', { name: '切换到暗色' }).click();
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
   await page.screenshot({ path: testInfo.outputPath('console-dark-1440.png'), fullPage: true, animations: 'disabled' });
@@ -136,10 +145,11 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '到期提醒' }).click();
+  await page.getByRole('link', { name: '任务通知' }).click();
   await expect(page.getByRole('heading', { name: '域名到期提醒设置' })).toBeVisible();
   const noticeDays = page.getByLabel('到期提前提醒天数');
-  const telegramNotice = page.getByLabel('Telegram');
+  const expiryPanel = page.locator('section[aria-labelledby="expiration-notice-title"]');
+  const telegramNotice = expiryPanel.getByLabel('Telegram', { exact: true });
   await expect(noticeDays).toHaveValue('');
   await expect(telegramNotice).toBeChecked();
   await noticeDays.fill('14,7');
@@ -158,8 +168,8 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(telegramNotice).not.toBeChecked();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload();
-  await expect(page.getByLabel('Telegram')).not.toBeChecked();
-  await page.getByRole('link', { name: '登录设置' }).click();
+  await expect(telegramNotice).not.toBeChecked();
+  await page.getByRole('link', { name: '登录账户' }).click();
   await expect(page.getByRole('heading', { name: '登录安全设置' })).toBeVisible();
   const captchaToggle = page.getByLabel('启用图形验证码');
   await expect(captchaToggle).not.toBeChecked();
@@ -423,7 +433,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.getByLabel('密码', { exact: true }).fill(newPasswordValue);
   await page.getByRole('button', { name: '登录控制台' }).click();
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '登录设置' }).click();
+  await page.getByRole('link', { name: '登录账户' }).click();
   await captchaToggle.uncheck();
   await page.getByRole('button', { name: '保存登录设置' }).click();
   await expect(page.locator('.notice[role="status"]')).toContainText('登录设置已保存');

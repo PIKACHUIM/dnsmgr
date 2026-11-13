@@ -1,4 +1,4 @@
-type IconName = 'grid' | 'dns' | 'shield' | 'menu' | 'close' | 'arrow' | 'logout' | 'server' | 'lock' | 'sun' | 'moon' | 'globe' | 'plus';
+type IconName = 'grid' | 'dns' | 'shield' | 'menu' | 'close' | 'arrow' | 'logout' | 'server' | 'lock' | 'sun' | 'moon' | 'globe' | 'plus' | 'panel' | 'panel-expand';
 
 const paths: Record<IconName, string[]> = {
   grid: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M3 14h7v7H3z', 'M14 14h7v7h-7z'],
@@ -14,6 +14,8 @@ const paths: Record<IconName, string[]> = {
   moon: ['M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5'],
   globe: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18', 'M3 12h18', 'M12 3c2.5 2.4 3.8 5.4 3.8 9s-1.3 6.6-3.8 9c-2.5-2.4-3.8-5.4-3.8-9S9.5 5.4 12 3'],
   plus: ['M12 5v14', 'M5 12h14'],
+  panel: ['M4 4h16v16H4z', 'M9 4v16', 'm15 9-3 3 3 3'],
+  'panel-expand': ['M4 4h16v16H4z', 'M9 4v16', 'm13 9 3 3-3 3'],
 };
 
 export function Icon({ name, className = '' }: { name: IconName; className?: string }) {
