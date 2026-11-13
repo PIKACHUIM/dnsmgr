@@ -30,6 +30,27 @@
 
 旧 route 中 `/domain/dnscheck` 指向的方法在旧控制器中不存在，`huoshan` 证书 PHP 实现文件不在常规注册清单中。这些均为静态基线诊断，不应被当成新实现的需求完成项。
 
+## 逐控制器盘点
+
+下表覆盖 `tests/fixtures/legacy-contracts.json` 中的全部 141 个控制器公开方法，分类为「已迁移/等价」「平台限制」「不适用/死代码」，没有未分类项。页面渲染方法对应 TS 单页路由与 `frontend/src` 页面，AJAX 方法对应 `src/routes` 下的会话/签名 API。
+
+| 控制器 | 已迁移/等价 | 平台限制或替换 | 不适用/死代码 |
+| --- | --- | --- | --- |
+| Auth（5） | `login`、`totp`、`logout`、`quicklogin`、`verifycode` | — | — |
+| Cert（20） | `certaccount`、`deployaccount`、`account_data`、`account_op`、`account_form`、`certorder`、`order_data`、`order_info`、`order_op`、`order_process`、`order_form`、`deploytask`、`deploy_data`、`deploy_op`、`deploy_process`、`deploy_form`、`cname`、`cname_data`、`cname_op`、`certset` | 云厂商免费证书（`tencent`/`aliyun`/`ucloud`）改走 ACME；50+ 部署驱动改走 Webhook/执行器 | — |
+| Cloudflare（29） | `hostnames`、`hostnames_data`、`hostnames_add`、`hostnames_update`、`hostnames_refresh`、`hostnames_delete`、`hostnames_batch_delete`、`hostnames_batch_update`、`hostnames_batch_add`、`fallback_get`、`fallback_set`、`fallback_delete`、`dcv_delegation_uuid`、`tunnels`、`tunnels_data`、`tunnels_add`、`tunnels_delete`、`tunnels_token`、`tunnels_public_hostnames_data`、`tunnels_public_hostnames_save`、`tunnels_public_hostnames_delete`、`tunnels_cidr_data`、`tunnels_cidr_add`、`tunnels_cidr_delete`、`tunnels_hostname_routes_data`、`tunnels_hostname_routes_add`、`tunnels_hostname_routes_delete` | — | `hostnames_txt_targets`、`get_domain_default_line` 为旧页面内部 AJAX，TS 页面直接读取 CF 验证记录与线路列表，无需单独接口 |
+| Dmonitor（9） | `overview`、`task`、`task_data`、`task_op`、`taskform`、`taskinfo`、`tasklog_data`、`clean`、`status` | TCP 探测仅 Cloudflare；ICMP 不可用 | — |
+| Domain（40） | `account`、`account_data`、`account_add`、`account_op`、`domain`、`domain_add`、`domain_data`、`domain_op`、`domain_list`、`domain_info`、`record`、`record_data`、`record_list`、`record_add`、`record_update`、`record_delete`、`record_status`、`record_remark`、`record_batch`、`record_batch_edit`、`record_batch_add`、`record_batch_add2`、`record_import`、`record_batch_edit2`、`record_search`、`record_log`、`smartparse`、`quickinfo`、`record_groups`、`weight`、`weight_data`、`alias`、`expire_notice`、`update_date`、`record_check`、`category`、`category_data`、`category_op`、`category_list`、`domain_set_category` | — | `domain/dnscheck` 旧实现不存在 |
+| Index（7） | `index`、`changeskin`、`setpwd`、`totp` | `doupdate` 由只读版本/迁移检查替代 | `cleancache`、`test`、`doc`（模板缺失，文档站替代） |
+| Install（1） | `index` | — | — |
+| Optimizeip（6） | `opipset`、`opiplist`、`opiplist_data`、`opipform`、`queryapi`、`status` | — | — |
+| Qqbot（1） | `webhook` | — | — |
+| Schedule（4） | `stask`、`stask_data`、`stask_op`、`staskform` | — | — |
+| System（14） | `set`、`loginset`、`noticeset`、`proxyset`、`mailtest`、`tgbottest`、`webhooktest`、`customwebhooktest`、`proxytest`、`cronset`、`checkupdate`、`update`、`cron` | SMTP/Sendcloud/阿里云邮件改 Cloudflare `send_email`；代理测试不验证出口 IP；`tgbot_proxy=1` 不适用 | `doupdate` |
+| User（5） | `user`、`user_data`、`user_op`、`log`、`log_data` | — | — |
+
+`Cert` 的 `account_form`/`order_form`/`deploy_form` 与 `Domain` 的 `domain_add`、`record_import` 等页面方法由 TS 单页路由承载；旧签名 API（`/api/*`）与 `quicklogin` 按[API 兼容策略](#api-兼容策略)保留。
+
 ## 旧版页面功能与当前实现的差异
 
 按 `route/app.php`、`app/controller/*.php` 与 `src/routes/*.ts` 逐项对照，旧版页面与运维工具的当前状态如下（已迁移项注明等价范围，未迁移项标注原因；均不影响 DNS、证书、通知主链路）：

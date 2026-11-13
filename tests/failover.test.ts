@@ -194,6 +194,30 @@ describe('failover API', () => {
     expect(logs.items[0]).toMatchObject({ event: 'healthy', http_status: null });
   });
 
+  it('updates probe settings in place and validates the combined interval', async () => {
+    const created = await post('/api/v1/failover/tasks', newTask());
+    const task = await created.json() as { id: number };
+    const patch = (body: Record<string, unknown>) => request(`/api/v1/failover/tasks/${task.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify(body),
+    });
+    expect((await patch({ intervalSeconds: 120, timeoutSeconds: 10, failureThreshold: 4 })).status).toBe(200);
+    const row = await testDb.db.query<{ interval_seconds: number; timeout_seconds: number; failure_threshold: number }>(
+      'SELECT interval_seconds,timeout_seconds,failure_threshold FROM dns_failover_tasks WHERE id = ?', [task.id],
+    );
+    expect(row[0]).toMatchObject({ interval_seconds: 120, timeout_seconds: 10, failure_threshold: 4 });
+
+    const invalid = await patch({ intervalSeconds: 60, timeoutSeconds: 60 });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_FAILOVER_SETTING');
+
+    const seen: [string, number][] = [];
+    setTcpConnect(async (host, port) => { seen.push([host, port]); });
+    expect((await patch({ checkUrl: 'tcp://health.example.com:8443' })).status).toBe(200);
+    expect(await (await post(`/api/v1/failover/tasks/${task.id}/run`, {})).json()).toMatchObject({ checked: 1, failed: 0 });
+    expect(seen).toEqual([['health.example.com', 8443]]);
+  });
+
   it('prevents duplicate policies for a DNS record and rejects invalid backup values', async () => {
     const invalid = await post('/api/v1/failover/tasks', newTask({ backupValue: '192.168.1.4' }));
     expect(invalid.status).toBe(400);

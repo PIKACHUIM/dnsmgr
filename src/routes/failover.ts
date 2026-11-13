@@ -218,14 +218,49 @@ export function failoverRoutes() {
     requireAdmin(c);
     const taskId = positiveId(c.req.param('id'));
     const body = await input(c);
-    if (typeof body.active !== 'boolean') throw new AppError(400, '状态参数无效', 'INVALID_STATUS');
+    const rows = await db(c).query<{
+      domain_id: number; record_id: string; interval_seconds: number; timeout_seconds: number; failure_threshold: number;
+    }>('SELECT domain_id,record_id,interval_seconds,timeout_seconds,failure_threshold FROM dns_failover_tasks WHERE id = ?', [taskId]);
+    const current = rows[0];
+    if (!current) throw new AppError(404, '容灾任务不存在', 'TASK_NOT_FOUND');
     const now = nowSeconds();
-    const next = await db(c).execute(
-      'UPDATE dns_failover_tasks SET active = ?, next_check_at = ?, updated_at = ? WHERE id = ?',
-      [body.active ? 1 : 0, body.active ? now : 0, now, taskId],
-    );
-    if (next.changes !== 1) throw new AppError(404, '容灾任务不存在', 'TASK_NOT_FOUND');
-    await writeAudit(c, 'failover.toggle', String(taskId), body.active ? 'on' : 'off');
+    const updates: string[] = [];
+    const args: (string | number)[] = [];
+    if (body.active !== undefined) {
+      if (typeof body.active !== 'boolean') throw new AppError(400, '状态参数无效', 'INVALID_STATUS');
+      updates.push('active=?', 'next_check_at=?');
+      args.push(body.active ? 1 : 0, body.active ? now : 0);
+    }
+    let intervalSeconds = current.interval_seconds;
+    let timeoutSeconds = current.timeout_seconds;
+    if (body.intervalSeconds !== undefined) {
+      intervalSeconds = integer(body, 'intervalSeconds', 30, 86400);
+      updates.push('interval_seconds=?');
+      args.push(intervalSeconds);
+    }
+    if (body.timeoutSeconds !== undefined) {
+      timeoutSeconds = integer(body, 'timeoutSeconds', 1, 30);
+      updates.push('timeout_seconds=?');
+      args.push(timeoutSeconds);
+    }
+    if (body.failureThreshold !== undefined) {
+      updates.push('failure_threshold=?');
+      args.push(integer(body, 'failureThreshold', 1, 10));
+    }
+    if (timeoutSeconds >= intervalSeconds) throw new AppError(400, '探测超时必须小于检测间隔', 'INVALID_FAILOVER_SETTING');
+    if (body.checkUrl !== undefined) {
+      const checkUrl = normalizeProbeTarget(text(body, 'checkUrl', 512).trim());
+      if (checkUrl.startsWith('tcp://') && !tcpProbeAvailable()) {
+        throw new AppError(400, '当前运行时不支持 TCP 探测，请改用 HTTP(S) 健康检查', 'TCP_PROBE_UNSUPPORTED');
+      }
+      updates.push('check_url_cipher=?');
+      args.push(await encrypt(checkUrl, c.env.APP_KEY, `dns-failover/${current.domain_id}/${current.record_id}`));
+    }
+    if (updates.length === 0) throw new AppError(400, '没有可更新的字段', 'INVALID_FAILOVER_SETTING');
+    updates.push('updated_at=?');
+    args.push(now, taskId);
+    await db(c).execute(`UPDATE dns_failover_tasks SET ${updates.join(',')} WHERE id = ?`, args);
+    await writeAudit(c, 'failover.update', String(taskId), Object.keys(body).join(','));
     return c.json({ code: 0 });
   });
 

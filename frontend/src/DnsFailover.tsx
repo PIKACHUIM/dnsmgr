@@ -43,6 +43,11 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [editTask, setEditTask] = useState<Task | null>(null);
+  const [editForm, setEditForm] = useState({
+    checkUrl: '', probeType: 'http', tcpHost: '', tcpPort: '443',
+    intervalSeconds: '60', timeoutSeconds: '5', failureThreshold: '3',
+  });
   const [cleanOpen, setCleanOpen] = useState(false);
   const [cleanDays, setCleanDays] = useState('30');
   const [noticeOpen, setNoticeOpen] = useState(false);
@@ -109,6 +114,42 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
       setNotice(`容灾策略 #${result.id} 已创建，首次探测将在下一次 /cron 运行时执行。`);
       setForm((current) => ({ ...current, recordId: '', recordName: '', mainValue: '', backupValue: '', checkUrl: '', tcpHost: '' }));
       setFormOpen(false);
+      await load(controller.signal);
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
+  function openEdit(task: Task) {
+    setEditTask(task);
+    setEditForm({
+      checkUrl: '', probeType: 'http', tcpHost: '', tcpPort: '443',
+      intervalSeconds: String(task.intervalSeconds), timeoutSeconds: String(task.timeoutSeconds),
+      failureThreshold: String(task.failureThreshold),
+    });
+    setError(''); setNotice('');
+  }
+
+  async function saveEdit(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy || !editTask) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      const payload: Record<string, unknown> = {
+        intervalSeconds: Number(editForm.intervalSeconds),
+        timeoutSeconds: Number(editForm.timeoutSeconds),
+        failureThreshold: Number(editForm.failureThreshold),
+      };
+      if (editForm.probeType === 'tcp') {
+        const rawHost = editForm.tcpHost.trim() || editTask.mainValue;
+        const host = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost;
+        payload.checkUrl = `tcp://${host}:${Number(editForm.tcpPort)}`;
+      } else if (editForm.checkUrl.trim()) {
+        payload.checkUrl = editForm.checkUrl.trim();
+      }
+      await send(`/api/v1/failover/tasks/${editTask.id}`, 'PATCH', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`容灾策略 #${editTask.id} 已更新，下一次探测生效。`);
+      setEditTask(null);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -238,6 +279,7 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
               <td className="row-actions">
                 <button className="button button-secondary" type="button" disabled={busy} onClick={() => void checkNow(task)}>立即检查</button>
                 <button className="button button-quiet" type="button" disabled={busy} onClick={() => void showLogs(task)}>日志</button>
+                <button className="button button-quiet" type="button" disabled={busy} onClick={() => openEdit(task)}>编辑</button>
                 <button className="button button-quiet" type="button" disabled={busy} onClick={() => void toggle(task)}>{task.active ? '停用' : '启用'}</button>
                 <button className="button button-quiet" type="button" disabled={busy} onClick={() => void remove(task)}>删除</button>
               </td>
@@ -280,6 +322,21 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
         <label className="form-field"><span>超时（秒）</span><input required type="number" min={1} max={30} value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })} /></label>
         <label className="form-field"><span>连续失败/恢复阈值</span><input required type="number" min={1} max={10} value={form.failureThreshold} onChange={(event) => setForm({ ...form, failureThreshold: event.target.value })} /></label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !form.domainId || !form.recordId}>{busy ? '正在提交…' : '创建策略'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
+    {editTask && <Modal title={`编辑容灾策略 #${editTask.id}`} onClose={() => { if (!busy) setEditTask(null); }}>
+      <form className="dns-form" onSubmit={saveEdit}>
+        <label className="form-field"><span>检测方式</span><select value={editForm.probeType} onChange={(event) => setEditForm({ ...editForm, probeType: event.target.value })}>
+          <option value="http">HTTP(S) 健康检查</option><option value="tcp">TCP 端口</option>
+        </select></label>
+        {editForm.probeType === 'tcp' ? <>
+          <label className="form-field"><span>检测主机</span><input value={editForm.tcpHost} onChange={(event) => setEditForm({ ...editForm, tcpHost: event.target.value })} maxLength={253} placeholder={`留空使用主线路值 ${editTask.mainValue}`} /></label>
+          <label className="form-field"><span>TCP 端口</span><input required type="number" min={1} max={65535} value={editForm.tcpPort} onChange={(event) => setEditForm({ ...editForm, tcpPort: event.target.value })} /></label>
+        </> : <label className="form-field"><span>新的健康检查 URL</span><input type="url" value={editForm.checkUrl} onChange={(event) => setEditForm({ ...editForm, checkUrl: event.target.value })} maxLength={512} placeholder="留空保留现有探测地址" /></label>}
+        <label className="form-field"><span>检测间隔（秒）</span><input required type="number" min={30} max={86400} value={editForm.intervalSeconds} onChange={(event) => setEditForm({ ...editForm, intervalSeconds: event.target.value })} /></label>
+        <label className="form-field"><span>超时（秒）</span><input required type="number" min={1} max={30} value={editForm.timeoutSeconds} onChange={(event) => setEditForm({ ...editForm, timeoutSeconds: event.target.value })} /></label>
+        <label className="form-field"><span>连续失败/恢复阈值</span><input required type="number" min={1} max={10} value={editForm.failureThreshold} onChange={(event) => setEditForm({ ...editForm, failureThreshold: event.target.value })} /></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存策略'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setEditTask(null)}>取消</button></div>
       </form>
     </Modal>}
     {cleanOpen && <Modal title="清理容灾日志" onClose={() => { if (!busy) setCleanOpen(false); }}>
