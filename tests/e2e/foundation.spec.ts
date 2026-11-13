@@ -82,7 +82,8 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.locator('.environment-panel')).toContainText('d1');
   const cookies = await context.cookies();
   expect(cookies.find((cookie) => cookie.name === 'user_token')?.httpOnly).toBe(true);
-  expect(await page.evaluate(() => localStorage.length)).toBe(0);
+  const storedKeys = await page.evaluate(() => Object.keys(localStorage));
+  expect(storedKeys.every((key) => key.startsWith('dnsmgr-'))).toBe(true);
   await page.reload();
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
   for (const width of [1440, 768, 375]) {
@@ -99,6 +100,16 @@ test('initialization, login, session restore, responsive navigation and logout',
     }
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '切换到暗色' }).click();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+  await page.screenshot({ path: testInfo.outputPath('console-dark-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.getByRole('button', { name: '切换到亮色' }).click();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('light');
+  await page.getByRole('button', { name: '切换语言' }).click();
+  await expect(page.locator('.nav-group h2').first()).toHaveText('Workspace');
+  await expect(page.getByRole('link', { name: 'Orders' })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Switch language' }).click();
+  await expect(page.locator('.nav-group h2').first()).toHaveText('工作空间');
   await page.getByRole('link', { name: '证书订单' }).click();
   await expect(page.getByRole('heading', { name: '导入已签发证书' })).toBeVisible();
   await expect(page.getByLabel('完整证书链 PEM')).toBeVisible();
@@ -125,7 +136,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '后台首页', exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '到期提醒设置' }).click();
+  await page.getByRole('link', { name: '到期提醒' }).click();
   await expect(page.getByRole('heading', { name: '域名到期提醒设置' })).toBeVisible();
   const noticeDays = page.getByLabel('到期提前提醒天数');
   const telegramNotice = page.getByLabel('Telegram');
@@ -186,7 +197,13 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.locator('.notice[role="status"]')).toContainText('登录设置已保存');
   await expect(mobileCaptchaToggle).not.toBeChecked();
   await page.goto('/account');
-  await expect(page.getByRole('heading', { name: '添加 DNS 账户' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '已配置账户' })).toBeVisible();
+  await page.getByRole('button', { name: '添加账户' }).click();
+  const accountDialog = page.getByRole('dialog', { name: '添加 DNS 账户' });
+  await expect(accountDialog).toBeVisible();
+  await expect(accountDialog.getByLabel('账户名称')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(accountDialog).toHaveCount(0);
   await page.route(/\/api\/v1\/dns\/domains\?/, (route) => route.fulfill({ json: {
     code: 0, total: 1, items: [{
       id: 1001, name: 'example.com', accountId: 1, accountName: 'test', accountType: 'cloudflare',
@@ -255,7 +272,7 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.locator('.record-value').filter({ hasText: '<img src=x onerror=alert(1)>' })).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img[src="x"]')).toHaveCount(0);
   await page.getByRole('link', { name: '表格导入' }).click();
-  await expect(page.getByRole('heading', { name: '导入解析记录', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '导入记录', exact: true, level: 1 })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({
     name: 'records.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: importWorkbookBuffer,
   });
@@ -487,21 +504,21 @@ test('record tool pages render and submit against mocked DNS APIs', async ({ pag
   await page.route('**/api/v1/dns/domains/1/weights', (route) => route.fulfill(json({ code: 0, updated: 1 })));
 
   await page.goto('/record/batchadd/1');
-  await expect(page.getByRole('heading', { level: 1, name: '批量添加解析' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: '批量添加' })).toBeVisible();
   await page.getByLabel('记录行').fill('www 1.1.1.1');
   await page.getByRole('button', { name: '批量添加', exact: true }).click();
   await expect(page.locator('.notice[role="status"]')).toContainText('批量添加完成：成功 1 条');
   await expect(page.getByRole('heading', { name: '逐行结果' })).toBeVisible();
 
   await page.goto('/record/batchedit/1');
-  await expect(page.getByRole('heading', { level: 1, name: '批量修改解析', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: '批量修改', exact: true })).toBeVisible();
   await page.getByLabel('选择 www').check();
   await page.getByLabel('新记录值').fill('3.3.3.3');
   await page.getByRole('button', { name: '应用修改' }).click();
   await expect(page.locator('.notice[role="status"]')).toContainText('批量修改完成：成功 1 条');
 
   await page.goto('/record/log/1');
-  await expect(page.getByRole('heading', { level: 1, name: '服务商操作日志' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: '服务日志' })).toBeVisible();
   await expect(page.getByRole('cell', { name: '添加解析' })).toBeVisible();
 
   await page.goto('/record/weight/1');
@@ -514,21 +531,21 @@ test('record tool pages render and submit against mocked DNS APIs', async ({ pag
   await expect(page.locator('.notice[role="status"]')).toContainText('已保存权重配置');
 
   await page.goto('/record/groups/1');
-  await expect(page.getByRole('heading', { level: 1, name: '解析记录分组' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: '记录分组' })).toBeVisible();
   await expect(page.getByRole('cell', { name: '生产' })).toBeVisible();
   await page.getByLabel('选择 www').check();
   await page.getByRole('button', { name: '移动到「生产」' }).click();
   await expect(page.locator('.notice[role="status"]')).toContainText('已移动 1 条解析记录');
 
   await page.goto('/record/search');
-  await expect(page.getByRole('heading', { level: 1, name: '按记录值搜索' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: '记录搜索' })).toBeVisible();
   await page.getByRole('searchbox', { name: '记录值' }).fill('1.1.1.1');
   await page.getByRole('button', { name: '开始搜索' }).click();
   await expect(page.getByText('找到 1 条记录')).toBeVisible();
   await expect(page.getByRole('cell', { name: 'example.com', exact: true })).toBeVisible();
 
   await page.goto('/record/smartparse');
-  await expect(page.getByRole('heading', { level: 1, name: '智能批量添加' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: '智能添加' })).toBeVisible();
   await page.getByLabel('解析数据').fill('www 1.1.1.1');
   await page.getByRole('button', { name: '解析预览' }).click();
   await expect(page.getByRole('heading', { name: '添加预览' })).toBeVisible();

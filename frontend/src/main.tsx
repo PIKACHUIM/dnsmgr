@@ -4,6 +4,7 @@ import { ApiError, errorMessage, readSession, request, type Session } from './ap
 import { Auth } from './Auth';
 import { Console } from './Console';
 import { Brand } from './icons';
+import { PreferencesProvider } from './preferences';
 import './styles.css';
 
 type AppState =
@@ -90,4 +91,4 @@ function App() {
   return <Auth key={state.kind} mode={state.kind} notice={state.kind === 'login' ? state.notice : undefined} onInstalled={onInstalled} onSignedIn={onSignedIn} />;
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode><PreferencesProvider><App /></PreferencesProvider></StrictMode>);

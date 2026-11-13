@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
+import { Icon } from './icons';
+import { Modal } from './Modal';
 
 interface UserItem {
   id: number;
@@ -45,6 +47,7 @@ export function Users({ session, onExpired }: Props) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [level, setLevel] = useState(1);
@@ -104,6 +107,7 @@ export function Users({ session, onExpired }: Props) {
         new AbortController().signal, { 'X-CSRF-Token': session.csrfToken },
       );
       setUsername(''); setPassword(''); setLevel(1); setExpires(''); setIsApi(false);
+      setCreating(false);
       setNotice(result.apikey ? `用户已创建。API Key（仅显示一次）：${result.apikey}` : '用户已创建');
       await refresh();
     } catch (failure) {
@@ -207,24 +211,9 @@ export function Users({ session, onExpired }: Props) {
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
-    <section className="panel" aria-labelledby="user-create-title">
-      <div className="panel-heading"><div><h2 id="user-create-title">新增用户</h2></div><span className="panel-meta">最多 200 个账户</span></div>
-      <form className="dns-form" onSubmit={create}>
-        <label className="form-field"><span>用户名</span><input value={username} onChange={(event) => setUsername(event.target.value)} maxLength={64} required placeholder="3–64 位字母、数字或 _.@-" autoComplete="off" /></label>
-        <label className="form-field"><span>初始密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required placeholder="12–72 字节" autoComplete="new-password" /></label>
-        <label className="form-field"><span>角色</span>
-          <select value={level} onChange={(event) => setLevel(Number(event.target.value))}>
-            {levels.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-          </select>
-        </label>
-        <label className="form-field"><span>到期日期（可选）</span><input type="date" value={expires} onChange={(event) => setExpires(event.target.value)} /></label>
-        <label className="notice-channel-option"><input type="checkbox" checked={isApi} onChange={(event) => setIsApi(event.target.checked)} /><span>启用旧版签名 API</span></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '创建用户'}</button><span>API 用户的密钥只在创建或轮换时显示一次。</span></div>
-      </form>
-    </section>
 
     <section className="panel" aria-labelledby="user-list-title">
-      <div className="panel-heading"><div><h2 id="user-list-title">用户列表</h2></div><span className="panel-meta">{users.length} 个</span></div>
+      <div className="panel-heading"><div><h2 id="user-list-title">用户列表</h2></div><div className="panel-heading-actions"><span className="panel-meta">{users.length} 个</span><button className="button button-primary" type="button" onClick={() => { setError(''); setNotice(''); setCreating(true); }}><Icon name="plus" />新增用户</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取用户…</div>
         : users.length === 0 ? <div className="panel-empty">还没有用户。</div>
           : <div className="table-wrap"><table className="data-table">
@@ -246,8 +235,22 @@ export function Users({ session, onExpired }: Props) {
           </table></div>}
     </section>
 
-    {editing && <section className="panel" aria-labelledby="user-edit-title">
-      <div className="panel-heading"><div><h2 id="user-edit-title">编辑用户：{editing.username}</h2></div><span className="panel-meta">修改安全设置会使会话失效</span></div>
+    {creating && <Modal title="新增用户" description="最多 200 个账户" onClose={() => setCreating(false)}>
+      <form className="dns-form" onSubmit={create}>
+        <label className="form-field"><span>用户名</span><input value={username} onChange={(event) => setUsername(event.target.value)} maxLength={64} required placeholder="3–64 位字母、数字或 _.@-" autoComplete="off" /></label>
+        <label className="form-field"><span>初始密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required placeholder="12–72 字节" autoComplete="new-password" /></label>
+        <label className="form-field"><span>角色</span>
+          <select value={level} onChange={(event) => setLevel(Number(event.target.value))}>
+            {levels.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+          </select>
+        </label>
+        <label className="form-field"><span>到期日期（可选）</span><input type="date" value={expires} onChange={(event) => setExpires(event.target.value)} /></label>
+        <label className="notice-channel-option"><input type="checkbox" checked={isApi} onChange={(event) => setIsApi(event.target.checked)} /><span>启用旧版签名 API</span></label>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '创建用户'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setCreating(false)}>取消</button><span>API 用户的密钥只在创建或轮换时显示一次。</span></div>
+      </form>
+    </Modal>}
+
+    {editing && <Modal title={`编辑用户：${editing.username}`} description="修改安全设置会使会话失效" wide onClose={() => setEditing(null)}>
       <form className="dns-form" onSubmit={saveEdit}>
         <label className="form-field"><span>角色</span>
           <select value={editLevel} onChange={(event) => setEditLevel(Number(event.target.value))}>
@@ -269,10 +272,9 @@ export function Users({ session, onExpired }: Props) {
           <button className="button button-quiet" type="button" disabled={busy} onClick={() => setEditing(null)}>取消</button>
         </div>
       </form>
-    </section>}
+    </Modal>}
 
-    {permissionsFor && <section className="panel" aria-labelledby="user-permission-title">
-      <div className="panel-heading"><div><h2 id="user-permission-title">域名权限：{permissionsFor.username}</h2></div><span className="panel-meta">{domains.filter((domain) => domain.allowed).length} 个域名</span></div>
+    {permissionsFor && <Modal title={`域名权限：${permissionsFor.username}`} description={`${domains.filter((domain) => domain.allowed).length} 个域名`} wide onClose={() => setPermissionsFor(null)}>
       {domains.length === 0 ? <div className="panel-empty">当前还没有可分配的域名。</div>
         : <form className="dns-form" onSubmit={savePermissions}>
           <fieldset className="notice-channel-grid"><legend>允许访问的域名</legend>
@@ -286,6 +288,6 @@ export function Users({ session, onExpired }: Props) {
             <button className="button button-quiet" type="button" disabled={busy} onClick={() => setPermissionsFor(null)}>取消</button>
           </div>
         </form>}
-    </section>}
+    </Modal>}
   </>;
 }

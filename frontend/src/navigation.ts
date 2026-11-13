@@ -23,33 +23,33 @@ export const navigation: NavigationGroup[] = [
     { path: '/account', label: '域名账户', scope: 'DNS 服务商账户与访问凭证', capability: 'dns', implemented: true },
     { path: '/domain/category', label: '域名分类', scope: '域名分类与分组管理', capability: 'dns', implemented: true },
   ] },
-  { label: '容灾与调度', adminOnly: true, items: [
+  { label: '容灾调度', adminOnly: true, items: [
     { path: '/dmonitor/overview', label: '运行概览', scope: '容灾探测与切换运行情况', capability: 'tasks', implemented: true },
     { path: '/dmonitor/task', label: '切换策略', scope: 'HTTP 探测与主备 DNS 故障切换', capability: 'tasks', implemented: true },
     { path: '/schedule/stask', label: '定时切换', scope: '定时 DNS 切换任务', capability: 'tasks', implemented: true },
   ] },
-  { label: 'SSL 证书', adminOnly: true, items: [
+  { label: '证书管理', adminOnly: true, items: [
     { path: '/cert/certaccount', label: '证书账户', scope: 'ACME 账户注册、Directory 与一次性 nonce', capability: 'cert', implemented: true },
     { path: '/cert/certorder', label: '证书订单', scope: 'ACME DNS-01 签发、手动导入与 PFX 导出', capability: 'cert', implemented: true },
-    { path: '/cert/deployaccount', label: '自动部署账户', scope: '证书部署目标与访问凭证', capability: 'executor', implemented: true },
-    { path: '/cert/deploytask', label: '自动部署任务', scope: '证书自动部署与执行记录', capability: 'executor', implemented: true },
-    { path: '/cert/cname', label: 'CNAME 代理', scope: 'DNS 验证的 CNAME 代理配置', capability: 'cert', implemented: true },
-    { path: '/cert/certset', label: '自动续签设置', scope: '证书续签开关、天数与手动执行', capability: 'cert', implemented: true },
+    { path: '/cert/deployaccount', label: '部署账户', scope: '证书部署目标与访问凭证', capability: 'executor', implemented: true },
+    { path: '/cert/deploytask', label: '部署任务', scope: '证书自动部署与执行记录', capability: 'executor', implemented: true },
+    { path: '/cert/cname', label: '证书代理', scope: 'DNS 验证的 CNAME 代理配置', capability: 'cert', implemented: true },
+    { path: '/cert/certset', label: '续签设置', scope: '证书续签开关、天数与手动执行', capability: 'cert', implemented: true },
   ] },
-  { label: 'CF 优选 IP', adminOnly: true, items: [
+  { label: '优选管理', adminOnly: true, items: [
     { path: '/optimizeip/opipset', label: '优选设置', scope: 'Cloudflare IP 优选参数', capability: 'executor', implemented: true },
-    { path: '/optimizeip/opiplist', label: '任务管理', scope: 'IP 优选任务与执行情况', capability: 'executor', implemented: true },
+    { path: '/optimizeip/opiplist', label: '优选任务', scope: 'IP 优选任务与执行情况', capability: 'executor', implemented: true },
   ] },
   { label: '系统设置', adminOnly: true, items: [
     { path: '/system/cronset', label: '计划任务', scope: '计划任务与运行器设置', capability: 'tasks', implemented: true },
     { path: '/system/loginset', label: '登录设置', scope: '图形验证码登录策略', implemented: true },
     { path: '/system/noticeset', label: '通知设置', scope: '通知渠道与消息模板', implemented: true },
-    { path: '/domain/expirenotice', label: '到期提醒设置', scope: '域名到期通知提前天数策略', implemented: true },
+    { path: '/domain/expirenotice', label: '到期提醒', scope: '域名到期通知提前天数策略', implemented: true },
     { path: '/system/proxyset', label: '代理设置', scope: '外部请求代理配置', implemented: true },
     { path: '/system/update', label: '在线更新', scope: '版本更新与兼容性检查', implemented: true },
     { path: '/user', label: '用户管理', scope: '用户、权限与账户维护', implemented: true },
   ] },
-  { label: '审计与账户', items: [
+  { label: '审计账户', items: [
     { path: '/log', label: '操作日志', scope: '用户操作与变更审计', implemented: true },
     { path: '/setpwd', label: '修改密码', scope: '当前登录用户修改自己的密码', implemented: true },
   ] },
@@ -62,13 +62,13 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
   if (exact) return { item: exact, group: visibleGroups.find((group) => group.items.includes(exact))!.label };
   if (/^\/cloudflare\/hostnames\/\d+$/.test(path) && level === 2) {
     return {
-      item: { path, label: 'Cloudflare 自定义主机名', scope: 'SaaS 主机名、证书验证与 Fallback Origin', capability: 'dns', implemented: true },
+      item: { path, label: '自定义域', scope: 'SaaS 主机名、证书验证与 Fallback Origin', capability: 'dns', implemented: true },
       group: '域名配置',
     };
   }
   if (/^\/cloudflare\/tunnels\/\d+$/.test(path) && level === 2) {
     return {
-      item: { path, label: 'Cloudflare Tunnels', scope: 'Tunnel、公网主机名与 Zero Trust 路由', capability: 'dns', implemented: true },
+      item: { path, label: '隧道管理', scope: 'Tunnel、公网主机名与 Zero Trust 路由', capability: 'dns', implemented: true },
       group: '域名配置',
     };
   }
@@ -78,10 +78,10 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
     return { item, group: visibleGroups.find((group) => group.items.includes(domainItem))!.label };
   }
   const fixedRecordPages: Record<string, { label: string; scope: string }> = {
-    '/record/batchadd': { label: '批量添加解析', scope: '选择域名后按行批量添加解析记录' },
-    '/record/batchedit': { label: '批量修改解析', scope: '选择域名后批量修改记录类型、记录值与线路' },
-    '/record/search': { label: '按记录值搜索', scope: '跨域名搜索记录值并批量修改或删除' },
-    '/record/smartparse': { label: '智能批量添加', scope: '解析多域名输入并按域名批量添加记录' },
+    '/record/batchadd': { label: '批量添加', scope: '选择域名后按行批量添加解析记录' },
+    '/record/batchedit': { label: '批量修改', scope: '选择域名后批量修改记录类型、记录值与线路' },
+    '/record/search': { label: '记录搜索', scope: '跨域名搜索记录值并批量修改或删除' },
+    '/record/smartparse': { label: '智能添加', scope: '解析多域名输入并按域名批量添加记录' },
   };
   if (fixedRecordPages[path]) {
     return { item: { path, ...fixedRecordPages[path]!, capability: 'dns', implemented: true }, group: '工作空间' };
@@ -89,17 +89,17 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
   const recordPage = /^\/record\/(batchadd|batchedit|log|weight|groups)\/\d+$/.exec(path);
   if (recordPage) {
     const labels: Record<string, { label: string; scope: string }> = {
-      batchadd: { label: '批量添加解析', scope: '按行批量添加解析记录' },
-      batchedit: { label: '批量修改解析', scope: '勾选记录批量修改类型、记录值与线路' },
-      log: { label: '服务商操作日志', scope: '读取服务商侧的解析操作日志' },
+      batchadd: { label: '批量添加', scope: '按行批量添加解析记录' },
+      batchedit: { label: '批量修改', scope: '勾选记录批量修改类型、记录值与线路' },
+      log: { label: '服务日志', scope: '读取服务商侧的解析操作日志' },
       weight: { label: '权重配置', scope: '阿里云 DNS 线路权重开关与权重值' },
-      groups: { label: '解析记录分组', scope: '阿里云与 DNSPod 的解析记录分组' },
+      groups: { label: '记录分组', scope: '阿里云与 DNSPod 的解析记录分组' },
     };
     return { item: { path, ...labels[recordPage[1]!]!, capability: 'dns', implemented: true }, group: '工作空间' };
   }
   if (/^\/record\/import\/\d+$/.test(path)) {
     const domainItem = visibleItems.find((item) => item.path === '/domain')!;
-    const item: NavigationItem = { path, label: '导入解析记录', scope: '单域名 Excel 解析记录预览与逐行导入', capability: 'dns', implemented: true };
+    const item: NavigationItem = { path, label: '导入记录', scope: '单域名 Excel 解析记录预览与逐行导入', capability: 'dns', implemented: true };
     return { item, group: visibleGroups.find((group) => group.items.includes(domainItem))!.label };
   }
   if (/^\/record\/\d+$/.test(path)) {
@@ -111,5 +111,5 @@ export function resolvePage(path: string, level: number): { item: NavigationItem
     .filter((item) => item.path !== '/' && path.startsWith(`${item.path}/`))
     .sort((first, second) => second.path.length - first.path.length)[0];
   if (parent) return { item: parent, group: visibleGroups.find((group) => group.items.includes(parent))!.label };
-  return { item: { path, label: '未移植页面', scope: '此路径尚未提供可用的前端功能' } as NavigationItem, group: '页面状态' };
+  return { item: { path, label: '未知页面', scope: '此路径尚未提供可用的前端功能' } as NavigationItem, group: '页面状态' };
 }
