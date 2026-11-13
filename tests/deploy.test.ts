@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { environment } from '../src/platform/runtime';
+import { deployWindowAllows } from '../src/deploy';
 import { encrypt } from '../src/security/crypto';
 import { createTestDatabase } from './helpers/sqlite';
 
@@ -181,5 +182,54 @@ describe('certificate deployment and executor', () => {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: '{}',
     });
     expect(stale.status).toBe(401);
+  });
+
+  it('wraps deployment windows across midnight', () => {
+    expect(deployWindowAllows(12, 0, 23)).toBe(true);
+    expect(deployWindowAllows(0, 0, 23)).toBe(true);
+    expect(deployWindowAllows(23, 22, 6)).toBe(true);
+    expect(deployWindowAllows(3, 22, 6)).toBe(true);
+    expect(deployWindowAllows(12, 22, 6)).toBe(false);
+    expect(deployWindowAllows(5, 5, 5)).toBe(true);
+    expect(deployWindowAllows(6, 5, 5)).toBe(false);
+  });
+
+  it('limits cron deployments to the configured hour window but keeps manual runs available', async () => {
+    const accountId = await createAccount({ name: 'window-target', type: 'webhook', url: 'https://deploy.example/window' });
+    const taskResponse = await send('/api/v1/cert/deploy/tasks', 'POST', {
+      name: 'window deploy', accountId, certificateOrderId: certId,
+    });
+    expect(taskResponse.status).toBe(200);
+
+    const settings = await request('/api/v1/system/certificate-renew', { headers: { cookie } });
+    expect(await settings.json()).toMatchObject({ code: 0, deployStart: 0, deployEnd: 23 });
+
+    const invalid = await send('/api/v1/system/certificate-renew', 'PUT', { deployStart: 24, deployEnd: 23 });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_CERT_RENEW_SETTINGS');
+
+    const offsetRows = await testDb.db.query<{ value: string }>(
+      "SELECT value FROM app_settings WHERE key='schedule_tz_offset'",
+    );
+    const offset = Number(offsetRows[0]?.value ?? 480);
+    const seconds = Math.floor(Date.now() / 1000) + offset * 60;
+    const localHour = Math.floor((((seconds % 86_400) + 86_400) % 86_400) / 3600);
+    const blocked = (localHour + 1) % 24;
+    const saved = await send('/api/v1/system/certificate-renew', 'PUT', { deployStart: blocked, deployEnd: blocked });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ code: 0, deployStart: blocked, deployEnd: blocked });
+
+    await testDb.db.execute("INSERT INTO app_settings (key,value,updated_at) VALUES ('cron_enabled','1',0)");
+    await testDb.db.execute("INSERT INTO app_settings (key,value,updated_at) VALUES ('cron_key','window-cron-key',0)");
+
+    const cron = await request('/cron?key=window-cron-key');
+    expect(await cron.text()).toBe('success!');
+    expect(webhookCalls).toHaveLength(0);
+    expect(await testDb.db.query('SELECT id FROM cert_deploy_runs')).toEqual([]);
+
+    const manual = await send('/api/v1/cert/deploy/run', 'POST', {});
+    expect(await manual.json()).toMatchObject({ code: 0, ran: 1 });
+    expect(webhookCalls).toHaveLength(1);
+    expect(webhookCalls[0]!.url).toBe('https://deploy.example/window');
   });
 });

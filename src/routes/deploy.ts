@@ -320,7 +320,7 @@ export function certificateDeployRoutes() {
 
   routes.post('/api/v1/cert/deploy/run', requireCertificateSession, requireCsrf, async (c) => {
     requireAdmin(c);
-    const result = await executeDeployDue(c, 5);
+    const result = await executeDeployDue(c, 5, { ignoreWindow: true });
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
       [c.get('principal').user.id, 'cert.deploy.run', 'system', `ran=${result.ran}`, nowSeconds()],

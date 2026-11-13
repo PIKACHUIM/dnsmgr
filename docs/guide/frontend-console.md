@@ -2,9 +2,20 @@
 
 本文面向接手 `frontend/` 的开发者，说明当前控制台的目录结构、主题与语言机制、导航与布局规范、弹窗约定、已知边界和验证流程。文中的「边界」是刻意保留的取舍，不是遗漏；改动前请先确认是否要突破这些边界，以及需要同步修改哪些测试。
 
-> 对应交付：本轮推进业务页多语言（域名管理与域名分类）；上一轮新增四套主题、明暗与语言默认跟随浏览器（提交 `09a3967`）；再上两轮 `7e3a023`（域名管理分组与解析管理）、`953d362`（优选设置并入优选任务页）。
+> 对应交付：本轮补齐旧版运维工具、站点默认皮肤与证书部署时间窗（提交 `2759584` 及后续）；再前几轮分别是业务页多语言（`6ff5cc7`）、四套主题与浏览器默认跟随（`09a3967`）、域名管理分组与解析管理（`7e3a023`）。
 
-## 本轮交付摘要（域名页多语言）
+## 本轮交付摘要（旧版运维工具与站点默认皮肤）
+
+| 需求 | 实现 | 主要文件 |
+| --- | --- | --- |
+| 站点默认皮肤 | 管理员在主题菜单点「设为站点默认」，写入 `app_settings.default_skin`；没有本地 `dnsmgr-skin` 的浏览器读取 `GET /api/v1/preferences/skin` 后应用，选择过皮肤的用户仍以本地值为准 | `ThemeMenu`、`preferences.tsx`、`Console.tsx` |
+| 分用途通知渠道 | 证书设置弹窗内按渠道选择「关闭 / 开启 / 仅失败时」，容灾概览页「通知渠道」弹窗控制切换/恢复通知；全部关闭时通知标记 `DISABLED` | `CertificateSettings.tsx`、`DnsFailover.tsx`、`src/notify/channels.ts` |
+| 证书部署时间窗 | 证书设置弹窗新增「部署时间窗」两个下拉（0–23 时），保存到 `deploy_hour_start`/`deploy_hour_end`；cron 只在该时段自动部署，手动运行不受限 | `CertificateSettings.tsx`、`src/routes/schedule.ts`、`src/deploy.ts` |
+| 运维工具入口 | 通知设置增加单渠道测试下拉；优选设置增加「查询积分」；容灾概览增加「清理日志」；代理设置增加「测试连通性」 | `NotifySettings.tsx`、`OptimizeIp.tsx`、`DnsFailover.tsx`、`ProxySettings.tsx` |
+
+验证：typecheck、build:frontend、`npm test`、`npm run test:e2e`、`docs:build`/`docs:verify` 均通过（见提交说明）。
+
+## 上一轮交付摘要（域名页多语言）
 
 | 需求 | 实现 | 主要文件 |
 | --- | --- | --- |
@@ -15,7 +26,7 @@
 
 验证：typecheck、build:frontend、`npm test` 24 个文件 350 条、`npm run test:e2e` 3 条、`docs:build`/`docs:verify` 均通过；10 份词典各 350 条 key。
 
-## 上一轮交付摘要（主题与浏览器默认）
+## 再上一轮交付摘要（主题与浏览器默认）
 
 | 需求 | 实现 | 主要文件 |
 | --- | --- | --- |
@@ -149,7 +160,7 @@ CSS 分四层覆盖，组件只引用 token：
 默认值与跟随规则：
 
 - 没有 `dnsmgr-theme` 时按 `prefers-color-scheme` 取明暗，并监听 `matchMedia('(prefers-color-scheme: dark)')` 实时跟随；点击顶栏太阳/月亮后写入 `dnsmgr-theme`，从此以用户选择为准。
-- 皮肤存 `dnsmgr-skin`，缺省 `classic`；登录页与控制台顶栏都能切换。
+- 皮肤存 `dnsmgr-skin`，缺省 `classic`；登录页与控制台顶栏都能切换。管理员可在主题菜单点「设为站点默认」写入服务端默认皮肤，只有本地没有 `dnsmgr-skin` 的浏览器会读取 `GET /api/v1/preferences/skin` 并应用；点过任何一套皮肤后即以本地值为准。
 - 顶栏顺序：明暗切换 → 主题菜单（调色板图标，`role="menuitemradio"`，每项带渐变色板）→ 语言 → 头像菜单。
 
 ### 4.2 新增或调整颜色
@@ -173,9 +184,8 @@ CSS 分四层覆盖，组件只引用 token：
 
 - **首屏可能闪一下默认皮肤与亮色**。明暗与皮肤都在 React 挂载后的 effect 里写入，默认 CSS 是 `classic` 亮色，已保存暗色或其它皮肤的用户在首帧会看到默认外观。彻底修复需要在 `frontend/index.html` 的 `<head>` 内加一段同步脚本，在首屏渲染前读取 `dnsmgr-theme` / `dnsmgr-skin`；当前未做。
 - **手动切换后不再跟随系统**。这是有意行为：只有从未点过明暗按钮时才监听 `prefers-color-scheme`；清掉 `localStorage` 的 `dnsmgr-theme` 可恢复跟随。
-- **主题不随账号同步**。偏好仅存本机 `localStorage`（键前缀 `dnsmgr-`），换设备或换浏览器需要重新选择；服务端没有偏好接口。
-- **`<meta name="theme-color">` 固定为 `#182230`**（`frontend/index.html`），移动端浏览器地址栏颜色不会随主题变化。
-- **主题不随账号同步**。偏好仅存本机 `localStorage`（键前缀 `dnsmgr-`），换设备或换浏览器需要重新选择；服务端没有偏好接口。
+- **明暗与语言不随账号同步**。偏好仅存本机 `localStorage`（键前缀 `dnsmgr-`），换设备或换浏览器需要重新选择。
+- **站点默认皮肤只在本地无选择时生效**。`GET /api/v1/preferences/skin` 是唯一公开的无鉴权 JSON，只返回皮肤名；管理员改默认皮肤不会覆盖已在本机选过皮肤的用户。
 - **`<meta name="theme-color">` 固定为 `#182230`**（`frontend/index.html`），移动端浏览器地址栏颜色不会随主题变化。
 
 ### 4.4 刻意不随主题的部分
@@ -334,7 +344,7 @@ export function canonicalPath(path: string): string {
 - `/record/:id` 深链仍可用，一级标题仍是「解析记录」（由 `resolvePage()` 正则给出）；域名列表里的域名链接与「解析记录」按钮继续深链到该路径。
 - `/record` 已加入 `src/app.ts` 的 `pagePatterns`，直连与刷新不会返回 404。
 - 域名账号页（`/account`）在账户面板下直接渲染 `<DnsCategories />`；旧入口 `/domain/category` 由 `mergedPaths` 映射过来，一级标题显示「域名账号」。
-- 证书账户页（`/cert/certaccount`）在 ACME 账户面板下渲染 `<CertificateCname />`（标题「CNAME 代理」）；证书订单页标题右侧的「续签设置」按钮打开 `<CertificateSettings onSaved>` 弹窗，保存成功后关闭弹窗并显示页面提示。
+- 证书账户页（`/cert/certaccount`）在 ACME 账户面板下渲染 `<CertificateCname />`（标题「CNAME 代理」）；证书订单页标题右侧的「续签设置」按钮打开 `<CertificateSettings onSaved>` 弹窗，保存成功后关闭弹窗并显示页面提示。该弹窗同时承载分用途通知渠道与「部署时间窗」（0–23 时，跨天环绕），手动运行部署不受时间窗限制。
 
 ## 7. 间距与栅格
 
@@ -385,9 +395,9 @@ export function canonicalPath(path: string): string {
 | `/cloudflare/hostnames/:id` | 创建主机名 → 创建自定义主机名 |
 | `/cloudflare/tunnels/:id` | 创建 Tunnel → 创建 Tunnel；添加主机名 → 添加公网主机名 |
 | `/schedule/stask` | 新建任务 → 新建定时切换 |
-| `/dmonitor/task` | 新建策略 → 新建 HTTP 容灾策略 |
+| `/dmonitor/task` | 新建策略 → 新建 HTTP 容灾策略；通知渠道 → 容灾通知渠道；清理日志 → 清理容灾日志 |
 | `/cert/certaccount` | 添加账户 → 创建 ACME 账户；添加代理 → 添加 CNAME 代理 |
-| `/cert/certorder` | 申请证书 → 申请新证书；导入证书 → 导入已签发证书；续签设置 → 续签设置 |
+| `/cert/certorder` | 申请证书 → 申请新证书；导入证书 → 导入已签发证书；续签设置 → 续签设置（含通知渠道与部署时间窗） |
 | `/cert/deployaccount`、`/cert/deploytask` | 添加账户 → 添加部署账户（编辑时为「编辑部署账户」）；新建任务 → 新建部署任务 |
 | `/optimizeip/opiplist` | 新建任务 → 新建优选任务；优选设置 → 优选设置（数据源、密钥、执行间隔） |
 | `/record/groups/:id` | 移动分组 → 移动记录到分组 |

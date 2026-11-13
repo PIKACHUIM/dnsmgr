@@ -173,6 +173,22 @@ async function offsetMinutes(c: Context<AppEnv>): Promise<number> {
   return Number.isFinite(parsed) && Math.abs(parsed) <= 840 ? parsed : 480;
 }
 
+/** 旧版证书部署时间窗：0–23 时，按 cron 时区偏移换算。 */
+async function readDeployWindowSettings(db: SqlDatabase): Promise<{ deployStart: number; deployEnd: number }> {
+  const rows = await db.query<{ key: string; value: string }>(
+    "SELECT key,value FROM app_settings WHERE key IN ('deploy_hour_start','deploy_hour_end')",
+  );
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  const bounded = (raw: string | undefined, fallback: number) => {
+    const parsed = Number(raw);
+    return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : fallback;
+  };
+  return {
+    deployStart: bounded(values.get('deploy_hour_start'), 0),
+    deployEnd: bounded(values.get('deploy_hour_end'), 23),
+  };
+}
+
 async function notifyFailure(c: Context<AppEnv>, domain: string, message: string): Promise<void> {
   try {
     await sendConfiguredNotifications(c, 'DNSMGR 定时任务失败', `域名 ${domain}：${message}`);
@@ -332,7 +348,8 @@ export function scheduleRoutes() {
   routes.get('/api/v1/system/certificate-renew', requireSession, async (c) => {
     requireSql(c);
     requireAdmin(c);
-    return c.json({ code: 0, ...(await readCertificateRenewSettings(db(c))) });
+    const window = await readDeployWindowSettings(db(c));
+    return c.json({ code: 0, ...(await readCertificateRenewSettings(db(c))), ...window });
   });
 
   routes.put('/api/v1/system/certificate-renew', requireSession, requireCsrf, async (c) => {
@@ -354,8 +371,19 @@ export function scheduleRoutes() {
     }
     if (body.enabled !== undefined) await putSetting(c, CERT_RENEW_ENABLED, body.enabled ? '1' : '0');
     if (body.notifyEnabled !== undefined) await putSetting(c, CERT_NOTIFY_ENABLED, body.notifyEnabled ? '1' : '0');
+    if (body.deployStart !== undefined || body.deployEnd !== undefined) {
+      const current = await readDeployWindowSettings(db(c));
+      const start = Number(body.deployStart ?? current.deployStart);
+      const end = Number(body.deployEnd ?? current.deployEnd);
+      if (!Number.isSafeInteger(start) || start < 0 || start > 23
+        || !Number.isSafeInteger(end) || end < 0 || end > 23) {
+        throw new AppError(400, '部署时间窗应为 0–23 时', 'INVALID_CERT_RENEW_SETTINGS');
+      }
+      await putSetting(c, 'deploy_hour_start', String(start));
+      await putSetting(c, 'deploy_hour_end', String(end));
+    }
     await audit(c, 'certificate-renew.settings', 'system', `enabled=${String(body.enabled ?? 'unchanged')} days=${String(body.days ?? 'unchanged')} notify=${String(body.notifyEnabled ?? 'unchanged')}`);
-    return c.json({ code: 0, ...(await readCertificateRenewSettings(db(c))) });
+    return c.json({ code: 0, ...(await readCertificateRenewSettings(db(c))), ...(await readDeployWindowSettings(db(c))) });
   });
 
   routes.post('/api/v1/system/certificate-renew/run', requireSession, requireCsrf, async (c) => {

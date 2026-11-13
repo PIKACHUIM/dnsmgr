@@ -222,7 +222,39 @@ export async function runDeployTask(
   }
 }
 
-export async function executeDeployDue(c: Context<AppEnv>, limit = 2): Promise<{ ran: number }> {
+/** 旧版 deploy_hour_start/end 的窗口判定：起止相同表示只允许该小时，跨天时按环绕处理。 */
+export function deployWindowAllows(hour: number, start: number, end: number): boolean {
+  if (start <= end) return hour >= start && hour <= end;
+  return hour >= start || hour <= end;
+}
+
+async function readDeployWindow(c: Context<AppEnv>): Promise<{ start: number; end: number; offset: number }> {
+  const rows = await c.get('db').query<{ key: string; value: string }>(
+    "SELECT key,value FROM app_settings WHERE key IN ('deploy_hour_start','deploy_hour_end','schedule_tz_offset')",
+  );
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  const bounded = (raw: string | undefined, fallback: number) => {
+    const parsed = Number(raw);
+    return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : fallback;
+  };
+  const rawOffset = Number(values.get('schedule_tz_offset') ?? 480);
+  return {
+    start: bounded(values.get('deploy_hour_start'), 0),
+    end: bounded(values.get('deploy_hour_end'), 23),
+    offset: Number.isFinite(rawOffset) && Math.abs(rawOffset) <= 840 ? rawOffset : 480,
+  };
+}
+
+export async function executeDeployDue(
+  c: Context<AppEnv>, limit = 2, options: { ignoreWindow?: boolean } = {},
+): Promise<{ ran: number; skipped?: string }> {
+  if (!options.ignoreWindow) {
+    const window = await readDeployWindow(c);
+    const local = (((nowSeconds() + window.offset * 60) % 86_400) + 86_400) % 86_400;
+    if (!deployWindowAllows(Math.floor(local / 3600), window.start, window.end)) {
+      return { ran: 0, skipped: 'OUTSIDE_DEPLOY_WINDOW' };
+    }
+  }
   const tasks = await c.get('db').query<DeployTaskRow>(
     `${DUE_TASKS_SQL} AND t.auto_deploy=1
       AND (t.last_run_at IS NULL OR t.last_run_at<o.updated_at)

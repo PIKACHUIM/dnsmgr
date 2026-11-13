@@ -32,7 +32,7 @@
 
 ## 旧版页面功能与当前实现的差异
 
-按 `route/app.php`、`app/controller/*.php` 与 `src/routes/*.ts` 逐项对照，旧版有入口但当前仍不等价的功能如下（均为页面/运维工具，不影响 DNS、证书、通知主链路）：
+按 `route/app.php`、`app/controller/*.php` 与 `src/routes/*.ts` 逐项对照，旧版页面与运维工具的当前状态如下（已迁移项注明等价范围，未迁移项标注原因；均不影响 DNS、证书、通知主链路）：
 
 | 旧版功能 | 旧入口 | 当前状态 |
 | --- | --- | --- |
@@ -42,6 +42,7 @@
 | 代理连通性测试 | `POST /system/proxytest` | 部分等价：`POST /api/v1/system/proxy/test` 校验代理地址格式并探测代理端口是否应答（HTTP/HTTPS）。Worker 运行时无法用代理发起出站请求，因此不验证出口 IP 与代理账号；SOCKS5 只校验配置，返回 `reachable: null` |
 | 逐渠道通知测试 | `/system/mailtest`、`/system/tgbottest`、`/system/webhooktest`、`/system/customwebhooktest` | `POST /api/v1/system/notify/test` 支持 `channel`（`webhook`/`wxpusher`/`telegram`/`wecom`/`dingtalk`/`feishu`/`mail`/`qqbot`）单渠道发送；省略时发往全部已配置渠道。未配置的渠道返回 400 `NOTIFICATION_NOT_CONFIGURED`，未知渠道返回 400 `INVALID_NOTIFICATION_CHANNEL` |
 | 分用途通知渠道开关 | `cert_notice_*`、`notice_*`、`expire_notice_*` | 已迁移：证书与部署通知用 `GET|PUT /api/v1/system/cert-notice`（`0` 关闭 / `1` 开启 / `2` 仅失败时），容灾切换通知用 `GET|PUT /api/v1/system/failover-notice`（开关两态），到期提醒沿用 `expire_notice_channels`；设置入口分别在证书设置弹窗与容灾概览页「通知渠道」。所有渠道关闭时，证书通知直接标记 `DISABLED`，不无限重试 |
+| 证书部署时间窗 | `deploy_hour_start`、`deploy_hour_end` | 已迁移：`GET|PUT /api/v1/system/certificate-renew` 读写 0–23 时，cron 按 `schedule_tz_offset` 换算本地小时，仅窗口内执行自动部署，跨天按环绕处理（如 22–6），起止相同表示只允许该小时；管理员手动「立即检查一次」与单任务运行不受窗口限制。非法小时返回 400 `INVALID_CERT_RENEW_SETTINGS` |
 | 优选数据源积分查询 | `POST /optimizeip/queryapi` | 已迁移为 `POST /api/v1/optimize/credit`（管理员 + CSRF，审计 `optimize.credit`）：wetest.vip 与 hostmonit 返回剩余次数；xingpingcn.top 无密钥免费源返回 400 `OPTIMIZE_CREDIT_NOT_APPLICABLE`。优选设置弹窗提供「查询积分」按钮 |
 | 容灾日志按天清理 | `POST /dmonitor/clean` | 已迁移为 `POST /api/v1/failover/logs/clean`（`days` 0–3650，审计 `failover.clean`），容灾概览页「清理日志」弹窗；写入时仍保留每任务最近 500 条 |
 | 外部状态探针 | `/dmtask/status`、`/optimizeip/status` | 已迁移，返回纯文本 `ok`/`error`：容灾按启用任务的 `last_check_at` 与 `2×间隔+60s` 判定，优选按启用任务的 `last_run_at` 与 3600 秒判定 |
