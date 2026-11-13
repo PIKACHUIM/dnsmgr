@@ -55,6 +55,22 @@ function cloudflareFetch() {
       }
       return json({ ResponseMetadata: requestId, Result: {} });
     }
+    if (url.hostname === 'api.routewize.com') {
+      if (url.pathname === '/v1/dns/host_info/') {
+        return json({ code: 0, records: [{
+          domain_name: 'www.example.com.', zone_name: 'example.com.', domain_record_id: 11,
+          rd_type: 'A', ttl: 600, view_id: 0, create_time: '2026-01-02T03:04:05Z',
+          record: [{ weight: 0, data: [{ record_value_id: 22, value: '192.0.2.9', status: 1 }] }],
+        }] });
+      }
+      return json({ code: 0, total_count: 2, domains: [
+        {
+          domain_name: 'www.example.com', zone_name: 'example.com', status: 'enabled',
+          count: 3, description: 'www memo', create_time: '2026-01-02T03:04:05Z',
+        },
+        { domain_name: 'example.com', zone_name: 'example.com', status: 'disabled', count: 1 },
+      ] });
+    }
     if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method !== 'PATCH' && init?.method !== 'DELETE') {
       return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
     }
@@ -398,11 +414,38 @@ describe('DNS account, domain and record API', () => {
     expect(await clientPaged.json()).toEqual([]);
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 4);
 
-    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['qingcloud', owner[0]!.account_id]);
-    const esaFanout = await signedRecords(domain!.id, {}, 'esa');
-    expect(esaFanout.status).toBe(501);
-    expect(await esaFanout.json()).toMatchObject({ reason: 'LEGACY_RECORD_BUDGET_UNSUPPORTED' });
-    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 4);
+    await testDb.db.execute('UPDATE dns_accounts SET type=?,config_cipher=? WHERE id=?', [
+      'qingcloud',
+      await encrypt(JSON.stringify({ access_key_id: 'ak', secret_access_key: 'sk' }), appKey, `dns-account/${owner[0]!.account_id}`),
+      owner[0]!.account_id,
+    ]);
+    const hostPage = await signedRecords(domain!.id, {}, 'esa');
+    expect(hostPage.status).toBe(200);
+    expect(await hostPage.json()).toEqual({ total: 2, rows: [
+      {
+        RecordId: 'www.example.com', Domain: 'example.com', Name: 'www', Type: null, Value: null,
+        Line: null, LineName: null, TTL: null, MX: null, Weight: null,
+        Remark: 'www memo', Status: 1, UpdateTime: '2026-01-02T03:04:05Z', Count: 3,
+      },
+      {
+        RecordId: 'example.com', Domain: 'example.com', Name: '@', Type: null, Value: null,
+        Line: null, LineName: null, TTL: null, MX: null, Weight: null,
+        Remark: null, Status: 0, UpdateTime: null, Count: 1,
+      },
+    ] });
+    expect(new URL(String((budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0])).pathname)
+      .toBe('/v1/dns/host/');
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 5);
+
+    const hostDetails = await signedRecords(domain!.id, { subdomain: 'www.example.com' }, 'esa');
+    expect(hostDetails.status).toBe(200);
+    expect(await hostDetails.json()).toMatchObject({ total: 1, rows: [{
+      RecordId: '11_22', Domain: 'example.com', Name: 'www', Type: 'A', Value: '192.0.2.9',
+      Line: '0', LineName: '0', TTL: 600, Remark: null, Status: 1,
+    }] });
+    expect(new URL(String((budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0])).searchParams.get('domain_name'))
+      .toBe('www.example.com.');
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 6);
   });
 
   it('updates signed record remarks for authorized providers', async () => {

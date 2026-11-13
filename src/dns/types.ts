@@ -24,6 +24,18 @@ export interface DnsRecord extends DnsRecordInput {
   updatedAt: string | null;
 }
 
+/** 旧版按主机名分组的记录列表项；用于青云这类需要逐主机读取明细的服务商。 */
+export interface DnsRecordHost {
+  /** 厂商返回的完整主机名，旧版用作展开子记录的 RecordId */
+  id: string;
+  /** 相对域名的主机记录，例如 www 或 @ */
+  name: string;
+  status: 0 | 1;
+  count: number;
+  remark: string | null;
+  updatedAt: string | null;
+}
+
 export interface DnsRecordLog {
   time: string | null;
   action: string;
@@ -88,6 +100,8 @@ export interface DnsProvider {
   listDomains(page: { page: number; pageSize: number; keyword?: string }): Promise<PageResult<DnsDomain>>;
   addDomain(name: string): Promise<DnsDomain>;
   listRecords(domain: DnsDomain, query: RecordQuery): Promise<PageResult<DnsRecord>>;
+  /** 可选：按主机名分组的摘要列表；用于一次请求无法逐组读取明细的服务商 */
+  listRecordHosts?(domain: DnsDomain, query: RecordQuery): Promise<PageResult<DnsRecordHost>>;
   addRecord(domain: DnsDomain, input: DnsRecordInput): Promise<string>;
   updateRecord(domain: DnsDomain, recordId: string, input: DnsRecordInput, options?: { clearRemark?: boolean }): Promise<void>;
   deleteRecord(domain: DnsDomain, recordId: string): Promise<void>;

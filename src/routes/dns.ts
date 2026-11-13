@@ -1010,9 +1010,6 @@ export function dnsRoutes() {
     if (status === '0' && domain.owner_type === 'cloudflare') {
       return clientPaged ? c.json([]) : c.json({ total: 0, rows: [] });
     }
-    if (c.env.RUNTIME.platform === 'esa' && domain.owner_type === 'qingcloud' && !name) {
-      throw new AppError(501, '当前 ESA 请求预算无法读取青云全部主机组记录，请指定 subdomain', 'LEGACY_RECORD_BUDGET_UNSUPPORTED');
-    }
 
     const owner: AccountRow = {
       id: domain.owner_id, type: domain.owner_type, name: domain.owner_name,
@@ -1028,8 +1025,17 @@ export function dnsRoutes() {
     };
     let items: DnsRecord[] = [];
     let total = 0;
+    let hostRows: Record<string, unknown>[] | null = null;
     try {
-      if (sortName) {
+      if (!name && provider.listRecordHosts) {
+        const result = await provider.listRecordHosts(target, { ...query, page: offset / pageSize + 1, pageSize });
+        total = result.total;
+        hostRows = result.items.map((host) => ({
+          RecordId: host.id, Domain: domain.name, Name: host.name, Type: null, Value: null,
+          Line: null, LineName: null, TTL: null, MX: null, Weight: null,
+          Remark: host.remark, Status: host.status, UpdateTime: host.updatedAt, Count: host.count,
+        }));
+      } else if (sortName) {
         const collected = await collectLegacyRecords(
           provider, target, query,
           c.env.RUNTIME.platform === 'esa' ? LEGACY_RECORD_SORT_MAX_ESA : LEGACY_RECORD_SORT_MAX,
@@ -1043,7 +1049,7 @@ export function dnsRoutes() {
       }
     } catch (error) { providerError(error); }
 
-    const rows = items.map((record) => ({
+    const rows = hostRows ?? items.map((record) => ({
       RecordId: record.id, Domain: domain.name, Name: record.name, Type: record.type, Value: record.value,
       Line: record.line, LineName: record.line, TTL: record.ttl, MX: record.mx, Weight: record.weight,
       Remark: record.remark, Status: record.status, UpdateTime: record.updatedAt,

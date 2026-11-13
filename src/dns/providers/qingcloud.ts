@@ -2,7 +2,7 @@ import { asArray, asRecord, num, sendJson } from '../http';
 import { base64Of, hmacSha256Raw } from '../sign';
 import {
   DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord,
-  type DnsRecordInput, type PageResult, type RecordQuery,
+  type DnsRecordHost, type DnsRecordInput, type PageResult, type RecordQuery,
 } from '../types';
 import { unsupported } from '../unsupported';
 
@@ -40,12 +40,20 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
   }
 
   const relativeName = (full: string, domain: string) => {
-    const suffix = `.${domain}`;
-    if (full === domain) return '@';
-    return full.endsWith(suffix) ? full.slice(0, -suffix.length) : full;
+    const host = full.replace(/\.$/, '');
+    const zone = domain.replace(/\.$/, '');
+    if (host === zone) return '@';
+    const suffix = `.${zone}`;
+    return host.endsWith(suffix) ? host.slice(0, -suffix.length) : host;
   };
 
   const fqdn = (name: string, domain: string) => (name === '@' || name === '' ? `${domain}.` : `${name}.${domain}.`);
+  /** 旧版青云客户端把 `subdomain` 用作完整主机名（展开分组时回传 domain_name），两种形式都要接受。 */
+  const hostName = (name: string, domain: string) => {
+    const value = name.trim().replace(/\.$/, '');
+    if (value === domain) return `${domain}.`;
+    return value.endsWith(`.${domain}`) ? `${value}.` : fqdn(value, domain);
+  };
 
   function toRecord(host: Record<string, unknown>, raw: unknown, domain: DnsDomain, groupWeight: number): DnsRecord {
     const row = asRecord(raw);
@@ -136,7 +144,7 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
     /** 该接口按主机名分组返回，需逐个主机读取明细；total 为主机组数量而非记录条数。 */
     async listRecords(domain, query: RecordQuery): Promise<PageResult<DnsRecord>> {
       if (query.name) {
-        const groups = await hostRecords(domain, fqdn(query.name, domain.name));
+        const groups = await hostRecords(domain, hostName(query.name, domain.name));
         let items = groups.flatMap((group) => group.records);
         if (query.type) items = items.filter((record) => record.type === query.type);
         if (query.value) items = items.filter((record) => record.value === query.value);
@@ -152,6 +160,23 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
       }
       const filtered = items.filter((record) => !query.status || String(record.status) === query.status);
       return { total: groups.total, items: filtered };
+    },
+
+    /** 一次请求只读取主机组摘要，供旧版记录列表分页；展开某个主机时再由 `listRecords` 读取明细。 */
+    async listRecordHosts(domain, query: RecordQuery): Promise<PageResult<DnsRecordHost>> {
+      const groups = await hosts(domain, query.page, Math.min(query.pageSize, 100), query.keyword);
+      const items = groups.items.map(({ host, count }) => {
+        const full = String(host.domain_name ?? '');
+        return {
+          id: full,
+          name: relativeName(full, domain.name),
+          status: (String(host.status ?? 'enabled') === 'disabled' ? 0 : 1) as 0 | 1,
+          count,
+          remark: typeof host.description === 'string' && host.description ? host.description : null,
+          updatedAt: typeof host.create_time === 'string' ? host.create_time : null,
+        };
+      });
+      return { total: groups.total, items };
     },
 
     async addRecord(domain, input: DnsRecordInput) {

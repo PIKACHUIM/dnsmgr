@@ -277,6 +277,33 @@ describe('QingCloud drive', () => {
     expect(page.items[0]).toMatchObject({ name: 'example.com' });
     expect(String((calls[0]!.init.headers as Record<string, string>).Authorization)).toMatch(/^QC-HMAC-SHA256 id:/);
   });
+
+  it('pages host groups in one request and accepts full host names', async () => {
+    const { calls, implementation } = fakeFetch((call) => {
+      if (call.url.includes('/v1/dns/host_info/')) {
+        return { body: { code: 0, records: [{
+          domain_name: 'www.example.com.', zone_name: 'example.com.', domain_record_id: 7,
+          rd_type: 'A', ttl: 600, view_id: 0,
+          record: [{ weight: 0, data: [{ record_value_id: 8, value: '1.1.1.1', status: 1 }] }],
+        }] } };
+      }
+      return { body: { code: 0, total_count: 1, domains: [{
+        domain_name: 'www.example.com.', zone_name: 'example.com.', status: 'enabled',
+        count: 2, description: 'memo', create_time: '2026-01-01T00:00:00Z',
+      }] } };
+    });
+    const provider = createQingcloudProvider({ access_key_id: 'id', secret_access_key: 'secret' }, implementation);
+    const groups = await provider.listRecordHosts!(zone, { page: 1, pageSize: 20 });
+    expect(groups).toEqual({ total: 1, items: [{
+      id: 'www.example.com.', name: 'www', status: 1, count: 2,
+      remark: 'memo', updatedAt: '2026-01-01T00:00:00Z',
+    }] });
+    expect(calls).toHaveLength(1);
+
+    const records = await provider.listRecords(zone, { page: 1, pageSize: 20, name: 'www.example.com.' });
+    expect(records.items[0]).toMatchObject({ id: '7_8', name: 'www', value: '1.1.1.1', ttl: 600 });
+    expect(new URL(calls[1]!.url).searchParams.get('domain_name')).toBe('www.example.com.');
+  });
 });
 
 describe('BT panel drive', () => {
