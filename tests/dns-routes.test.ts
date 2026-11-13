@@ -37,6 +37,24 @@ function cloudflareFetch() {
     if (url.pathname === '/client/v4/zones' && url.searchParams.get('name')) {
       return json({ success: true, result: [{ id: 'zone-1', name: 'example.com' }], result_info: { total_count: 1 } });
     }
+    if (url.hostname === 'open.volcengineapi.com') {
+      const requestId = { RequestId: 'huoshan-test' };
+      const action = url.searchParams.get('Action');
+      if (action === 'QueryZone') return json({ ResponseMetadata: requestId, Result: { TradeCode: 'free_inner' } });
+      if (action === 'ListLines') {
+        return json({ ResponseMetadata: requestId, Result: { Lines: [
+          { Value: 'default', Name: '默认', Level: 1 },
+          { Value: 'cn', Name: '中国', Level: 1 },
+          { Value: 'province', Name: '华东', Level: 2, FatherValue: 'cn' },
+        ] } });
+      }
+      if (action === 'ListCustomLines') {
+        return json({ ResponseMetadata: requestId, Result: {
+          TotalCount: 1, CustomerLines: [{ Line: 'cl1', NameCN: '自定义一' }],
+        } });
+      }
+      return json({ ResponseMetadata: requestId, Result: {} });
+    }
     if (/\/dns_records\/r\d+$/.test(url.pathname) && init?.method !== 'PATCH' && init?.method !== 'DELETE') {
       return json({ success: true, result: { id: 'r1', name: 'www.example.com', type: 'A', content: '1.1.1.1', ttl: 600 } });
     }
@@ -217,7 +235,7 @@ describe('DNS account, domain and record API', () => {
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
   });
 
-  it('serves signed domain details and rejects the unmigrated quick-login side effect', async () => {
+  it('serves signed domain details, quick-login links and provider line limits', async () => {
     const { cookie, csrf } = await session();
     const [domain] = await seedDomain(cookie, csrf);
     const apiKey = 'detail-api-key';
@@ -282,13 +300,31 @@ describe('DNS account, domain and record API', () => {
 
     await testDb.db.execute('UPDATE users SET level=2 WHERE id=1');
     const owner = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domain!.id]);
-    for (const type of ['goedge', 'huoshan']) {
-      await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', [type, owner[0]!.account_id]);
-      const unsupported = await signedDetail({}, 'esa');
-      expect(unsupported.status).toBe(501);
-      expect(await unsupported.json()).toMatchObject({ reason: 'LEGACY_DETAIL_BUDGET_UNSUPPORTED' });
-    }
+    const accountId = Number(owner[0]!.account_id);
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['goedge', accountId]);
+    const unsupported = await signedDetail({}, 'esa');
+    expect(unsupported.status).toBe(501);
+    expect(await unsupported.json()).toMatchObject({ reason: 'LEGACY_DETAIL_BUDGET_UNSUPPORTED' });
     expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount);
+
+    await testDb.db.execute('UPDATE dns_accounts SET type=?,config_cipher=? WHERE id=?', [
+      'huoshan',
+      await encrypt(JSON.stringify({ AccessKeyId: 'ak', SecretAccessKey: 'sk' }), appKey, `dns-account/${accountId}`),
+      accountId,
+    ]);
+    const huoshanDetail = await signedDetail({}, 'esa');
+    expect(huoshanDetail.status).toBe(200);
+    const huoshanPayload = await huoshanDetail.json() as {
+      data: { recordLine: { id: string; name: string; parent: string | null }[]; minTTL: number };
+    };
+    expect(huoshanPayload.data.recordLine).toEqual([
+      { id: 'default', name: '默认', parent: null },
+      { id: 'cn', name: '中国', parent: null },
+      { id: 'N.customer_lines', name: '自定义线路', parent: null },
+      { id: 'cl1', name: '自定义一', parent: 'N.customer_lines' },
+    ]);
+    expect(huoshanPayload.data.minTTL).toBe(600);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 3);
   });
 
   it('serves signed read-only record pages with legacy rows and bounded fallbacks', async () => {

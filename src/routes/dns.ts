@@ -98,7 +98,8 @@ const LEGACY_PROVIDER_ICONS: Record<string, string> = {
   dnsmgr: 'logo.png', goedge: 'logo.png', dynv6: 'dynv6.ico',
 };
 const LEGACY_ALIAS_RECORD_TYPES = new Set(['aliyun', 'henet', 'powerdns', 'spaceship']);
-const LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS = new Set(['goedge', 'huoshan']);
+// GoEdge 读取线路需要 1 次 AccessToken 请求加 5 次线路请求，超出 ESA 单请求 4 次 fetch 上限。
+const LEGACY_ESA_DETAIL_UNSUPPORTED_PROVIDERS = new Set(['goedge']);
 const LEGACY_CLIENT_PAGINATION_PROVIDERS = new Set(['aws', 'baidu', 'henet', 'namesilo', 'powerdns', 'technitium']);
 const LEGACY_RECORD_SORT_COLUMNS = new Set(['Name', 'Type', 'LineName', 'Value', 'UpdateTime']);
 const LEGACY_QUICKLOGIN_SECONDS = 300;
@@ -1010,7 +1011,7 @@ export function dnsRoutes() {
       return clientPaged ? c.json([]) : c.json({ total: 0, rows: [] });
     }
     if (c.env.RUNTIME.platform === 'esa' && domain.owner_type === 'qingcloud' && !name) {
-      throw new AppError(501, '当前 ESA 请求预算无法读取青云全部主机组记录', 'LEGACY_RECORD_BUDGET_UNSUPPORTED');
+      throw new AppError(501, '当前 ESA 请求预算无法读取青云全部主机组记录，请指定 subdomain', 'LEGACY_RECORD_BUDGET_UNSUPPORTED');
     }
 
     const owner: AccountRow = {
