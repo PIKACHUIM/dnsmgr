@@ -13,6 +13,7 @@ import { ru } from './locales/ru';
 import { zhHant } from './locales/zh-Hant';
 
 export type Theme = 'light' | 'dark';
+export type Skin = 'classic' | 'tech' | 'elegant' | 'aurora';
 export type Language = 'zh-Hans' | 'zh-Hant' | 'en' | 'ja' | 'ko' | 'fr' | 'de' | 'it' | 'es' | 'pt' | 'ru';
 
 export interface LanguageOption {
@@ -25,7 +26,17 @@ export interface LanguageOption {
   short: string;
 }
 
+export interface SkinOption {
+  id: Skin;
+  /** 主题名称（中文原文即词条 key） */
+  label: string;
+  /** 菜单色板的起止色 */
+  from: string;
+  to: string;
+}
+
 const THEME_KEY = 'dnsmgr-theme';
+const SKIN_KEY = 'dnsmgr-skin';
 const LANGUAGE_KEY = 'dnsmgr-language';
 
 /** 界面语言清单；顺序即切换菜单的显示顺序。 */
@@ -45,6 +56,14 @@ export const LANGUAGES: readonly LanguageOption[] = [
   { id: 'ru', label: 'Русский', tag: 'ru', short: 'RU' },
 ];
 
+/** 主题色板；顺序即切换菜单的显示顺序，`classic` 为 styles.css 的默认 token。 */
+export const SKINS: readonly SkinOption[] = [
+  { id: 'classic', label: '经典蓝', from: '#2457c5', to: '#7fa7ff' },
+  { id: 'tech', label: '科技深空', from: '#0b6f86', to: '#4fd0e3' },
+  { id: 'elegant', label: '素雅暖砂', from: '#4a6b57', to: '#c4a46a' },
+  { id: 'aurora', label: '极光幻紫', from: '#5b3fd0', to: '#f472b6' },
+];
+
 /** 简体中文即源码中的原始文案，其余语言查词典；缺少条目时回退到中文原文。 */
 const DICTIONARIES: Partial<Record<Language, Record<string, string>>> = {
   'zh-Hant': zhHant,
@@ -62,53 +81,120 @@ const DICTIONARIES: Partial<Record<Language, Record<string, string>>> = {
 /** 旧版本只存过 zh / en，读取时映射到新的语言标识。 */
 const LEGACY_LANGUAGES: Record<string, Language> = { zh: 'zh-Hans', en: 'en' };
 
+/** 浏览器语言主标签到界面语言的映射；匹配不到时回退英文。 */
+const BASE_LANGUAGES: Record<string, Language> = {
+  en: 'en', ja: 'ja', ko: 'ko', fr: 'fr', de: 'de', it: 'it', es: 'es', pt: 'pt', ru: 'ru',
+};
+
 interface Preferences {
   theme: Theme;
+  skin: Skin;
   language: Language;
   t: (key: string, params?: Record<string, string | number>) => string;
   toggleTheme: () => void;
+  setSkin: (skin: Skin) => void;
   setLanguage: (language: Language) => void;
 }
 
 const PreferencesContext = createContext<Preferences | null>(null);
 
-function initialTheme(): Theme {
+function systemTheme(): Theme {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function storedTheme(): Theme | null {
   try {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved === 'light' || saved === 'dark') return saved;
   } catch { /* storage may be blocked */ }
-  return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return null;
 }
 
-function initialLanguage(): Language {
+function storedSkin(): Skin | null {
+  try {
+    const saved = localStorage.getItem(SKIN_KEY);
+    if (SKINS.some((item) => item.id === saved)) return saved as Skin;
+  } catch { /* storage may be blocked */ }
+  return null;
+}
+
+/** 按浏览器语言列表挑第一个可用的界面语言；都不匹配时用英文。 */
+function detectLanguage(): Language {
+  const tags = typeof navigator === 'undefined'
+    ? []
+    : [...(navigator.languages ?? []), navigator.language].filter((tag): tag is string => typeof tag === 'string');
+  for (const raw of tags) {
+    const tag = raw.toLowerCase().replace('_', '-');
+    if (tag === 'zh' || tag.startsWith('zh-hans') || tag.startsWith('zh-cn') || tag.startsWith('zh-sg')) return 'zh-Hans';
+    if (tag.startsWith('zh-')) return 'zh-Hant';
+    const base = tag.split('-')[0] ?? '';
+    const matched = BASE_LANGUAGES[base];
+    if (matched) return matched;
+  }
+  return 'en';
+}
+
+function storedLanguage(): Language | null {
   try {
     const saved = localStorage.getItem(LANGUAGE_KEY);
-    if (!saved) return 'zh-Hans';
-    if (LEGACY_LANGUAGES[saved]) return LEGACY_LANGUAGES[saved];
-    return LANGUAGES.some((item) => item.id === saved) ? (saved as Language) : 'zh-Hans';
-  } catch {
-    return 'zh-Hans';
-  }
+    if (saved) {
+      if (LEGACY_LANGUAGES[saved]) return LEGACY_LANGUAGES[saved];
+      if (LANGUAGES.some((item) => item.id === saved)) return saved as Language;
+    }
+  } catch { /* storage may be blocked */ }
+  return null;
 }
 
 function languageTag(language: Language): string {
-  return LANGUAGES.find((item) => item.id === language)?.tag ?? 'zh-CN';
+  return LANGUAGES.find((item) => item.id === language)?.tag ?? 'en';
 }
 
 export function PreferencesProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(initialTheme);
-  const [language, setLanguage] = useState<Language>(initialLanguage);
+  const [scheme, setScheme] = useState<{ theme: Theme; followsSystem: boolean }>(() => {
+    const stored = storedTheme();
+    return { theme: stored ?? systemTheme(), followsSystem: stored === null };
+  });
+  const [skin, setSkin] = useState<Skin>(() => storedSkin() ?? 'classic');
+  const [locale, setLocale] = useState<{ value: Language; chosen: boolean }>(() => {
+    const stored = storedLanguage();
+    return { value: stored ?? detectLanguage(), chosen: stored !== null };
+  });
+  const { theme, followsSystem } = scheme;
+  const language = locale.value;
+
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const media = matchMedia('(prefers-color-scheme: dark)');
+    const changed = (event: MediaQueryListEvent) => setScheme((current) => (current.followsSystem
+      ? { ...current, theme: event.matches ? 'dark' : 'light' }
+      : current));
+    media.addEventListener('change', changed);
+    return () => media.removeEventListener('change', changed);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
-    try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage may be blocked */ }
-  }, [theme]);
+    if (!followsSystem) { try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage may be blocked */ } }
+  }, [theme, followsSystem]);
+
+  useEffect(() => {
+    document.documentElement.dataset.skin = skin;
+    try { localStorage.setItem(SKIN_KEY, skin); } catch { /* storage may be blocked */ }
+  }, [skin]);
 
   useEffect(() => {
     document.documentElement.lang = languageTag(language);
-    try { localStorage.setItem(LANGUAGE_KEY, language); } catch { /* storage may be blocked */ }
-  }, [language]);
+    if (locale.chosen) { try { localStorage.setItem(LANGUAGE_KEY, language); } catch { /* storage may be blocked */ } }
+  }, [language, locale.chosen]);
+
+  const toggleTheme = useCallback(() => {
+    setScheme((current) => ({ theme: current.theme === 'dark' ? 'light' : 'dark', followsSystem: false }));
+  }, []);
+
+  const setLanguage = useCallback((next: Language) => {
+    setLocale({ value: next, chosen: true });
+  }, []);
 
   const t = useCallback((key: string, params?: Record<string, string | number>) => {
     let text = DICTIONARIES[language]?.[key] ?? key;
@@ -117,11 +203,13 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   }, [language]);
   const value = useMemo<Preferences>(() => ({
     theme,
+    skin,
     language,
     t,
-    toggleTheme: () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
+    toggleTheme,
+    setSkin,
     setLanguage,
-  }), [theme, language, t]);
+  }), [theme, skin, language, t, toggleTheme, setLanguage]);
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
 }
@@ -140,6 +228,20 @@ export function ThemeToggle() {
   </button>;
 }
 
+export function ThemeMenu() {
+  const { skin, setSkin, t } = usePreferences();
+  const label = t('切换主题');
+  return <Menu label={label} className="theme-menu" trigger={<Icon name="palette" />}>
+    {(close) => SKINS.map((item) => <button
+      key={item.id} type="button" role="menuitemradio" aria-checked={item.id === skin}
+      className="menu-item" onClick={() => { setSkin(item.id); close(); }}
+    >
+      <span className="theme-swatch" style={{ backgroundImage: `linear-gradient(135deg, ${item.from}, ${item.to})` }} aria-hidden="true" />
+      {t(item.label)}
+    </button>)}
+  </Menu>;
+}
+
 export function LanguageToggle() {
   const { language, t, setLanguage } = usePreferences();
   const current = LANGUAGES.find((item) => item.id === language) ?? ZH_HANS;
@@ -153,5 +255,5 @@ export function LanguageToggle() {
 }
 
 export function PreferenceToggles() {
-  return <div className="preference-toggles"><ThemeToggle /><LanguageToggle /></div>;
+  return <div className="preference-toggles"><ThemeToggle /><ThemeMenu /><LanguageToggle /></div>;
 }

@@ -2,9 +2,19 @@
 
 本文面向接手 `frontend/` 的开发者，说明当前控制台的目录结构、主题与语言机制、导航与布局规范、弹窗约定、已知边界和验证流程。文中的「边界」是刻意保留的取舍，不是遗漏；改动前请先确认是否要突破这些边界，以及需要同步修改哪些测试。
 
-> 对应交付：本轮继续合并导航（域名管理分组、解析管理、证书代理与续签设置内嵌、侧边栏收窄、首页移除迁移状态）；上一轮为提交 `953d362`（优选设置并入优选任务页）；再上一轮 `160c02b`（表单全部弹窗化、说明文字收进图标、头像菜单、十一项语言、指标单行）。
+> 对应交付：本轮新增四套主题、明暗与语言默认跟随浏览器；上一轮为域名管理分组与解析管理（提交 `7e3a023`）；再上一轮 `953d362`（优选设置并入优选任务页）、`160c02b`（表单全部弹窗化、说明文字收进图标、头像菜单、十一项语言、指标单行）。
 
 ## 本轮交付摘要
+
+| 需求 | 实现 | 主要文件 |
+| --- | --- | --- |
+| 四套主题 | `classic`（经典蓝）、`tech`（科技深空）、`elegant`（素雅暖砂）、`aurora`（极光幻紫），每套各有亮暗两组 token；顶栏调色板菜单切换 | `preferences.tsx`、`styles.css` |
+| 跟随浏览器默认 | 无保存值时明暗取 `prefers-color-scheme` 并监听变化；语言取 `navigator.languages`，匹配不到用英文 | `preferences.tsx` |
+| 主题控件 | 新增 `palette` 图标与 `ThemeMenu`（`role="menuitemradio"`），控制台顶栏与登录页都可用 | `icons.tsx`、`Console.tsx`、`Auth.tsx` |
+
+验证：typecheck、build:frontend、`npm test` 330 条、`npm run test:e2e` 3 条、`docs:build`/`docs:verify` 均通过。
+
+## 上一轮交付摘要（导航合并）
 
 | 需求 | 实现 | 主要文件 |
 | --- | --- | --- |
@@ -15,9 +25,9 @@
 | 侧边栏收窄 | `--sidebar-width` 216→196px，移动端抽屉 248→232px；长标签用省略号截断 | `styles.css` |
 | 移除迁移状态 | 首页删除「功能迁移状态」面板与相关样式，只保留 `/api/v1/bootstrap` 能力位校验 | `Console.tsx`、`styles.css` |
 
-旧路径 `/domain/category`、`/cert/cname`、`/cert/certset` 继续可访问，由 `mergedPaths` 映射到新页面。验证：typecheck、build:frontend、`npm test` 330 条、`npm run test:e2e` 2 条、`docs:build`/`docs:verify` 均通过。
+旧路径 `/domain/category`、`/cert/cname`、`/cert/certset` 继续可访问，由 `mergedPaths` 映射到新页面。交付时验证：typecheck、build:frontend、`npm test` 330 条、`npm run test:e2e` 2 条、`docs:build`/`docs:verify` 均通过。
 
-## 上一轮交付摘要
+## 更早交付摘要（弹窗化与多语言）
 
 这一轮前端改动来自四条明确需求：所有新增/编辑表单改成弹窗、同类信息（启用策略/备用线路/最近错误）保持一行、操作日志并入系统设置并把改密/退出收进头像菜单、语言扩到繁体中文与八种外语。落到代码上包括：
 
@@ -104,22 +114,36 @@ npm run dev:frontend        # Vite 热更新，127.0.0.1:5173，代理到 8787
 
 所有写请求走 `api.ts` 的 `send()`，必须带 `X-CSRF-Token: session.csrfToken`；CSRF token 只存在内存，不写 `localStorage` 或 `sessionStorage`。401 统一交给 `onExpired()`，由上层切回登录页。**不要在组件里直接用 `fetch`**，登录/验证码图片是唯一例外（`Auth.tsx` 读取 SVG 响应）。
 
-## 4. 主题（亮色 / 暗色）
+## 4. 主题（明暗 × 四套皮肤）
 
 ### 4.1 机制
 
-`PreferencesProvider` 在挂载后把主题写到根元素：
+`PreferencesProvider` 在挂载后把明暗与皮肤分别写到根元素：
 
 ```ts
 document.documentElement.dataset.theme = theme;   // 'light' | 'dark'
+document.documentElement.dataset.skin = skin;      // 'classic' | 'tech' | 'elegant' | 'aurora'
 document.documentElement.style.colorScheme = theme;
 ```
 
-CSS 中 `:root` 定义亮色 token，`:root[data-theme='dark']` 覆盖同名 token，所有组件只引用 token，不写死颜色（少数刻意例外见 4.4）。选择保存在 `localStorage` 的 `dnsmgr-theme`；没有保存值时读取 `prefers-color-scheme`。
+CSS 分四层覆盖，组件只引用 token：
+
+| 选择器 | 作用 |
+| --- | --- |
+| `:root` | `classic` 亮色（默认 token） |
+| `:root[data-theme='dark']` | `classic` 暗色 |
+| `:root[data-skin='tech'\|'elegant'\|'aurora']` | 该皮肤亮色 |
+| `:root[data-skin='…'][data-theme='dark']` | 该皮肤暗色（特异性最高） |
+
+默认值与跟随规则：
+
+- 没有 `dnsmgr-theme` 时按 `prefers-color-scheme` 取明暗，并监听 `matchMedia('(prefers-color-scheme: dark)')` 实时跟随；点击顶栏太阳/月亮后写入 `dnsmgr-theme`，从此以用户选择为准。
+- 皮肤存 `dnsmgr-skin`，缺省 `classic`；登录页与控制台顶栏都能切换。
+- 顶栏顺序：明暗切换 → 主题菜单（调色板图标，`role="menuitemradio"`，每项带渐变色板）→ 语言 → 头像菜单。
 
 ### 4.2 新增或调整颜色
 
-只改 `styles.css` 顶部的两处 token 块，不要在组件里写颜色。常用 token：
+每套皮肤都要写两组完整 token（亮色块 + `[data-theme='dark']` 块），漏写的 token 会回落到 `classic` 的值。常用 token：
 
 | token | 用途 |
 | --- | --- |
@@ -130,13 +154,16 @@ CSS 中 `:root` 定义亮色 token，`:root[data-theme='dark']` 覆盖同名 tok
 | `--color-sidebar*` | 侧边栏（亮暗两套均为深色，暗色更深） |
 | `--color-success` / `--color-warning` / `--color-error*` | 状态色 |
 | `--color-backdrop` / `--shadow-*` / `--color-focus` | 遮罩、阴影、焦点环 |
+| `--app-ambient` / `--app-sidebar-image` | 页面光晕 / 侧边栏渐变，`classic` 为 `none` |
 
-暗色下主按钮使用 `--color-accent` 作底色、`--color-surface` 作文字色，新增按钮样式请沿用这一组合，避免硬编码 `#fff`。
+暗色下主按钮使用 `--color-accent` 作底色、`--color-surface` 作文字色，新增按钮样式请沿用这一组合，避免硬编码 `#fff`。皮肤可以加极低透明度的 `radial-gradient` 光晕，但不要引入布局尺寸变化。
 
 ### 4.3 已知边界
 
-- **首屏可能闪一下亮色**。主题在 React 挂载后的 effect 里写入 `data-theme`，默认 CSS 是亮色，已保存暗色的用户在首帧会看到亮色。彻底修复需要在 `frontend/index.html` 的 `<head>` 内加一段同步脚本，在首屏渲染前读取 `dnsmgr-theme` 并设置 `documentElement.dataset.theme`；当前未做。
-- **不跟随系统主题实时变化**。只在首次加载时读取一次 `prefers-color-scheme`，之后以用户选择为准，不监听 `matchMedia` 变化。
+- **首屏可能闪一下默认皮肤与亮色**。明暗与皮肤都在 React 挂载后的 effect 里写入，默认 CSS 是 `classic` 亮色，已保存暗色或其它皮肤的用户在首帧会看到默认外观。彻底修复需要在 `frontend/index.html` 的 `<head>` 内加一段同步脚本，在首屏渲染前读取 `dnsmgr-theme` / `dnsmgr-skin`；当前未做。
+- **手动切换后不再跟随系统**。这是有意行为：只有从未点过明暗按钮时才监听 `prefers-color-scheme`；清掉 `localStorage` 的 `dnsmgr-theme` 可恢复跟随。
+- **主题不随账号同步**。偏好仅存本机 `localStorage`（键前缀 `dnsmgr-`），换设备或换浏览器需要重新选择；服务端没有偏好接口。
+- **`<meta name="theme-color">` 固定为 `#182230`**（`frontend/index.html`），移动端浏览器地址栏颜色不会随主题变化。
 - **主题不随账号同步**。偏好仅存本机 `localStorage`（键前缀 `dnsmgr-`），换设备或换浏览器需要重新选择；服务端没有偏好接口。
 - **`<meta name="theme-color">` 固定为 `#182230`**（`frontend/index.html`），移动端浏览器地址栏颜色不会随主题变化。
 
@@ -159,8 +186,9 @@ t('已保留「{label}」的导航入口…', { label: t(page.item.label) })
 - 语言清单 `LANGUAGES` 定义在 `preferences.tsx`，顺序即下拉菜单顺序：简体中文、繁體中文、English、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский。
 - 简体中文直接返回 key；其它语言查 `DICTIONARIES`，查不到时回退 key，因此**漏翻不会报错，也不会显示 undefined**。
 - 支持 `{name}` 占位符替换，用于把变量安全插进句子。
-- `document.documentElement.lang` 按语言写成 `zh-CN`、`zh-TW`、`en`、`ja` 等 BCP 47 标签；选择保存在 `localStorage` 的 `dnsmgr-language`。
-- 旧版本只存过 `zh` / `en`，`initialLanguage()` 会把 `zh` 映射到 `zh-Hans`，不认识的取值回落到简体中文。
+- `document.documentElement.lang` 按语言写成 `zh-CN`、`zh-TW`、`en`、`ja` 等 BCP 47 标签；用户手动选择后写入 `localStorage` 的 `dnsmgr-language`，未选择时不落盘、每次按浏览器默认检测。
+- 没有保存值时按浏览器默认：依次检查 `navigator.languages` 与 `navigator.language`，`zh` / `zh-CN` / `zh-SG` / `zh-Hans*` 取简体，其它 `zh-*` 取繁体，`en/ja/ko/fr/de/it/es/pt/ru` 取主标签；**都匹配不上时用英文**。
+- 旧版本只存过 `zh` / `en`，读取时把 `zh` 映射到 `zh-Hans`；保存值不是受支持的语言时重新按浏览器默认检测。
 - 词条全部在 `frontend/src/locales/`：`en.ts`、`zh-Hant.ts`、`ja.ts`、`ko.ts`、`fr.ts`、`de.ts`、`it.ts`、`es.ts`、`pt.ts`、`ru.ts`。新增 key 必须同时补齐 10 份词典，键顺序与 `en.ts` 一致。
 
 ### 5.2 新增文案的两种写法
@@ -178,7 +206,7 @@ t('已保留「{label}」的导航入口…', { label: t(page.item.label) })
 - 首页运行环境 / 当前会话两块面板（原「功能迁移状态」面板已移除，能力位只用于校验 `/api/v1/bootstrap` 响应）；
 - 登录、初始化、TOTP、图形验证码整页；
 - DNS 账户页（含服务商凭据字段标签、可选后缀）；
-- 头像菜单、语言菜单、弹窗关闭按钮等公共控件。
+- 头像菜单、主题菜单、语言菜单、弹窗关闭按钮等公共控件。
 
 **仍为中文**：
 
@@ -379,18 +407,18 @@ export function canonicalPath(path: string): string {
 
 ## 9. 设计边界与已知限制（交接重点）
 
-1. **语言覆盖不完整**：见 5.3。11 个语言选项里，词典只覆盖外壳、登录链路、DNS 账户页与公共控件；业务页正文仍为中文，非中文模式下会出现「外壳外语、正文中文」的混合界面。10 份词典各 263 条 key，新增文案要同时补 10 处。
+1. **语言覆盖不完整**：见 5.3。11 个语言选项里，词典只覆盖外壳、登录链路、DNS 账户页与公共控件；业务页正文仍为中文，非中文模式下会出现「外壳外语、正文中文」的混合界面。10 份词典各 268 条 key，新增文案要同时补 10 处。浏览器语言匹配不到时默认英文，因此非中文用户会直接看到「外壳英文、业务页中文」的混合界面，这正是 5.3 的覆盖范围问题。
 2. **服务端消息不翻译**：后端统一返回中文，`errorMessage()` 直接展示；要消除中文错误，需要后端返回错误码并在前端映射。
 3. **品牌与标题不翻译**：`Brand`、`document.title`、`<meta name="theme-color">` 均为固定中文/固定色。
-4. **主题首帧闪烁**：见 4.3，需要在 `index.html` 加首屏脚本才能彻底消除。
+4. **主题首帧闪烁**：见 4.3，明暗与皮肤都会在首帧回落到 `classic` 亮色，需要在 `index.html` 加首屏脚本才能彻底消除。
 5. **偏好不同步**：主题与语言只在本机，换设备需重选，服务端无偏好字段。
 6. **弹窗不支持嵌套/叠加**，也不支持从弹窗内跳转到别的弹窗。
 7. **间距方案依赖 DOM 结构**：`.panel` 的内边距 + 标题负外边距是全局约定，直接在 `.panel` 里塞入自带左右 padding 的第三方块会出现 48px 缩进。
 8. **表格仍是普通表格**：无列冻结、无虚拟滚动、无列宽持久化；大数据量靠分页接口。
 9. **单包构建**：`dist/frontend/assets/index-*.js` 约 664KB（gzip 约 173KB），未按路由拆分，构建时的 chunk 体积警告属预期。
-10. **图标集很小**：`icons.tsx` 只有 `grid/dns/shield/menu/close/arrow/logout/server/lock/sun/moon/globe/plus/panel/panel-expand/info/alert/key`，新增图标需同时改 `IconName` 与 `paths`。
+10. **图标集很小**：`icons.tsx` 只有 `grid/dns/shield/menu/close/arrow/logout/server/lock/sun/moon/globe/plus/panel/panel-expand/info/alert/key/sliders/palette`，新增图标需同时改 `IconName` 与 `paths`。
 11. **可访问性只做了基础项**：语义角色、焦点可见、焦点陷阱、跳过导航链接、`aria-label` 已覆盖；未做屏幕阅读器实测，也未接入自动对比度审计。
-12. **自动化视觉验证有限**：e2e 只有两条用例（初始化→登录→响应式→11 语言切换→域名管理导航→证书弹窗与续签设置→到期提醒→登录设置→DNS 账户与分类→解析管理选域名→解析记录→TOTP→改密；解析工具页），其余页面靠手工截图目检。Playwright 固定 `channel: 'chrome'`，未覆盖 Firefox/Safari 与真机。
+12. **自动化视觉验证有限**：e2e 只有三条用例（初始化→登录→响应式→四套主题切换与暗色组合→11 语言切换→域名管理导航→证书弹窗与续签设置→到期提醒→登录设置→DNS 账户与分类→解析管理选域名→解析记录→TOTP→改密；解析工具页；浏览器语言与颜色方案默认值），其余页面靠手工截图目检。Playwright 固定 `channel: 'chrome'` 与 `locale: 'zh-CN'`，未覆盖 Firefox/Safari 与真机。
 13. **无组件级测试**：`tests/record-import.test.ts` 只覆盖 `frontend/src/record-import.ts` 这类纯函数；`preferences`、`Modal`、`navigation` 与各页面组件没有渲染测试，交互行为依赖 e2e 与手工目检。
 14. **暗色未做打印/导出适配**：打印样式未单独定义，深色界面直接打印会是深底。
 
@@ -399,13 +427,14 @@ export function canonicalPath(path: string): string {
 ```bash
 npm run typecheck
 npm test                 # 330 条，服务端与共享逻辑
-npm run test:e2e         # 2 条，自动构建前端并起本地服务（端口 8789）
+npm run test:e2e         # 3 条，自动构建前端并起本地服务（端口 8789）
 npm run docs:build && npm run docs:verify
 ```
 
 `test:e2e` 的依赖与注意点：
 
 - 使用本机 Chrome（`channel: 'chrome'`）与内存 SQLite（`LOCAL_EPHEMERAL=1`），每次运行都是全新数据库；
+- `use.locale` 固定为 `zh-CN`，否则浏览器默认英文会改变导航与按钮的可访问名；语言回退与系统暗色由第三条用例用独立 `browser.newContext({ locale, colorScheme })` 验证；
 - 断言文案、链接名、一级标题即导航标签，改名必须同步；
 - 断言 `localStorage` 键以 `dnsmgr-` 开头；
 - 截图调用传 `animations: 'disabled'`，否则入场动画会让断言/截图抓到半透明中间态；
@@ -413,8 +442,8 @@ npm run docs:build && npm run docs:verify
 
 改动 UI 后建议的手工目检顺序（1440 与 375 两个宽度）：
 
-1. `/login`：亮/暗各一次，验证码换行、密码显示切换、右上角主题与语言菜单（11 项、原生语言名）；
-2. `/`：两块面板、侧边栏滚动、折叠按钮与窄侧边栏下菜单是否截断、桌面端折叠与刷新后保持、头像菜单；
+1. `/login`：四套主题 × 亮/暗各一次，验证码换行、密码显示切换、右上角明暗/主题/语言三个控件（语言 11 项、原生语言名）；
+2. `/`：两块面板、侧边栏滚动、折叠按钮与窄侧边栏下菜单是否截断、桌面端折叠与刷新后保持、头像菜单；切换主题后确认侧边栏渐变与页面光晕不改变布局；
 3. `/account`、`/system/account`：弹窗打开/关闭、Esc、移动端全屏、提交后列表刷新；域名账号页下方分类面板的间距；
 4. `/domain`、`/cert/certorder`：多面板间距、表格左右留白、弹窗内字段不贴边、标题右侧触发器不换行；证书订单页的「续签设置」弹窗、证书账户页的 CNAME 代理面板；
 5. `/system/tasks`、`/system/maintenance`：合并页顺序与间距、375px 下 crontab 代码块只在块内横向滚动、旧路径 `/system/cronset` 直连仍能渲染；
@@ -431,6 +460,8 @@ npm run docs:build && npm run docs:verify
 - [ ] 动态路由页面在 `resolvePage()` 增加正则与标题；
 - [ ] 使用 `.panel` + `.panel-heading` + `.dns-form` / `.table-wrap`，不要自写左右 24px；
 - [ ] 新增中文文案若属于已接入词典的范围，同步补 `frontend/src/locales/` 下 10 份词典（以 `en.ts` 的键为基准）；
+- [ ] 颜色只用 token：改现有皮肤就补亮色与 `[data-theme='dark']` 两处；新增皮肤还要加 `SKINS`、完整的 28 个 token × 2 组、词典里的皮肤名与 `data-skin` 断言；
+- [ ] 新控件若放在顶栏，确认 375px 下不挤出横向滚动（e2e 会断言 `scrollWidth <= innerWidth`）；
 - [ ] 说明文字用 `InfoTip`，不要写成常驻段落；字段标签与图标分开写，见 7.3；
 - [ ] 新增/编辑表单用 `Modal`，触发器放 `.panel-heading-actions`；
 - [ ] 更新 `tests/e2e/foundation.spec.ts` 中受影响的链接名、标题与弹窗流程；
@@ -482,7 +513,7 @@ curl -s https://dnsmgrui-work.52pika.workers.dev/health
 
 优先级从高到低：
 
-1. 在 `frontend/index.html` 加首屏主题脚本，消除暗色闪烁（见 4.3）；
+1. 在 `frontend/index.html` 加首屏主题脚本（同时读取 `dnsmgr-theme` 与 `dnsmgr-skin`），消除按需暗色/皮肤的闪烁（见 4.3）；
 2. 按页面推进英文化：先 `/domain` 与 `/cert/*`，最后统一服务端错误码映射；
 3. 为 `Modal`、`preferences`、`navigation` 增加组件级测试（可用 Vitest + Testing Library，或将关键路径并入 e2e）；
 4. 拆分 528KB 主包（按页面动态 `import()`），同时评估首屏体积；

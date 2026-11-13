@@ -1,7 +1,9 @@
 :root {
   font-family: 'IBM Plex Sans', 'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', sans-serif;
   color: var(--color-text);
-  background: var(--color-bg);
+  background-color: var(--color-bg);
+  background-image: var(--app-ambient);
+  background-attachment: fixed;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -31,6 +33,8 @@
   --shadow-panel: 0 2px 5px rgb(24 34 48 / 3%);
   --shadow-drawer: 12px 0 32px rgb(12 23 40 / 20%);
   --shadow-modal: 0 18px 48px rgb(9 17 28 / 24%);
+  --app-ambient: none;
+  --app-sidebar-image: none;
   --font-mono: 'IBM Plex Mono', 'Cascadia Code', 'Consolas', monospace;
   --font-xs: 12px;
   --font-sm: 14px;
@@ -78,6 +82,203 @@
   --shadow-panel: 0 2px 10px rgb(0 0 0 / 38%);
   --shadow-drawer: 12px 0 32px rgb(0 0 0 / 55%);
   --shadow-modal: 0 20px 56px rgb(0 0 0 / 55%);
+  --app-ambient: none;
+  --app-sidebar-image: none;
+}
+
+/* 科技深空：青蓝冷色 + 深空导航，暗色下带极轻的冷光晕。 */
+:root[data-skin='tech'] {
+  --color-bg: #eef4f8;
+  --color-surface: #ffffff;
+  --color-text: #0f1c26;
+  --color-muted: #4f6473;
+  --color-subtle: #e5eef4;
+  --color-border: #cfe0e9;
+  --color-control-border: #79909f;
+  --color-accent: #0b6f86;
+  --color-accent-hover: #08566a;
+  --color-accent-soft: #e1f2f7;
+  --color-sidebar: #081a24;
+  --color-sidebar-hover: #102b3b;
+  --color-sidebar-text: #e4f3fa;
+  --color-sidebar-muted: #8eadbd;
+  --color-sidebar-border: #1b3a4b;
+  --color-sidebar-active: #124457;
+  --color-success: #116b49;
+  --color-warning: #8a5800;
+  --color-error: #a02f2b;
+  --color-error-bg: #fff3f1;
+  --color-error-border: #d6968f;
+  --color-backdrop: rgb(5 18 26 / 58%);
+  --color-focus: #0b6f86;
+  --shadow-panel: 0 2px 8px rgb(11 42 58 / 6%);
+  --shadow-drawer: 12px 0 32px rgb(5 18 26 / 24%);
+  --shadow-modal: 0 18px 48px rgb(5 18 26 / 26%);
+  --app-ambient: radial-gradient(1100px 520px at 85% -10%, rgb(24 148 168 / 14%), transparent 62%),
+    radial-gradient(900px 480px at -10% 108%, rgb(24 92 140 / 10%), transparent 60%);
+  --app-sidebar-image: linear-gradient(180deg, rgb(30 160 180 / 16%), transparent 46%);
+}
+
+:root[data-skin='tech'][data-theme='dark'] {
+  --color-bg: #061019;
+  --color-surface: #0e1c27;
+  --color-text: #e2f0f7;
+  --color-muted: #93a9b8;
+  --color-subtle: #132631;
+  --color-border: #1e3947;
+  --color-control-border: #3f6273;
+  --color-accent: #4fd0e3;
+  --color-accent-hover: #78e2f0;
+  --color-accent-soft: #0f303d;
+  --color-sidebar: #040c12;
+  --color-sidebar-hover: #0c1e29;
+  --color-sidebar-text: #e2f0f7;
+  --color-sidebar-muted: #7f9aa9;
+  --color-sidebar-border: #152b38;
+  --color-sidebar-active: #11384a;
+  --color-success: #4fbf8a;
+  --color-warning: #e0b062;
+  --color-error: #ff9b92;
+  --color-error-bg: #2a1917;
+  --color-error-border: #6f3a34;
+  --color-backdrop: rgb(1 6 10 / 76%);
+  --color-focus: #78e2f0;
+  --shadow-panel: 0 2px 12px rgb(0 0 0 / 42%);
+  --shadow-drawer: 12px 0 32px rgb(0 0 0 / 58%);
+  --shadow-modal: 0 20px 56px rgb(0 0 0 / 58%);
+  --app-ambient: radial-gradient(1000px 520px at 82% -12%, rgb(30 170 190 / 16%), transparent 62%),
+    radial-gradient(900px 500px at -8% 110%, rgb(30 100 200 / 12%), transparent 60%);
+  --app-sidebar-image: linear-gradient(180deg, rgb(40 190 210 / 14%), transparent 48%);
+}
+
+/* 素雅暖砂：暖米底色 + 墨绿主色，强调留白与低饱和。 */
+:root[data-skin='elegant'] {
+  --color-bg: #f6f2ea;
+  --color-surface: #fffdf8;
+  --color-text: #241f19;
+  --color-muted: #6b6156;
+  --color-subtle: #efe9df;
+  --color-border: #e0d8ca;
+  --color-control-border: #9d9281;
+  --color-accent: #476b5a;
+  --color-accent-hover: #375546;
+  --color-accent-soft: #ebf1eb;
+  --color-sidebar: #221f19;
+  --color-sidebar-hover: #322d24;
+  --color-sidebar-text: #f3eee4;
+  --color-sidebar-muted: #b1a795;
+  --color-sidebar-border: #3d372d;
+  --color-sidebar-active: #3a4034;
+  --color-success: #2d6244;
+  --color-warning: #8a5800;
+  --color-error: #a02f2b;
+  --color-error-bg: #fff4f0;
+  --color-error-border: #d69a8c;
+  --color-backdrop: rgb(38 30 18 / 52%);
+  --color-focus: #476b5a;
+  --shadow-panel: 0 2px 6px rgb(60 46 24 / 5%);
+  --shadow-drawer: 12px 0 32px rgb(38 30 18 / 22%);
+  --shadow-modal: 0 18px 48px rgb(38 30 18 / 24%);
+  --app-ambient: radial-gradient(1000px 520px at 12% -14%, rgb(196 164 106 / 16%), transparent 60%),
+    radial-gradient(900px 460px at 100% 105%, rgb(74 107 87 / 8%), transparent 58%);
+  --app-sidebar-image: linear-gradient(180deg, rgb(196 164 106 / 12%), transparent 50%);
+}
+
+:root[data-skin='elegant'][data-theme='dark'] {
+  --color-bg: #14120e;
+  --color-surface: #1d1a15;
+  --color-text: #efe9dd;
+  --color-muted: #b0a691;
+  --color-subtle: #262219;
+  --color-border: #332e24;
+  --color-control-border: #5c5445;
+  --color-accent: #a9c3a8;
+  --color-accent-hover: #c4d8c3;
+  --color-accent-soft: #232a21;
+  --color-sidebar: #0f0d09;
+  --color-sidebar-hover: #1b1812;
+  --color-sidebar-text: #f1ecdf;
+  --color-sidebar-muted: #9f9582;
+  --color-sidebar-border: #2b271f;
+  --color-sidebar-active: #2d2f22;
+  --color-success: #7fbf9a;
+  --color-warning: #e0b062;
+  --color-error: #ff9b92;
+  --color-error-bg: #2a1917;
+  --color-error-border: #6f3a34;
+  --color-backdrop: rgb(8 6 3 / 74%);
+  --color-focus: #c4d8c3;
+  --shadow-panel: 0 2px 10px rgb(0 0 0 / 40%);
+  --shadow-drawer: 12px 0 32px rgb(0 0 0 / 56%);
+  --shadow-modal: 0 20px 56px rgb(0 0 0 / 56%);
+  --app-ambient: radial-gradient(950px 500px at 14% -16%, rgb(196 164 106 / 12%), transparent 60%),
+    radial-gradient(880px 460px at 100% 108%, rgb(120 150 120 / 10%), transparent 58%);
+  --app-sidebar-image: linear-gradient(180deg, rgb(196 164 106 / 10%), transparent 50%);
+}
+
+/* 极光幻紫：紫罗兰主色 + 极光渐变，适合演示与深色大屏。 */
+:root[data-skin='aurora'] {
+  --color-bg: #f5f4fb;
+  --color-surface: #ffffff;
+  --color-text: #1b1a2b;
+  --color-muted: #5c5a76;
+  --color-subtle: #eeecf8;
+  --color-border: #ddd9ee;
+  --color-control-border: #8f8bab;
+  --color-accent: #5a3fd0;
+  --color-accent-hover: #4730ad;
+  --color-accent-soft: #f0ebff;
+  --color-sidebar: #1a1733;
+  --color-sidebar-hover: #282148;
+  --color-sidebar-text: #f0edff;
+  --color-sidebar-muted: #a8a1c9;
+  --color-sidebar-border: #322a55;
+  --color-sidebar-active: #342a66;
+  --color-success: #1d6545;
+  --color-warning: #8a5800;
+  --color-error: #a02f2b;
+  --color-error-bg: #fff3f1;
+  --color-error-border: #d6968f;
+  --color-backdrop: rgb(24 18 48 / 58%);
+  --color-focus: #5a3fd0;
+  --shadow-panel: 0 2px 6px rgb(46 34 96 / 5%);
+  --shadow-drawer: 12px 0 32px rgb(24 18 48 / 24%);
+  --shadow-modal: 0 18px 48px rgb(24 18 48 / 26%);
+  --app-ambient: radial-gradient(1050px 520px at 88% -12%, rgb(138 92 246 / 14%), transparent 62%),
+    radial-gradient(900px 480px at -10% 108%, rgb(236 72 153 / 9%), transparent 58%);
+  --app-sidebar-image: linear-gradient(180deg, rgb(138 92 246 / 20%), transparent 50%);
+}
+
+:root[data-skin='aurora'][data-theme='dark'] {
+  --color-bg: #0b0916;
+  --color-surface: #151129;
+  --color-text: #eae7fb;
+  --color-muted: #a49dc4;
+  --color-subtle: #1d1834;
+  --color-border: #2c2547;
+  --color-control-border: #4f4776;
+  --color-accent: #a78bfa;
+  --color-accent-hover: #c4b0ff;
+  --color-accent-soft: #211a3c;
+  --color-sidebar: #070512;
+  --color-sidebar-hover: #150f28;
+  --color-sidebar-text: #f0edff;
+  --color-sidebar-muted: #9a92bf;
+  --color-sidebar-border: #241d3d;
+  --color-sidebar-active: #2b1f52;
+  --color-success: #4fbf8a;
+  --color-warning: #e0b062;
+  --color-error: #ff9b92;
+  --color-error-bg: #2a1917;
+  --color-error-border: #6f3a34;
+  --color-backdrop: rgb(4 2 12 / 78%);
+  --color-focus: #c4b0ff;
+  --shadow-panel: 0 2px 12px rgb(0 0 0 / 44%);
+  --shadow-drawer: 12px 0 32px rgb(0 0 0 / 60%);
+  --shadow-modal: 0 20px 56px rgb(0 0 0 / 60%);
+  --app-ambient: radial-gradient(1000px 520px at 86% -14%, rgb(167 139 250 / 16%), transparent 62%),
+    radial-gradient(880px 460px at -8% 110%, rgb(236 72 153 / 12%), transparent 58%);
+  --app-sidebar-image: linear-gradient(180deg, rgb(167 139 250 / 16%), transparent 50%);
 }
 
 * { box-sizing: border-box; }
@@ -132,7 +333,7 @@ a.button:hover { text-decoration: none; }
 
 /* 接入页面沿用控制台的工业信息层级，不加载第三方字体或脚本。 */
 .auth-page { display: grid; grid-template-columns: minmax(320px, 42%) minmax(0, 1fr); min-height: 100svh; }
-.auth-context { display: flex; flex-direction: column; justify-content: space-between; padding: var(--space-7); background: var(--color-sidebar); color: var(--color-sidebar-text); }
+.auth-context { display: flex; flex-direction: column; justify-content: space-between; padding: var(--space-7); background: var(--color-sidebar); background-image: var(--app-sidebar-image); color: var(--color-sidebar-text); }
 .auth-context-body { margin: 64px 0; max-width: 460px; }
 .auth-context .section-kicker { color: var(--color-sidebar-muted); }
 .auth-context-body h2 { margin-top: var(--space-4); font-size: var(--font-heading); letter-spacing: -.025em; }
@@ -196,7 +397,7 @@ a.button:hover { text-decoration: none; }
 .console-layout { min-height: 100svh; }
 .skip-link { position: fixed; left: 16px; top: -100px; z-index: 60; padding: 10px 16px; background: var(--color-surface); border: 2px solid var(--color-accent); border-radius: var(--radius-sm); }
 .skip-link:focus { top: 12px; }
-.sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: var(--sidebar-width); background: var(--color-sidebar); color: var(--color-sidebar-text); }
+.sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: var(--sidebar-width); background: var(--color-sidebar); background-image: var(--app-sidebar-image); color: var(--color-sidebar-text); }
 .sidebar :focus-visible { outline-color: var(--color-sidebar-text); }
 .sidebar-brand { display: flex; align-items: center; justify-content: space-between; padding: 24px 20px 20px; }
 .sidebar-close { display: none; color: var(--color-sidebar-text); }
@@ -511,6 +712,12 @@ a.button:hover { text-decoration: none; }
 .language-code { font-size: var(--font-xs); font-weight: 500; white-space: nowrap; }
 .language-menu .menu-panel { min-width: 176px; max-height: 60vh; overflow-y: auto; }
 .language-menu .menu-item { min-height: 34px; }
+.theme-menu .menu-trigger { min-width: 40px; min-height: 40px; padding: 8px; }
+.theme-menu .menu-trigger .icon { width: 18px; height: 18px; }
+.theme-menu .menu-panel { min-width: 184px; }
+.theme-menu .menu-item { min-height: 34px; }
+.theme-swatch { width: 16px; height: 16px; flex: 0 0 auto; border: 1px solid var(--color-control-border); border-radius: 50%; }
+.theme-menu .menu-item[aria-checked='true'] .theme-swatch { border-color: currentColor; }
 .auth-preference-row { position: absolute; top: 24px; right: 48px; display: flex; align-items: center; gap: 4px; }
 
 @media (min-width: 901px) {

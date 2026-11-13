@@ -5,7 +5,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
-  use: { baseURL: 'http://127.0.0.1:8789', channel: 'chrome', headless: true },
+  use: { baseURL: 'http://127.0.0.1:8789', channel: 'chrome', headless: true, locale: 'zh-CN' },
   webServer: {
     command: 'npm run build:frontend && node scripts/dev.mjs',
     url: 'http://127.0.0.1:8789/health',

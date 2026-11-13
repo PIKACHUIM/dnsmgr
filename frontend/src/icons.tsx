@@ -1,4 +1,4 @@
-type IconName = 'grid' | 'dns' | 'shield' | 'menu' | 'close' | 'arrow' | 'logout' | 'server' | 'lock' | 'sun' | 'moon' | 'globe' | 'plus' | 'panel' | 'panel-expand' | 'info' | 'alert' | 'key' | 'sliders';
+type IconName = 'grid' | 'dns' | 'shield' | 'menu' | 'close' | 'arrow' | 'logout' | 'server' | 'lock' | 'sun' | 'moon' | 'globe' | 'plus' | 'panel' | 'panel-expand' | 'info' | 'alert' | 'key' | 'sliders' | 'palette';
 
 const paths: Record<IconName, string[]> = {
   grid: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M3 14h7v7H3z', 'M14 14h7v7h-7z'],
@@ -20,6 +20,7 @@ const paths: Record<IconName, string[]> = {
   alert: ['m12 4 9 16H3z', 'M12 10v4', 'M12 17h.01'],
   key: ['M15 7a4 4 0 1 1-3.2 6.4L4 21H2v-3l8-5.6A4 4 0 0 1 15 7', 'M16.5 7.5h.01'],
   sliders: ['M4 7h6', 'M14 7h6', 'M12 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4', 'M4 17h10', 'M18 17h2', 'M16 15a2 2 0 1 0 0 4 2 2 0 0 0 0-4'],
+  palette: ['M12 21a9 9 0 1 1 0-18c5 0 9 3.5 9 7.5 0 2.5-2 4.5-4.5 4.5H14a2 2 0 0 0 0 4c0 1.1-.9 2-2 2', 'M13.5 7h.01', 'M17 10h.01', 'M7.5 9h.01', 'M6.5 13h.01'],
 };
 
 export function Icon({ name, className = '' }: { name: IconName; className?: string }) {

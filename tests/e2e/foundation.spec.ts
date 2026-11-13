@@ -80,6 +80,9 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
   await expect(page.locator('.environment-panel')).toContainText('local');
   await expect(page.locator('.environment-panel')).toContainText('d1');
+  expect(await page.evaluate(() => document.documentElement.lang)).toBe('zh-CN');
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('light');
+  expect(await page.evaluate(() => document.documentElement.dataset.skin)).toBe('classic');
   const systemGroup = page.locator('.nav-group').filter({ has: page.getByRole('heading', { name: '系统设置' }) });
   await expect(systemGroup.getByRole('link', { name: '操作日志' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '审计账户' })).toHaveCount(0);
@@ -135,6 +138,27 @@ test('initialization, login, session restore, responsive navigation and logout',
   await page.screenshot({ path: testInfo.outputPath('console-dark-1440.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button', { name: '切换到亮色' }).click();
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('light');
+  const themeTrigger = page.locator('.theme-menu .menu-trigger');
+  for (const [label, skin] of [['科技深空', 'tech'], ['素雅暖砂', 'elegant'], ['极光幻紫', 'aurora']]) {
+    await themeTrigger.click();
+    await page.getByRole('menuitemradio', { name: label, exact: true }).click();
+    expect(await page.evaluate(() => document.documentElement.dataset.skin)).toBe(skin);
+    await expect(themeTrigger).toHaveAttribute('aria-expanded', 'false');
+    await page.screenshot({ path: testInfo.outputPath(`theme-${skin}-1440.png`), fullPage: true, animations: 'disabled' });
+  }
+  await page.getByRole('button', { name: '切换到暗色' }).click();
+  await themeTrigger.click();
+  await page.getByRole('menuitemradio', { name: '科技深空', exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+  expect(await page.evaluate(() => document.documentElement.dataset.skin)).toBe('tech');
+  await page.screenshot({ path: testInfo.outputPath('theme-tech-dark-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.getByRole('button', { name: '切换到亮色' }).click();
+  await themeTrigger.click();
+  await page.getByRole('menuitemradio', { name: '经典蓝', exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.dataset.skin)).toBe('classic');
+  await page.reload();
+  await expect(page.locator('.theme-menu .menu-trigger')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.dataset.skin)).toBe('classic');
   await page.getByRole('button', { name: '切换语言' }).click();
   await page.getByRole('menuitemradio', { name: 'English' }).click();
   await expect(page.locator('.nav-group h2').first()).toHaveText('Domains');
@@ -652,4 +676,32 @@ test('record tool pages render and submit against mocked DNS APIs', async ({ pag
   await expect(page.locator('.notice[role="status"]')).toContainText('批量添加完成：成功 1 条');
 
   expect(errors).toEqual([]);
+});
+
+test('defaults language and color scheme to the browser', async ({ browser }) => {
+  const fallback = await browser.newContext({ locale: 'nl-NL' });
+  const fallbackPage = await fallback.newPage();
+  const fallbackErrors: string[] = [];
+  fallbackPage.on('pageerror', (error) => fallbackErrors.push(error.message));
+  await fallbackPage.goto('/login');
+  await expect(fallbackPage.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(fallbackPage.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  await expect(fallbackPage.getByRole('button', { name: 'Switch theme' })).toBeVisible();
+  await expect(fallbackPage.locator('html')).toHaveAttribute('data-skin', 'classic');
+  expect(fallbackErrors).toEqual([]);
+  await fallback.close();
+
+  const dark = await browser.newContext({ locale: 'zh-CN', colorScheme: 'dark' });
+  const darkPage = await dark.newPage();
+  await darkPage.goto('/login');
+  await expect(darkPage.locator('html')).toHaveAttribute('data-theme', 'dark');
+  expect(await darkPage.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
+  await expect(darkPage.getByRole('button', { name: '切换到亮色' })).toBeVisible();
+  await darkPage.getByRole('button', { name: '切换到亮色' }).click();
+  await expect(darkPage.locator('html')).toHaveAttribute('data-theme', 'light');
+  await darkPage.reload();
+  await expect(darkPage.locator('html')).toHaveAttribute('data-theme', 'light');
+  await darkPage.getByRole('button', { name: '切换到暗色' }).click();
+  await expect(darkPage.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await dark.close();
 });

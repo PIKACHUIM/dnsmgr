@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { ApiError, errorMessage, request, type Bootstrap, type Session } from './api';
 import { Brand, Icon } from './icons';
-import { LanguageToggle, ThemeToggle, usePreferences } from './preferences';
+import { LanguageToggle, ThemeMenu, ThemeToggle, usePreferences } from './preferences';
 import { Menu } from './Menu';
 import { InfoTip } from './InfoTip';
 import { navigation, canonicalPath, resolvePage, type Capability } from './navigation';
@@ -217,7 +217,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
     <div className="workspace" inert={mobileOpen}>
       <header className="topbar">
         <div className="topbar-location"><button ref={menuButton} className="icon-button menu-button" aria-label={t('打开导航菜单')} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={() => setMobileOpen(true)}><Icon name="menu" /></button><button className="icon-button sidebar-toggle" aria-label={t(collapsed ? '展开侧边栏' : '收起侧边栏')} title={t(collapsed ? '展开侧边栏' : '收起侧边栏')} aria-expanded={!collapsed} aria-controls="workspace-navigation" onClick={() => setCollapsed((value) => !value)}><Icon name={collapsed ? 'panel-expand' : 'panel'} /></button><span>{t('控制台')}</span><span className="breadcrumb-divider">/</span><strong>{t(page.group)}</strong></div>
-        <div className="topbar-actions"><ThemeToggle /><LanguageToggle /><Menu label={t('账户菜单')} className="user-menu" trigger={<span className="menu-avatar" aria-hidden="true">{session.user.username.slice(0, 1).toUpperCase()}</span>}>
+        <div className="topbar-actions"><ThemeToggle /><ThemeMenu /><LanguageToggle /><Menu label={t('账户菜单')} className="user-menu" trigger={<span className="menu-avatar" aria-hidden="true">{session.user.username.slice(0, 1).toUpperCase()}</span>}>
           {(close) => <>
             <div className="menu-heading"><strong>{session.user.username}</strong><span>{level === 2 ? t('管理员') : t('用户')}</span></div>
             <a className="menu-item" role="menuitem" href="/setpwd" onClick={(event) => { close(); followLink(event, '/setpwd'); }}><Icon name="key" />{t('修改密码')}</a>

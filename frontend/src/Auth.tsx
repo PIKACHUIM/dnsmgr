@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, post, readSession, type Session } from './api';
 import { Brand, Icon } from './icons';
-import { ThemeToggle, LanguageToggle, usePreferences } from './preferences';
+import { ThemeMenu, ThemeToggle, LanguageToggle, usePreferences } from './preferences';
 
 interface AuthProps {
   mode: 'install' | 'login';
@@ -179,7 +179,7 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
       <div className="auth-security"><Icon name="shield" /><span>{t('Cookie 会话 · CSRF 保护 · 不在本地保存凭证')}</span></div>
     </section>
     <section className="auth-form-area" aria-labelledby="auth-title">
-      <div className="auth-preference-row"><ThemeToggle /><LanguageToggle /></div>
+      <div className="auth-preference-row"><ThemeToggle /><ThemeMenu /><LanguageToggle /></div>
       <div className="auth-form-wrap">
         <div className="auth-eyebrow"><span className="status-dot" />{t(installing ? '首次安装' : '身份验证')}</div>
         <h1 id="auth-title">{t(title)}</h1>
