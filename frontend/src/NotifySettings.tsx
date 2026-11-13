@@ -3,7 +3,7 @@ import { ApiError, errorMessage, request, send, type Session } from './api';
 import { InfoTip } from './InfoTip';
 
 interface Config {
-  url: string; method: string; headers: string; contentType: string; contentFormat: string; body: string;
+  url: string; method: string; headers: string; contentType: string; contentFormat: string; telegramApiBase: string; body: string;
   configured: boolean; webhookConfigured: boolean; urlConfigured: boolean; headersConfigured: boolean; bodyConfigured: boolean;
   wxpusherAppToken: string; wxpusherUids: string; wxpusherConfigured: boolean;
   wxpusherTokenConfigured: boolean; wxpusherUidsConfigured: boolean;
@@ -50,7 +50,7 @@ export function NotifySettings({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [load]);
 
-  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'contentFormat' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles' | 'feishuWebhookUrl' | 'feishuUserIds' | 'mailTo' | 'mailFrom' | 'qqbotAppId' | 'qqbotAppSecret' | 'qqbotOpenId', value: string) {
+  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'contentFormat' | 'telegramApiBase' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles' | 'feishuWebhookUrl' | 'feishuUserIds' | 'mailTo' | 'mailFrom' | 'qqbotAppId' | 'qqbotAppSecret' | 'qqbotOpenId', value: string) {
     setConfig((current) => {
       if (!current) return current;
       const updated = { ...current, [key]: value };
@@ -80,6 +80,7 @@ export function NotifySettings({ session, onExpired }: Props) {
       await send('/api/v1/system/notify', 'PUT', {
         url: config.url, method: config.method, headers: config.headers,
         contentType: config.contentType, contentFormat: config.contentFormat, body: config.body,
+        telegramApiBase: config.telegramApiBase,
         clearUrl: config.clearUrl, clearHeaders: config.clearHeaders, clearBody: config.clearBody,
         wxpusherAppToken: config.wxpusherAppToken, wxpusherUids: config.wxpusherUids,
         clearWxpusherAppToken: config.clearWxpusherAppToken, clearWxpusherUids: config.clearWxpusherUids,
@@ -154,6 +155,7 @@ export function NotifySettings({ session, onExpired }: Props) {
           <label className="form-field"><span>接收用户 UID</span><input value={config.wxpusherUids} onChange={(event) => update('wxpusherUids', event.target.value)} maxLength={2048} placeholder={config.wxpusherUidsConfigured ? '已配置，留空保留' : 'UID_xxx，可用逗号分隔多个'} /></label>
           <label className="form-field"><span><input type="checkbox" checked={config.clearWxpusherAppToken && config.clearWxpusherUids} onChange={(event) => setConfig({ ...config, clearWxpusherAppToken: event.target.checked, clearWxpusherUids: event.target.checked })} /> 清除 WxPusher 凭据</span></label>
           <h3>Telegram</h3>
+          <label className="form-field"><span>API 反代地址（选填） <InfoTip label="Telegram 反代说明" text="留空使用 https://api.telegram.org。无法直连 Telegram 时可填写自建反代地址，保存前会校验 http/https 格式。" /></span><input value={config.telegramApiBase} onChange={(event) => update('telegramApiBase', event.target.value)} maxLength={512} placeholder="https://api.telegram.org" /></label>
           <label className="form-field"><span>Bot Token</span><input value={config.telegramBotToken} onChange={(event) => update('telegramBotToken', event.target.value)} maxLength={256} placeholder={config.telegramTokenConfigured ? '已配置，留空保留' : '填写 Telegram Bot Token'} /></label>
           <label className="form-field"><span>Chat ID</span><input value={config.telegramChatId} onChange={(event) => update('telegramChatId', event.target.value)} maxLength={128} placeholder={config.telegramChatIdConfigured ? '已配置，留空保留' : '数字 ID 或 @channelusername'} /></label>
           <label className="form-field"><span>Topic ID（选填）</span><input value={config.telegramTopicId} onChange={(event) => update('telegramTopicId', event.target.value)} maxLength={12} placeholder={config.telegramTopicIdConfigured ? '已配置，留空保留' : '论坛群组消息主题 ID'} /></label>

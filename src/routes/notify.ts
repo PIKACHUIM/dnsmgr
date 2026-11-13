@@ -145,6 +145,18 @@ export function notifyRoutes() {
     if (!['html', 'markdown', 'text'].includes(contentFormat)) {
       throw new AppError(400, 'Webhook 内容格式只能是 html/markdown/text', 'INVALID_WEBHOOK');
     }
+    let telegramApiBase = typeof body.telegramApiBase === 'string'
+      ? body.telegramApiBase.trim().slice(0, 512).replace(/\/+$/, '')
+      : current.telegramApiBase;
+    if (telegramApiBase) {
+      let parsed: URL;
+      try { parsed = new URL(telegramApiBase); } catch { throw new AppError(400, 'Telegram API 地址格式无效', 'INVALID_TELEGRAM_API'); }
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        throw new AppError(400, 'Telegram API 地址仅支持 http/https', 'INVALID_TELEGRAM_API');
+      }
+    } else {
+      telegramApiBase = '';
+    }
     try {
       parseConfig({
         custom_webhook_url: secrets.webhookUrl, custom_webhook_method: method,
@@ -155,12 +167,12 @@ export function notifyRoutes() {
     } catch (error) {
       throw new AppError(400, error instanceof Error ? error.message : 'Webhook 配置无效', 'INVALID_WEBHOOK');
     }
-    await saveNotificationSettings(c, { secrets, method, contentType, contentFormat });
+    await saveNotificationSettings(c, { secrets, method, contentType, contentFormat, telegramApiBase });
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
       [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)},wecom=${Boolean(secrets.wecomWebhookUrl)},dingtalk=${Boolean(secrets.dingtalkWebhookUrl)},feishu=${Boolean(secrets.feishuWebhookUrl)},mail=${Boolean(secrets.mailTo)},qqbot=${Boolean(secrets.qqbotOpenId)}`, nowSeconds()],
     );
-    return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType, contentFormat }, { mailAvailable: Boolean(c.env.EMAIL) }) });
+    return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType, contentFormat, telegramApiBase }, { mailAvailable: Boolean(c.env.EMAIL) }) });
   });
 
   routes.post('/api/v1/system/notify/test', requireSession, requireCsrf, async (c) => {

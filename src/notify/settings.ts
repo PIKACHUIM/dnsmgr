@@ -8,8 +8,10 @@ import { sendQqBotMessage } from './qqbot';
 
 const SECRET_KEY = 'notification_secrets_cipher';
 const SECRET_PURPOSE = 'notification-secrets/v1';
-const LEGACY_SECRET_KEYS = ['custom_webhook_url', 'custom_webhook_headers', 'custom_webhook_body'] as const;
-const SETTING_KEYS = [SECRET_KEY, ...LEGACY_SECRET_KEYS, 'custom_webhook_method', 'custom_webhook_content_type', 'custom_webhook_content_format'] as const;
+const LEGACY_SECRET_KEYS = [
+  'custom_webhook_url', 'custom_webhook_headers', 'custom_webhook_body', 'webhook_url', 'webhook_user',
+] as const;
+const SETTING_KEYS = [SECRET_KEY, ...LEGACY_SECRET_KEYS, 'custom_webhook_method', 'custom_webhook_content_type', 'custom_webhook_content_format', 'tgbot_url'] as const;
 
 export interface NotificationSettings {
   secrets: {
@@ -36,6 +38,7 @@ export interface NotificationSettings {
   method: string;
   contentType: string;
   contentFormat: string;
+  telegramApiBase: string;
 }
 
 export const NOTIFICATION_CHANNELS = ['webhook', 'wxpusher', 'telegram', 'wecom', 'dingtalk', 'feishu', 'mail', 'qqbot'] as const;
@@ -74,6 +77,35 @@ function parseSecrets(value: string): NotificationSettings['secrets'] {
   return Object.fromEntries(keys.map((key) => [key, source[key] ?? ''])) as NotificationSettings['secrets'];
 }
 
+/** 旧版 webhook_url/webhook_user 是通用群机器人入口，按域名拆到当前三个独立渠道。 */
+function applyLegacyGroupWebhook(
+  values: Record<string, string | undefined>, secrets: NotificationSettings['secrets'],
+): boolean {
+  const url = (values.webhook_url ?? '').trim();
+  if (!url) return false;
+  let host: string;
+  try { host = new URL(url).hostname; } catch { return false; }
+  const user = (values.webhook_user ?? '').trim();
+  if (host === 'qyapi.weixin.qq.com') {
+    if (secrets.wecomWebhookUrl) return false;
+    secrets.wecomWebhookUrl = url;
+    return true;
+  }
+  if (host === 'oapi.dingtalk.com') {
+    if (secrets.dingtalkWebhookUrl) return false;
+    secrets.dingtalkWebhookUrl = url;
+    if (!secrets.dingtalkAtMobiles) secrets.dingtalkAtMobiles = user;
+    return true;
+  }
+  if (host === 'open.feishu.cn' || host === 'open.larksuite.com') {
+    if (secrets.feishuWebhookUrl) return false;
+    secrets.feishuWebhookUrl = url;
+    if (!secrets.feishuUserIds) secrets.feishuUserIds = user;
+    return true;
+  }
+  return false;
+}
+
 async function storeSecrets(db: SqlDatabase, appKey: string | undefined, secrets: NotificationSettings['secrets']): Promise<void> {
   const encrypted = await encrypt(JSON.stringify(secrets), appKey, SECRET_PURPOSE);
   const now = Math.floor(Date.now() / 1000);
@@ -92,7 +124,8 @@ export async function loadNotificationSettings(c: Context<AppEnv>): Promise<Noti
   let secrets: NotificationSettings['secrets'];
   if (values[SECRET_KEY]) {
     secrets = parseSecrets(await decrypt(values[SECRET_KEY]!, c.env.APP_KEY, SECRET_PURPOSE));
-    if (LEGACY_SECRET_KEYS.some((key) => values[key] !== undefined)) {
+    if (applyLegacyGroupWebhook(values, secrets)) await storeSecrets(db, c.env.APP_KEY, secrets);
+    else if (LEGACY_SECRET_KEYS.some((key) => values[key] !== undefined)) {
       await db.execute(`DELETE FROM app_settings WHERE key IN (${LEGACY_SECRET_KEYS.map(() => '?').join(',')})`, [...LEGACY_SECRET_KEYS]);
     }
   } else {
@@ -102,6 +135,7 @@ export async function loadNotificationSettings(c: Context<AppEnv>): Promise<Noti
       webhookHeaders: values.custom_webhook_headers ?? '',
       webhookBody: values.custom_webhook_body ?? '',
     };
+    applyLegacyGroupWebhook(values, secrets);
     if (LEGACY_SECRET_KEYS.some((key) => values[key] !== undefined)) await storeSecrets(db, c.env.APP_KEY, secrets);
   }
   return {
@@ -109,6 +143,7 @@ export async function loadNotificationSettings(c: Context<AppEnv>): Promise<Noti
     method: values.custom_webhook_method ?? 'POST',
     contentType: values.custom_webhook_content_type ?? 'application/json',
     contentFormat: normalizeContentFormat(values.custom_webhook_content_format),
+    telegramApiBase: values.tgbot_url ?? '',
   };
 }
 
@@ -121,6 +156,7 @@ export async function saveNotificationSettings(c: Context<AppEnv>, settings: Not
     { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: ['custom_webhook_method', settings.method, now] },
     { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: ['custom_webhook_content_type', settings.contentType, now] },
     { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: ['custom_webhook_content_format', normalizeContentFormat(settings.contentFormat), now] },
+    { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: ['tgbot_url', settings.telegramApiBase, now] },
     { sql: `DELETE FROM app_settings WHERE key IN (${LEGACY_SECRET_KEYS.map(() => '?').join(',')})`, args: [...LEGACY_SECRET_KEYS] },
   ]);
 }
@@ -143,6 +179,7 @@ export function notificationSettingsView(
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
     mailTo: '', mailFrom: '', qqbotAppId: '', qqbotAppSecret: '', qqbotOpenId: '',
     method: settings.method, contentType: settings.contentType, contentFormat: settings.contentFormat,
+    telegramApiBase: settings.telegramApiBase,
     configured: webhookConfigured, webhookConfigured,
     urlConfigured: webhookConfigured, headersConfigured: Boolean(secrets.webhookHeaders),
     bodyConfigured: Boolean(secrets.webhookBody),
@@ -290,12 +327,14 @@ function escapeHtml(value: string): string {
 
 async function sendTelegram(
   token: string, chatId: string, topicId: string, title: string, content: string, fetchImpl: typeof fetch,
+  apiBase = '',
 ): Promise<{ status: number; ok: boolean }> {
   const payload: Record<string, string | number> = {
     chat_id: chatId, text: `<b>${escapeHtml(title)}</b>\n${escapeHtml(content)}`, parse_mode: 'HTML',
   };
   if (topicId) payload.message_thread_id = Number(topicId);
-  const response = await fetchImpl(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const base = (apiBase.trim() || 'https://api.telegram.org').replace(/\/+$/, '');
+  const response = await fetchImpl(`${base}/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
@@ -499,6 +538,7 @@ export async function sendConfiguredNotifications(
     try {
       const result = await sendTelegram(
         config.secrets.telegramBotToken, config.secrets.telegramChatId, config.secrets.telegramTopicId, title, content, fetchImpl,
+        config.telegramApiBase,
       );
       deliveries.push({ channel: 'telegram', ...result });
     } catch {

@@ -89,6 +89,9 @@ describe('notification settings API', () => {
       if (url.hostname === 'api.telegram.org') {
         return new Response(JSON.stringify({ ok: telegramOk }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.hostname === 'tg.example.com') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.hostname === 'qyapi.weixin.qq.com') {
         return new Response(JSON.stringify({ errcode: wecomErrcode, errmsg: wecomErrcode === 0 ? 'ok' : 'rejected' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
@@ -203,6 +206,28 @@ describe('notification settings API', () => {
     expect(sent[0]).toContain('"content":"**粗体**\\n下一行"');
   });
 
+  it('routes Telegram through a custom API base and validates it', async () => {
+    const invalid = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ telegramApiBase: 'ftp://tg.example.com' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_TELEGRAM_API');
+
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({
+        telegramBotToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWX', telegramChatId: '456', telegramApiBase: 'https://tg.example.com/',
+      }),
+    });
+    expect(await saved.json()).toMatchObject({ contentFormat: 'text', telegramApiBase: 'https://tg.example.com' });
+
+    sent = [];
+    const response = await post('/api/v1/system/notify/test', { title: '标题', content: '正文', channel: 'telegram' });
+    expect(await response.json()).toMatchObject({ code: 0, channels: [{ channel: 'telegram', status: 200 }] });
+    expect(sent[0]).toContain('https://tg.example.com/bot123456:ABCDEFGHIJKLMNOPQRSTUVWX/sendMessage');
+  });
+
   it('reports WxPusher rejection without returning response details or credentials', async () => {
     await request('/api/v1/system/notify', {
       method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
@@ -238,6 +263,18 @@ describe('notification settings API', () => {
     });
     expect(invalid.status).toBe(400);
     expect((await invalid.json()).reason).toBe('INVALID_WXPUSHER_UID');
+  });
+
+  it('migrates the legacy group robot webhook into the matching channel', async () => {
+    await testDb.db.batch([
+      { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', args: ['webhook_url', 'https://oapi.dingtalk.com/robot/send?access_token=legacy-token', 1] },
+      { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?)', args: ['webhook_user', '13800000000', 1] },
+    ]);
+    const response = await request('/api/v1/system/notify', { headers: { cookie } });
+    const view = await response.json() as Record<string, unknown>;
+    expect(view).toMatchObject({ dingtalkConfigured: true, dingtalkAtMobilesConfigured: true });
+    expect(JSON.stringify(view)).not.toContain('legacy-token');
+    expect(await testDb.db.query("SELECT key FROM app_settings WHERE key IN ('webhook_url','webhook_user')")).toHaveLength(0);
   });
 
   it('encrypts and redacts Telegram credentials, escapes HTML and sends to the configured topic', async () => {
