@@ -1,4 +1,4 @@
-type IconName = 'grid' | 'dns' | 'shield' | 'menu' | 'close' | 'arrow' | 'logout' | 'server' | 'lock' | 'sun' | 'moon' | 'globe' | 'plus' | 'panel' | 'panel-expand' | 'info' | 'alert' | 'key';
+type IconName = 'grid' | 'dns' | 'shield' | 'menu' | 'close' | 'arrow' | 'logout' | 'server' | 'lock' | 'sun' | 'moon' | 'globe' | 'plus' | 'panel' | 'panel-expand' | 'info' | 'alert' | 'key' | 'sliders';
 
 const paths: Record<IconName, string[]> = {
   grid: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M3 14h7v7H3z', 'M14 14h7v7h-7z'],
@@ -19,6 +19,7 @@ const paths: Record<IconName, string[]> = {
   info: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18', 'M12 11v6', 'M12 7.5h.01'],
   alert: ['m12 4 9 16H3z', 'M12 10v4', 'M12 17h.01'],
   key: ['M15 7a4 4 0 1 1-3.2 6.4L4 21H2v-3l8-5.6A4 4 0 0 1 15 7', 'M16.5 7.5h.01'],
+  sliders: ['M4 7h6', 'M14 7h6', 'M12 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4', 'M4 17h10', 'M18 17h2', 'M16 15a2 2 0 1 0 0 4 2 2 0 0 0 0-4'],
 };
 
 export function Icon({ name, className = '' }: { name: IconName; className?: string }) {

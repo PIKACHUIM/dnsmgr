@@ -21,7 +21,7 @@ import { CertificateOrders } from './CertificateOrders';
 import { CertificateSettings } from './CertificateSettings';
 import { CertificateCname } from './CertificateCname';
 import { DeployAccounts, DeployTasks } from './CertificateDeploy';
-import { OptimizeIpSettings, OptimizeIpTasks } from './OptimizeIp';
+import { OptimizeIpTasks } from './OptimizeIp';
 import { SystemAccount, SystemMaintenance, SystemTasks } from './SystemPages';
 import { RecordTools } from './RecordTools';
 import { RecordBatchAdd } from './RecordBatchAdd';
@@ -255,8 +255,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                     : path === '/cert/cname' && level === 2 ? <CertificateCname session={session} onExpired={onExpired} />
                     : path === '/cert/deployaccount' && level === 2 ? <DeployAccounts session={session} onExpired={onExpired} />
                     : path === '/cert/deploytask' && level === 2 ? <DeployTasks session={session} onExpired={onExpired} />
-                    : path === '/optimizeip/opipset' && level === 2 ? <OptimizeIpSettings session={session} onExpired={onExpired} />
-                    : path === '/optimizeip/opiplist' && level === 2 ? <OptimizeIpTasks session={session} onExpired={onExpired} />
+                    : route === '/optimizeip/opiplist' && level === 2 ? <OptimizeIpTasks session={session} onExpired={onExpired} />
                     : path === '/setpwd' ? <SetPassword session={session} onExpired={onExpired} onLoggedOut={onLoggedOut} />
                     : hostnameMatch && level === 2 ? <CfHostnames session={session} domainId={Number(hostnameMatch[1])} navigate={navigate} onExpired={onExpired} />
                   : tunnelMatch && level === 2 ? <CfTunnels session={session} accountId={Number(tunnelMatch[1])} navigate={navigate} onExpired={onExpired} />

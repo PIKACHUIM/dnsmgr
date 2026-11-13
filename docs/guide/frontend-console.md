@@ -13,7 +13,7 @@
 | 表单弹窗化 | 新增通用 `Modal` 调用约定，域名、记录、分类、别名、SaaS、Tunnel、定时任务、容灾策略、证书账户/订单/部署、优选任务、记录分组全部改为「面板标题右侧按钮 + 弹窗」 | `Modal.tsx` 与各业务页 |
 | 说明收进图标 | 新增 `InfoTip`：悬停/聚焦显示提示，点击展开面板；页面正文不再保留解释段落 | `InfoTip.tsx`、`styles.css` |
 | 头像菜单 | 顶栏右侧改为主题 / 语言 / 头像三件套，`Menu` 承载「修改密码」与「退出登录」 | `Menu.tsx`、`Console.tsx` |
-| 导航合并 | 删除「审计账户」分组，「操作日志」并入「系统设置」；`/setpwd` 只由头像菜单进入 | `navigation.ts` |
+| 导航合并 | 删除「审计账户」与「优选管理」分组：操作日志并入「系统设置」，优选设置改成优选任务页的按钮弹窗、优选任务并入「容灾调度」；`/setpwd` 只由头像菜单进入 | `navigation.ts`、`OptimizeIp.tsx` |
 | 指标单行 | 指标块改为 `.metric-row`（标签 + 数值同一行、`nowrap`），避免「当前备用线路」之类被拆行 | `styles.css`、`DnsFailover.tsx` |
 | 多语言 | 语言从 zh/en 扩到 `zh-Hans`、`zh-Hant`、`en`、`ja`、`ko`、`fr`、`de`、`it`、`es`、`pt`、`ru`，词条拆到 `locales/*.ts` | `preferences.tsx`、`locales/*` |
 
@@ -190,7 +190,7 @@ t('已保留「{label}」的导航入口…', { label: t(page.item.label) })
 grep -oP "label: '[^']*'" frontend/src/navigation.ts | sort -u
 ```
 
-当前分组：工作空间、域名配置、容灾调度、证书管理、优选管理、系统设置。原「审计账户」分组已删除，「操作日志」并入「系统设置」；「修改密码」不再出现在菜单里，只由右上角头像菜单进入（`/setpwd` 仍可直接访问，标题由 `resolvePage()` 特殊分支给出）。菜单项与旧名对照：
+当前分组：工作空间、域名配置、容灾调度、证书管理、系统设置。原「审计账户」分组已删除，「操作日志」并入「系统设置」；「修改密码」不再出现在菜单里，只由右上角头像菜单进入（`/setpwd` 仍可直接访问，标题由 `resolvePage()` 特殊分支给出）。原「优选管理」分组也已删除：「优选设置」变成「优选任务」页标题右侧的按钮弹窗，「优选任务」并入「容灾调度」，旧路径 `/optimizeip/opipset` 由 `mergedPaths` 映射到 `/optimizeip/opiplist`（地址栏不改写，页面直接渲染合并页）。菜单项与旧名对照：
 
 | 旧名 | 新名 |
 | --- | --- |
@@ -319,7 +319,7 @@ export function canonicalPath(path: string): string {
 | `/cert/cname` | 添加代理 → 添加 CNAME 代理 |
 | `/cert/certaccount`、`/cert/certorder` | 添加账户 / 申请证书 / 导入证书 → 创建 ACME 账户 / 申请新证书 / 导入已签发证书 |
 | `/cert/deployaccount`、`/cert/deploytask` | 添加账户 → 添加部署账户（编辑时为「编辑部署账户」）；新建任务 → 新建部署任务 |
-| `/optimizeip/opiplist` | 新建任务 → 新建优选任务 |
+| `/optimizeip/opiplist` | 新建任务 → 新建优选任务；优选设置 → 优选设置（数据源、密钥、执行间隔） |
 | `/record/groups/:id` | 移动分组 → 移动记录到分组 |
 | `/system/account` | 新增用户 / 编辑 / 域名权限 → 对应标题 |
 
@@ -389,7 +389,7 @@ npm run docs:build && npm run docs:verify
 4. `/domain`、`/cert/certorder`：多面板间距、表格左右留白、弹窗内字段不贴边、标题右侧触发器不换行；
 5. `/system/tasks`、`/system/maintenance`：合并页顺序与间距、375px 下 crontab 代码块只在块内横向滚动、旧路径 `/system/cronset` 直连仍能渲染；
 6. `/setpwd`：TOTP 二维码在暗色下仍可扫描；改密入口只走头像菜单；
-7. `/dmonitor/overview`、`/dmonitor/task`：指标标签与数值在同一行，窄屏不出现半行换行。
+7. `/dmonitor/overview`、`/dmonitor/task`、`/optimizeip/opiplist`：指标标签与数值在同一行，窄屏不出现半行换行；优选设置弹窗只覆盖设置项，保存后自动关闭。
 
 ## 11. 新页面 Checklist
 

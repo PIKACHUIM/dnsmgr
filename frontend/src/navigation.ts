@@ -28,6 +28,7 @@ export const navigation: NavigationGroup[] = [
     { path: '/dmonitor/overview', label: '运行概览', scope: '容灾探测与切换运行情况', capability: 'tasks', implemented: true },
     { path: '/dmonitor/task', label: '切换策略', scope: 'HTTP 探测与主备 DNS 故障切换', capability: 'tasks', implemented: true },
     { path: '/schedule/stask', label: '定时切换', scope: '定时 DNS 切换任务', capability: 'tasks', implemented: true },
+    { path: '/optimizeip/opiplist', label: '优选任务', scope: 'IP 优选任务与执行情况', capability: 'executor', implemented: true },
   ] },
   { label: '证书管理', adminOnly: true, items: [
     { path: '/cert/certaccount', label: '证书账户', scope: 'ACME 账户注册、Directory 与一次性 nonce', capability: 'cert', implemented: true },
@@ -36,10 +37,6 @@ export const navigation: NavigationGroup[] = [
     { path: '/cert/deploytask', label: '部署任务', scope: '证书自动部署与执行记录', capability: 'executor', implemented: true },
     { path: '/cert/cname', label: '证书代理', scope: 'DNS 验证的 CNAME 代理配置', capability: 'cert', implemented: true },
     { path: '/cert/certset', label: '续签设置', scope: '证书续签开关、天数与手动执行', capability: 'cert', implemented: true },
-  ] },
-  { label: '优选管理', adminOnly: true, items: [
-    { path: '/optimizeip/opipset', label: '优选设置', scope: 'Cloudflare IP 优选参数', capability: 'executor', implemented: true },
-    { path: '/optimizeip/opiplist', label: '优选任务', scope: 'IP 优选任务与执行情况', capability: 'executor', implemented: true },
   ] },
   { label: '系统设置', items: [
     { path: '/system/account', label: '登录账户', scope: '图形验证码登录策略与用户、权限维护', adminOnly: true, implemented: true },
@@ -57,6 +54,7 @@ const mergedPaths: Record<string, string> = {
   '/domain/expirenotice': '/system/tasks',
   '/system/proxyset': '/system/maintenance',
   '/system/update': '/system/maintenance',
+  '/optimizeip/opipset': '/optimizeip/opiplist',
 };
 
 export function canonicalPath(path: string): string {

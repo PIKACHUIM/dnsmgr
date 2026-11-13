@@ -246,6 +246,19 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(accountDialog.getByLabel('账户名称')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(accountDialog).toHaveCount(0);
+  const failoverGroup = page.locator('.nav-group').filter({ has: page.getByRole('heading', { name: '容灾调度' }) });
+  await expect(failoverGroup.getByRole('link', { name: '优选任务' })).toBeVisible();
+  await page.getByRole('link', { name: '优选任务' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: '优选任务' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('optimize-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.getByRole('button', { name: '优选设置' }).click();
+  const optimizeDialog = page.getByRole('dialog', { name: '优选设置' });
+  await expect(optimizeDialog).toBeVisible();
+  await expect(optimizeDialog.getByLabel('执行间隔（分钟）')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(optimizeDialog).toHaveCount(0);
+  await page.goto('/optimizeip/opipset');
+  await expect(page.getByRole('heading', { level: 1, name: '优选任务' })).toBeVisible();
   await page.route(/\/api\/v1\/dns\/domains\?/, (route) => route.fulfill({ json: {
     code: 0, total: 1, items: [{
       id: 1001, name: 'example.com', accountId: 1, accountName: 'test', accountType: 'cloudflare',
