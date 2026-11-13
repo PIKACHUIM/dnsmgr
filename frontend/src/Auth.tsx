@@ -216,9 +216,9 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
                   <div className="captcha-image-frame">
                     {captchaImage ? <img src={captchaImage} alt="登录验证码" /> : <span role="status">{captchaLoading ? '正在加载验证码…' : '验证码不可用'}</span>}
                   </div>
+                  <input id="captcha" name="captcha" className="code-input captcha-code-input" type="text" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" minLength={4} maxLength={4} required value={captchaCode} onChange={(event) => setCaptchaCode(event.target.value.replace(/\D/g, '').slice(0, 4))} aria-describedby="captcha-help" />
                   <button className="button button-secondary captcha-refresh" type="button" disabled={pending || captchaLoading} onClick={() => void loadCaptcha(controller.current!.signal)}>刷新验证码</button>
                 </div>
-                <input id="captcha" name="captcha" className="code-input captcha-code-input" type="text" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" minLength={4} maxLength={4} required value={captchaCode} onChange={(event) => setCaptchaCode(event.target.value.replace(/\D/g, '').slice(0, 4))} aria-describedby="captcha-help" />
                 <small id="captcha-help">输入图中 4 位数字；每次登录尝试后验证码会刷新。</small>
               </div>}
               {installing && <div className="form-field">

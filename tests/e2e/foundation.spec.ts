@@ -439,6 +439,12 @@ test('initialization, login, session restore, responsive navigation and logout',
   await expect(page.getByRole('alert')).toContainText('验证码错误或已过期');
   await expect(page.getByLabel('图形验证码')).toBeVisible();
   await expect(page.locator('img[alt="登录验证码"]')).toBeVisible();
+  const captchaInputBox = await page.getByLabel('图形验证码').boundingBox();
+  const captchaImageBox = await page.locator('img[alt="登录验证码"]').boundingBox();
+  expect(captchaInputBox && captchaImageBox).not.toBeNull();
+  const captchaOverlap = Math.min(captchaInputBox!.y + captchaInputBox!.height, captchaImageBox!.y + captchaImageBox!.height)
+    - Math.max(captchaInputBox!.y, captchaImageBox!.y);
+  expect(captchaOverlap).toBeGreaterThan(20);
   expect((await context.request.get('/api/v1/session')).status()).toBe(401);
   expect((await context.request.get('/quicklogin')).status()).toBe(400);
   expect(errors).toEqual([]);
