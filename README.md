@@ -98,7 +98,7 @@ npm run audit:dependencies
 | EdgeOne Makers | `cloud-functions/index.js`、`cloud-functions/[[default]].js` 引用构建产物 `_worker.mjs` / `edgeone.json` | `dist/edgeone/public` |
 | 阿里云 ESA | `dist/esa/worker.mjs` / `esa.jsonc`；`fetch(request, context, env)` 第三个参数读取变量 | `dist/esa/public` |
 
-只托管新 `public` 产物，不上传旧 `public/`、PHP、SQL、配置或 Worker 文件作为静态资源。不配置全局 SPA fallback；页面 shell 由 Hono 在受控页面路径返回。Cloudflare Workers 已部署到 `dnsmgrui-work`（D1 `dnsmgrui-data`）；**尚未验证套餐 CPU 配额，Makers 与 ESA 仍未部署**。
+只托管新 `public` 产物，不上传旧 `public/`、PHP、SQL、配置或 Worker 文件作为静态资源。不配置全局 SPA fallback；页面 shell 由 Hono 在受控页面路径返回。Cloudflare Workers 已部署到 `dnsmgrui-work`（D1 `dnsmgrui-data`），生产入口为 https://dnsmgr.524228.xyz/；**尚未验证套餐 CPU 配额，Makers 与 ESA 仍未部署**。
 
 应用支持 D1/Turso 协调 SQL。Cloudflare 需配置 `DB` D1 绑定并依次执行 `migrations/0001_core.sql`、`migrations/0002_dns.sql`、`migrations/0003_dns_aliases.sql`、`migrations/0004_schedule.sql`、`migrations/0005_failover.sql`、`migrations/0006_domain_expiration_queue.sql`、`migrations/0007_domain_periodic_expiration_queue.sql`、`migrations/0008_domain_expiration_notices.sql`、`migrations/0009_login_captcha.sql`；Makers/ESA 配置 `TURSO_DATABASE_URL`、`TURSO_AUTH_TOKEN`，并在独立 SQLite/libSQL 库执行同样的迁移。D1 必须提供稳定的 `COORDINATOR_ID`，初始化后用于识别库身份；不要随意复用同一标识指向不同数据库。DNS 账户/域名/审计表目前只在 `DB_FORMAT=sql` 下可用，其他格式会明确返回 501。Cloudflare 对象模式的绑定名分别为 `KV` 与 `BUCKET`（R2），并设置相应稳定的 `PAYLOAD_STORE_ID`；ESA 的 EdgeKV 使用 `ESA_KV_NAMESPACE`。Makers Blob 设置 `BLOB_NAMESPACE`；Node Function 使用 `DB_DRIVER=kv` 时需配置 `MAKERS_KV_BRIDGE_URL` 与 `MAKERS_KV_BRIDGE_TOKEN`（不少于 32 字符），指向单独部署的 Edge Function KV bridge。平台 secrets 至少包括 32 字节 Base64 `APP_KEY` 和不少于 32 字符的 `SETUP_TOKEN`；可设置 `PUBLIC_ORIGIN` 固定站点来源。不要把 Token、密码或主密钥放入 `VITE_*` 或前端代码。
 

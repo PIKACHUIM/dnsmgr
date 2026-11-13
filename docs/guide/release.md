@@ -78,8 +78,10 @@ npx wrangler deployments list
 部署完成后至少检查：
 
 ```bash
-curl -fsS https://<worker-domain>/health
+curl -fsS https://dnsmgr.524228.xyz/health
 ```
+
+生产入口为 `https://dnsmgr.524228.xyz/`；`workers.dev` 地址仅作为 Worker 直连备用地址。
 
 首次安装使用 `POST /install` 并携带 `X-Setup-Token`；安装完成后移除或轮换 `SETUP_TOKEN`，避免重复初始化尝试。
 

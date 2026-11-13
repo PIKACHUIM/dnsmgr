@@ -527,7 +527,7 @@ npx -y wrangler@latest deploy
 线上校验（本机若被 DNS 污染，用能正常解析的环境或 WebFetch）：
 
 ```bash
-curl -s https://dnsmgrui-work.52pika.workers.dev/health
+curl -s https://dnsmgr.524228.xyz/health
 ```
 
 返回 `{"code":0,"service":"dnsmgr-serverless","stage":"foundation"}` 即 Worker 正常；再取首页引用的 `assets/index-*.css` 确认新规则已生效。回滚与数据库备份步骤见 [发布与回滚](./release.md)。
