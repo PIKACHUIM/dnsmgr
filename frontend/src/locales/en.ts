@@ -359,4 +359,6 @@ export const en: Record<string, string> = {
   '确认删除账户「{name}」？': 'Delete account "{name}"?',
   '账户「{name}」已删除': 'Account "{name}" deleted',
   '尚未移植的驱动：{list}': 'Drivers not migrated yet: {list}',
+  '设为站点默认': 'Set as site default',
+  '已将「{name}」设为站点默认皮肤': '"{name}" is now the site default skin',
 };

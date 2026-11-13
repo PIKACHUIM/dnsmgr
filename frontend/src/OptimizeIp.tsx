@@ -65,6 +65,19 @@ export function OptimizeIpSettings({ session, onExpired, onSaved }: SettingsProp
     finally { setBusy(false); }
   }
 
+  async function queryCredit() {
+    if (busy) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      const result = await send<{ code: 0; count: number; msg: string }>('/api/v1/optimize/credit', 'POST', {
+        api, key: key.trim() || undefined,
+      }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(result.msg);
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && !onSaved && <div className="notice" role="status">{notice}</div>}
@@ -77,7 +90,7 @@ export function OptimizeIpSettings({ session, onExpired, onSaved }: SettingsProp
         <div className="form-field"><div className="form-label"><label htmlFor="optimize-interval">执行间隔（分钟）</label><InfoTip label="执行间隔说明" text="cron 每次只执行一个到期任务，两次执行至少间隔设定分钟数。写入操作单次最多 5 个，超出部分会在下一次继续。" /></div>
           <input id="optimize-interval" type="number" inputMode="numeric" min={10} max={1440} value={minMinutes} onChange={(event) => setMinMinutes(event.target.value)} required />
         </div>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button></div>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button><button className="button button-secondary" type="button" disabled={busy || (api !== '2' && !keyConfigured && !key.trim())} onClick={() => void queryCredit()}>查询积分</button></div>
       </form>}
   </>;
 }

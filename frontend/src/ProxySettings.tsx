@@ -57,6 +57,24 @@ export function ProxySettings({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [load]);
 
+  async function test() {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await send<{ code: 0; reachable: boolean | null; detail: string }>('/api/v1/system/proxy/test', 'POST', {
+        url, username,
+        ...(password ? { password } : {}),
+      }, new AbortController().signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(result.detail);
+    } catch (failure) {
+      handle(failure);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function save(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -93,7 +111,7 @@ export function ProxySettings({ session, onExpired }: Props) {
           <label className="form-field"><span>密码（可选）</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={hasPassword ? '已保存，留空保持不变' : '与用户名同时填写'} maxLength={512} autoComplete="new-password" /></label>
           {hasPassword && <label className="notice-channel-option"><input type="checkbox" checked={clearPassword} onChange={(event) => setClearPassword(event.target.checked)} /><span>清除已保存的代理密码</span></label>}
           <label className="form-field"><span>排除列表（可选）</span><input value={noProxy} onChange={(event) => setNoProxy(event.target.value)} placeholder="localhost,127.0.0.1,*.internal" maxLength={2048} /></label>
-          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存代理设置'}</button></div>
+          <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存代理设置'}</button><button className="button button-secondary" type="button" disabled={busy || !url} onClick={() => void test()}>测试连通性</button></div>
         </form>}
     </section>
   </>;

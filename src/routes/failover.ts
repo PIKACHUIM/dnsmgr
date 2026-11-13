@@ -239,5 +239,30 @@ export function failoverRoutes() {
     return c.json({ code: 0 });
   });
 
+  routes.post('/api/v1/failover/logs/clean', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    const days = Number(body.days);
+    if (!Number.isSafeInteger(days) || days < 0 || days > 3650) {
+      throw new AppError(400, '保留天数必须是 0–3650 的整数', 'INVALID_LOG_RETENTION');
+    }
+    const cutoff = nowSeconds() - days * 86400;
+    const result = await db(c).execute('DELETE FROM dns_failover_logs WHERE created_at < ?', [cutoff]);
+    await writeAudit(c, 'failover.clean', 'dns_failover_logs', `days=${days},deleted=${result.changes}`);
+    return c.json({ code: 0, deleted: result.changes, cutoff, msg: `已清理 ${result.changes} 条容灾日志` });
+  });
+
+  routes.get('/dmtask/status', async (c) => {
+    requireSql(c);
+    const rows = await db(c).query<{ interval_seconds: number; last_check_at: number | null }>(
+      'SELECT interval_seconds, last_check_at FROM dns_failover_tasks WHERE active = 1',
+    );
+    const now = nowSeconds();
+    const healthy = rows.some((row) => row.last_check_at !== null
+      && now - row.last_check_at <= Math.max(60, row.interval_seconds * 2 + 60));
+    return c.text(healthy ? 'ok' : 'error');
+  });
+
   return routes;
 }

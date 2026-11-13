@@ -7,7 +7,7 @@ import { decrypt } from '../security/crypto';
 import { createProvider } from '../dns/registry';
 import type { DnsDomain } from '../dns/types';
 import {
-  OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN, executeOptimizeDue, loadOptimizeTask, readOptimizeSettings,
+  OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN, executeOptimizeDue, fetchOptimizeCredit, loadOptimizeTask, readOptimizeSettings,
   runOptimizeTask, type IpGroup, type OptimizeTaskRow,
 } from '../optimize';
 
@@ -109,6 +109,21 @@ export function optimizeRoutes() {
       [c.get('principal').user.id, 'optimize.settings', 'system', `api=${settings.api} min=${settings.minMinutes}`, nowSeconds()],
     );
     return c.json({ code: 0, api: settings.api, minMinutes: settings.minMinutes, keyConfigured: Boolean(settings.key) });
+  });
+
+  routes.post('/api/v1/optimize/credit', requireSession, requireCsrf, async (c) => {
+    requireAdmin(c);
+    const body = await input(c);
+    const current = await readOptimizeSettings(c.get('db'));
+    const api = body.api === '0' || body.api === '1' || body.api === '2' ? body.api : current.api;
+    const submitted = typeof body.key === 'string' ? body.key.trim() : '';
+    const key = (submitted || current.key).slice(0, 200);
+    const count = await fetchOptimizeCredit(c.env.BUDGET.fetch, api, key);
+    await c.get('db').execute(
+      'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
+      [c.get('principal').user.id, 'optimize.credit', 'system', `api=${api},count=${count}`, nowSeconds()],
+    );
+    return c.json({ code: 0, count, msg: `当前积分余额：${count}` });
   });
 
   routes.get('/api/v1/optimize/tasks', requireSession, async (c) => {
@@ -231,6 +246,15 @@ export function optimizeRoutes() {
       [c.get('principal').user.id, 'optimize.run', 'system', result.detail.slice(0, 200), nowSeconds()],
     );
     return c.json({ code: 0, ...result });
+  });
+
+  routes.get('/optimizeip/status', async (c) => {
+    requireSql(c);
+    const rows = await c.get('db').query<{ last_run_at: number | null }>(
+      'SELECT MAX(last_run_at) AS last_run_at FROM optimize_ip_tasks WHERE enabled = 1',
+    );
+    const last = Number(rows[0]?.last_run_at ?? 0);
+    return c.text(last > 0 && nowSeconds() - last <= 3600 ? 'ok' : 'error');
   });
 
   return routes;

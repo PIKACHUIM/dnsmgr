@@ -26,6 +26,7 @@ import { optimizeRoutes } from './routes/optimize';
 import { userRoutes } from './routes/users';
 import { proxyRoutes } from './routes/proxy';
 import { updateRoutes } from './routes/update';
+import { preferenceRoutes } from './routes/preferences';
 import { storageRoutes } from './routes/storage';
 
 declare const __APP_SHELL__: string;
@@ -46,7 +47,7 @@ const pagePatterns = [
   /^\/system\/(account|tasks|maintenance)$/,
   /^\/system\/(loginset|noticeset|proxyset|cronset|update)$/,
 ];
-const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)|\/cron(?:\?|$)|\/qqbot\/webhook(?:\?|$)|\/(verifycode|install|login|quicklogin|auth\/totp|logout|setpwd|totp\/))/;
+const databasePaths = /^(\/api\/v1\/|\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)|\/cron(?:\?|$)|\/qqbot\/webhook(?:\?|$)|\/(verifycode|install|login|quicklogin|auth\/totp|logout|setpwd|totp)|\/(?:dmtask|optimizeip)\/status$)/;
 const legacySignedApiPaths = /^\/api\/(?:domain|cert\/order|record\/(?:add|batch|data|remark|delete|update|status))(?:\/|$)/;
 const certificateSessionPaths = /^\/api\/v1\/cert(?:\/|$)/;
 
@@ -110,6 +111,7 @@ export function createApp(options: { database?: SqlDatabase; shell?: string; sto
   app.route('/', userRoutes());
   app.route('/', proxyRoutes());
   app.route('/', updateRoutes());
+  app.route('/', preferenceRoutes());
   app.route('/', storageRoutes());
   app.get('/api/v1/bootstrap', requireSession, (c) => {
     const storage = c.get('storage').config;

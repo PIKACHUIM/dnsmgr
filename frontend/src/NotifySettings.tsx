@@ -28,6 +28,7 @@ export function NotifySettings({ session, onExpired }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [testChannel, setTestChannel] = useState('');
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -110,11 +111,19 @@ export function NotifySettings({ session, onExpired }: Props) {
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
     try {
-      await send('/api/v1/system/notify/test', 'POST', { title: 'DNSMGR 测试通知', content: '如果你收到这条消息，说明通知渠道配置有效。' }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
-      setNotice('测试通知已发送');
+      await send('/api/v1/system/notify/test', 'POST', { title: 'DNSMGR 测试通知', content: '如果你收到这条消息，说明通知渠道配置有效。', channel: testChannel || undefined }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(testChannel ? '测试通知已发送到所选渠道' : '测试通知已发送');
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
   }
+
+  const channelConfigured = config ? {
+    webhook: config.webhookConfigured, wxpusher: config.wxpusherConfigured, telegram: config.telegramConfigured,
+    wecom: config.wecomConfigured, dingtalk: config.dingtalkConfigured, feishu: config.feishuConfigured,
+    mail: config.mailConfigured, qqbot: config.qqbotConfigured,
+  } : {};
+  const anyConfigured = Object.values(channelConfigured).some(Boolean);
+  const testConfigured = testChannel ? Boolean(channelConfigured[testChannel as keyof typeof channelConfigured]) : anyConfigured;
 
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
@@ -169,7 +178,18 @@ export function NotifySettings({ session, onExpired }: Props) {
           <label className="form-field"><span><input type="checkbox" checked={config.clearQqbot} onChange={(event) => setConfig({ ...config, clearQqbot: event.target.checked })} /> 清除 QQ 机器人配置</span></label>
           <div className="form-actions">
             <button className="button button-primary" type="submit" disabled={busy}>保存</button>
-            <button className="button button-secondary" type="button" disabled={busy || (!config.webhookConfigured && !config.wxpusherConfigured && !config.telegramConfigured && !config.wecomConfigured && !config.dingtalkConfigured && !config.feishuConfigured && !config.mailConfigured && !config.qqbotConfigured)} onClick={() => void test()}>发送测试</button>
+            <select value={testChannel} onChange={(event) => setTestChannel(event.target.value)} aria-label="测试渠道" disabled={busy}>
+              <option value="">全部已配置渠道</option>
+              <option value="webhook">自定义 Webhook</option>
+              <option value="wxpusher">WxPusher</option>
+              <option value="telegram">Telegram</option>
+              <option value="wecom">企业微信</option>
+              <option value="dingtalk">钉钉</option>
+              <option value="feishu">飞书</option>
+              <option value="mail">邮件</option>
+              <option value="qqbot">QQ 机器人</option>
+            </select>
+            <button className="button button-secondary" type="button" disabled={busy || !testConfigured} onClick={() => void test()}>发送测试</button>
           </div>
         </form>}
     </section>

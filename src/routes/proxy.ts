@@ -53,5 +53,38 @@ export function proxyRoutes() {
     return c.json({ code: 0, ...proxyView(settings) });
   });
 
+  routes.post('/api/v1/system/proxy/test', requireSession, requireCsrf, async (c) => {
+    requireSql(c);
+    requireAdmin(c);
+    const body = await input(c);
+    const current = await loadProxySettings(c);
+    const url = body.url === undefined ? current.url : normalizeProxyUrl(body.url);
+    normalizeProxyUsername(body.username === undefined ? current.username : body.username);
+    if (typeof body.password === 'string' && body.password !== '') normalizeProxyPassword(body.password);
+    if (!url) throw new AppError(400, '请先填写代理地址', 'INCOMPLETE_PROXY_CONFIG');
+    const parsed = new URL(url);
+    if (parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:') {
+      return c.json({
+        code: 0, reachable: null,
+        detail: '当前运行时无法通过 SOCKS5 发起探测请求，已校验配置格式；请在执行器侧验证出口。',
+      });
+    }
+    const origin = `${parsed.protocol}//${parsed.host}`;
+    const started = Date.now();
+    let status: number;
+    try {
+      const response = await c.env.BUDGET.fetch(origin, {
+        method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(8_000),
+      });
+      status = response.status;
+    } catch {
+      throw new AppError(502, `无法连接到代理 ${parsed.host}，请检查地址、端口与网络`, 'PROXY_UNREACHABLE');
+    }
+    return c.json({
+      code: 0, reachable: true, status, latencyMs: Date.now() - started,
+      detail: `代理端口已应答 HTTP ${status}；此处只验证地址可达，不验证出口 IP 与账号密码。`,
+    });
+  });
+
   return routes;
 }

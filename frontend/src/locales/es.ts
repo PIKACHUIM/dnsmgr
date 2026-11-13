@@ -359,4 +359,6 @@ export const es: Record<string, string> = {
   '确认删除账户「{name}」？': '¿Eliminar la cuenta «{name}»?',
   '账户「{name}」已删除': 'Cuenta «{name}» eliminada',
   '尚未移植的驱动：{list}': 'Controladores aún no migrados: {list}',
+  '设为站点默认': 'Establecer como predeterminado del sitio',
+  '已将「{name}」设为站点默认皮肤': '«{name}» es ahora el tema predeterminado del sitio',
 };

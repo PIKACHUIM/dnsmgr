@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import { ApiError, errorMessage, request, type Bootstrap, type Session } from './api';
+import { ApiError, errorMessage, request, send, type Bootstrap, type Session } from './api';
 import { Brand, Icon } from './icons';
-import { LanguageToggle, ThemeMenu, ThemeToggle, usePreferences } from './preferences';
+import { LanguageToggle, SKINS, ThemeMenu, ThemeToggle, usePreferences, type Skin } from './preferences';
 import { Menu } from './Menu';
 import { InfoTip } from './InfoTip';
 import { navigation, canonicalPath, resolvePage, type Capability } from './navigation';
@@ -59,6 +59,8 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
   const [retry, setRetry] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const [skinNotice, setSkinNotice] = useState('');
+  const [skinError, setSkinError] = useState('');
   const navRef = useRef<HTMLElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -200,6 +202,18 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
     }
   }
 
+  async function saveDefaultSkin(skin: Skin) {
+    setSkinNotice('');
+    setSkinError('');
+    try {
+      await send('/api/v1/system/skin', 'PUT', { skin }, new AbortController().signal, { 'X-CSRF-Token': session.csrfToken });
+      const label = SKINS.find((item) => item.id === skin)?.label ?? skin;
+      setSkinNotice(t('已将「{name}」设为站点默认皮肤', { name: t(label) }));
+    } catch (failure) {
+      setSkinError(errorMessage(failure));
+    }
+  }
+
   return <div className={`console-layout ${mobileOpen ? 'navigation-open' : ''} ${collapsed ? 'sidebar-collapsed' : ''}`}>
     <a className="skip-link" href="#main-content" inert={mobileOpen}>{t('跳到主要内容')}</a>
     {mobileOpen && <button className="navigation-backdrop" aria-label={t('关闭导航菜单')} tabIndex={-1} onClick={closeNavigation} />}
@@ -217,7 +231,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
     <div className="workspace" inert={mobileOpen}>
       <header className="topbar">
         <div className="topbar-location"><button ref={menuButton} className="icon-button menu-button" aria-label={t('打开导航菜单')} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={() => setMobileOpen(true)}><Icon name="menu" /></button><button className="icon-button sidebar-toggle" aria-label={t(collapsed ? '展开侧边栏' : '收起侧边栏')} title={t(collapsed ? '展开侧边栏' : '收起侧边栏')} aria-expanded={!collapsed} aria-controls="workspace-navigation" onClick={() => setCollapsed((value) => !value)}><Icon name={collapsed ? 'panel-expand' : 'panel'} /></button><span>{t('控制台')}</span><span className="breadcrumb-divider">/</span><strong>{t(page.group)}</strong></div>
-        <div className="topbar-actions"><ThemeToggle /><ThemeMenu /><LanguageToggle /><Menu label={t('账户菜单')} className="user-menu" trigger={<span className="menu-avatar" aria-hidden="true">{session.user.username.slice(0, 1).toUpperCase()}</span>}>
+        <div className="topbar-actions"><ThemeToggle /><ThemeMenu onSetDefault={level === 2 ? (skin) => void saveDefaultSkin(skin) : undefined} /><LanguageToggle /><Menu label={t('账户菜单')} className="user-menu" trigger={<span className="menu-avatar" aria-hidden="true">{session.user.username.slice(0, 1).toUpperCase()}</span>}>
           {(close) => <>
             <div className="menu-heading"><strong>{session.user.username}</strong><span>{level === 2 ? t('管理员') : t('用户')}</span></div>
             <a className="menu-item" role="menuitem" href="/setpwd" onClick={(event) => { close(); followLink(event, '/setpwd'); }}><Icon name="key" />{t('修改密码')}</a>
@@ -229,6 +243,8 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
       <main id="main-content" className="main-content" tabIndex={-1}>
         <div className="page-heading"><div><div className="section-kicker">{t(home ? '系统概览 / OVERVIEW' : '功能模块 / MODULE')}</div><div className="page-title"><h1 ref={contentTitle} tabIndex={-1}>{t(page.item.label)}</h1>{!home && <InfoTip label={t('页面说明')} text={t(page.item.scope)} />}</div></div><span className="phase-badge">{t(home ? 'DNS 已接入' : implemented ? '运行中' : '待移植')}</span></div>
         {logoutError && <div className="notice notice-error" role="alert"><strong>{t('退出未完成')}</strong><span>{logoutError} {t('可再次点击退出登录重试。')}</span></div>}
+        {skinNotice && <div className="notice" role="status">{skinNotice}</div>}
+        {skinError && <div className="notice notice-error" role="alert">{skinError}</div>}
         {loadError && <div className="notice notice-error with-action" role="alert"><div><strong>{t('运行环境加载失败')}</strong><span>{loadError}</span></div><button className="button button-secondary" onClick={() => setRetry((value) => value + 1)}>{t('重新加载')}</button></div>}
         {home ? <>
           <div className="overview-grid">

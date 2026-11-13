@@ -32,18 +32,18 @@
 
 ## 旧版页面功能与当前实现的差异
 
-按 `route/app.php`、`app/controller/*.php` 与 `src/routes/*.ts` 逐项对照，旧版有入口但当前没有对应能力的功能如下（均为页面/运维工具，不影响 DNS、证书、通知主链路）：
+按 `route/app.php`、`app/controller/*.php` 与 `src/routes/*.ts` 逐项对照，旧版有入口但当前仍不等价的功能如下（均为页面/运维工具，不影响 DNS、证书、通知主链路）：
 
 | 旧版功能 | 旧入口 | 当前状态 |
 | --- | --- | --- |
 | 在线自动更新 | `POST /system/doupdate` | 只做版本与迁移检查（`POST /api/v1/system/update/check`）；Worker 无法自我替换，升级改为重新部署 |
 | 运行时缓存清理 | `GET /cleancache` | 不适用：没有 PHP runtime 缓存目录，数据在 D1 / KV |
-| 服务端皮肤切换 | `POST /changeskin` | 主题只存浏览器 `localStorage`，不再写入服务端配置 |
-| 代理连通性测试 | `POST /system/proxytest` | 未实现；代理设置只保存并下发给执行器 |
-| 逐渠道通知测试 | `/system/mailtest`、`/system/tgbottest`、`/system/webhooktest`、`/system/customwebhooktest` | 合并为 `POST /api/v1/system/notify/test`，一次发往所有已配置渠道，不能只测单个渠道 |
-| 优选数据源积分查询 | `POST /optimizeip/queryapi` | 未实现；只保存数据源与密钥 |
-| 容灾日志按天清理 | `POST /dmonitor/clean` | 未实现；每条任务的日志在写入时只保留最近 500 条（`src/schedule/failover.ts`） |
-| 外部状态探针 | `/dmtask/status`、`/optimizeip/status` | 未实现；健康检查用 `GET /health`，任务运行情况在页面查看 |
+| 服务端皮肤切换 | `POST /changeskin` | 已迁移为「站点默认皮肤」：管理员在主题菜单选「设为站点默认」，写入 `app_settings.default_skin`（`PUT /api/v1/system/skin`，审计 `system.skin`）；没有本地选择的浏览器读取 `GET /api/v1/preferences/skin` 后应用。个人切换仍存 `localStorage`（等价旧版非管理员 cookie） |
+| 代理连通性测试 | `POST /system/proxytest` | 部分等价：`POST /api/v1/system/proxy/test` 校验代理地址格式并探测代理端口是否应答（HTTP/HTTPS）。Worker 运行时无法用代理发起出站请求，因此不验证出口 IP 与代理账号；SOCKS5 只校验配置，返回 `reachable: null` |
+| 逐渠道通知测试 | `/system/mailtest`、`/system/tgbottest`、`/system/webhooktest`、`/system/customwebhooktest` | `POST /api/v1/system/notify/test` 支持 `channel`（`webhook`/`wxpusher`/`telegram`/`wecom`/`dingtalk`/`feishu`/`mail`/`qqbot`）单渠道发送；省略时发往全部已配置渠道。未配置的渠道返回 400 `NOTIFICATION_NOT_CONFIGURED`，未知渠道返回 400 `INVALID_NOTIFICATION_CHANNEL` |
+| 优选数据源积分查询 | `POST /optimizeip/queryapi` | 已迁移为 `POST /api/v1/optimize/credit`（管理员 + CSRF，审计 `optimize.credit`）：wetest.vip 与 hostmonit 返回剩余次数；xingpingcn.top 无密钥免费源返回 400 `OPTIMIZE_CREDIT_NOT_APPLICABLE`。优选设置弹窗提供「查询积分」按钮 |
+| 容灾日志按天清理 | `POST /dmonitor/clean` | 已迁移为 `POST /api/v1/failover/logs/clean`（`days` 0–3650，审计 `failover.clean`），容灾概览页「清理日志」弹窗；写入时仍保留每任务最近 500 条 |
+| 外部状态探针 | `/dmtask/status`、`/optimizeip/status` | 已迁移，返回纯文本 `ok`/`error`：容灾按启用任务的 `last_check_at` 与 `2×间隔+60s` 判定，优选按启用任务的 `last_run_at` 与 3600 秒判定 |
 | 旧调试页 | `GET /test` | 未迁移（旧实现为空方法） |
 
 另有几类旧端点属于页面内部 AJAX 辅助，已被新接口取代、无需单独移植：`/domain/list` 与 `/domain/data` → `GET /api/v1/dns/domains`，`/domain/updatedate` 与 `/domain/setcategory` → `POST /api/v1/dns/domains/batch` / `PATCH /api/v1/dns/domains/:id`，`/record/list` → `GET /api/v1/dns/domains/:id/records?name=`，`/record/quickinfo/:id` → `GET /api/v1/dns/domains/:id/lines`。`/domain/dnscheck` 旧版即无实现，属于死路由。

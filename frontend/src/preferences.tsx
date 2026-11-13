@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { request } from './api';
 import { Icon } from './icons';
 import { Menu } from './Menu';
 import { de } from './locales/de';
@@ -154,7 +155,10 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     const stored = storedTheme();
     return { theme: stored ?? systemTheme(), followsSystem: stored === null };
   });
-  const [skin, setSkin] = useState<Skin>(() => storedSkin() ?? 'classic');
+  const [skin, setSkin] = useState<{ value: Skin; chosen: boolean }>(() => {
+    const stored = storedSkin();
+    return { value: stored ?? 'classic', chosen: stored !== null };
+  });
   const [locale, setLocale] = useState<{ value: Language; chosen: boolean }>(() => {
     const stored = storedLanguage();
     return { value: stored ?? detectLanguage(), chosen: stored !== null };
@@ -179,9 +183,23 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   }, [theme, followsSystem]);
 
   useEffect(() => {
-    document.documentElement.dataset.skin = skin;
-    try { localStorage.setItem(SKIN_KEY, skin); } catch { /* storage may be blocked */ }
+    document.documentElement.dataset.skin = skin.value;
+    if (skin.chosen) { try { localStorage.setItem(SKIN_KEY, skin.value); } catch { /* storage may be blocked */ } }
   }, [skin]);
+
+  /** 没有本地选择时使用管理员设置的站点默认皮肤；读取失败保持经典蓝。 */
+  useEffect(() => {
+    if (skin.chosen) return;
+    let cancelled = false;
+    request<{ code: 0; skin?: Skin }>('/api/v1/preferences/skin')
+      .then((data) => {
+        const next = data.skin;
+        if (cancelled || !next || !SKINS.some((item) => item.id === next)) return;
+        setSkin((current) => (current.chosen ? current : { value: next, chosen: false }));
+      })
+      .catch(() => { /* 站点默认皮肤不可用时保持内置默认 */ });
+    return () => { cancelled = true; };
+  }, [skin.chosen]);
 
   useEffect(() => {
     document.documentElement.lang = languageTag(language);
@@ -196,6 +214,10 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     setLocale({ value: next, chosen: true });
   }, []);
 
+  const chooseSkin = useCallback((next: Skin) => {
+    setSkin({ value: next, chosen: true });
+  }, []);
+
   const t = useCallback((key: string, params?: Record<string, string | number>) => {
     let text = DICTIONARIES[language]?.[key] ?? key;
     if (params) for (const [name, value] of Object.entries(params)) text = text.replaceAll(`{${name}}`, String(value));
@@ -203,13 +225,13 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   }, [language]);
   const value = useMemo<Preferences>(() => ({
     theme,
-    skin,
+    skin: skin.value,
     language,
     t,
     toggleTheme,
-    setSkin,
+    setSkin: chooseSkin,
     setLanguage,
-  }), [theme, skin, language, t, toggleTheme, setLanguage]);
+  }), [theme, skin.value, language, t, toggleTheme, chooseSkin, setLanguage]);
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
 }
@@ -228,17 +250,22 @@ export function ThemeToggle() {
   </button>;
 }
 
-export function ThemeMenu() {
+export function ThemeMenu({ onSetDefault }: { onSetDefault?: (skin: Skin) => void } = {}) {
   const { skin, setSkin, t } = usePreferences();
   const label = t('切换主题');
   return <Menu label={label} className="theme-menu" trigger={<Icon name="palette" />}>
-    {(close) => SKINS.map((item) => <button
-      key={item.id} type="button" role="menuitemradio" aria-checked={item.id === skin}
-      className="menu-item" onClick={() => { setSkin(item.id); close(); }}
-    >
-      <span className="theme-swatch" style={{ backgroundImage: `linear-gradient(135deg, ${item.from}, ${item.to})` }} aria-hidden="true" />
-      {t(item.label)}
-    </button>)}
+    {(close) => <>
+      {SKINS.map((item) => <button
+        key={item.id} type="button" role="menuitemradio" aria-checked={item.id === skin}
+        className="menu-item" onClick={() => { setSkin(item.id); close(); }}
+      >
+        <span className="theme-swatch" style={{ backgroundImage: `linear-gradient(135deg, ${item.from}, ${item.to})` }} aria-hidden="true" />
+        {t(item.label)}
+      </button>)}
+      {onSetDefault && <button type="button" role="menuitem" className="menu-item" onClick={() => { onSetDefault(skin); close(); }}>
+        {t('设为站点默认')}
+      </button>}
+    </>}
   </Menu>;
 }
 

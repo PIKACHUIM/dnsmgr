@@ -143,11 +143,31 @@ export async function fetchOptimizedIps(
   };
 }
 
+/** 读取数据源剩余积分。xingpingcn 为免费源，没有积分概念。 */
+export async function fetchOptimizeCredit(
+  fetcher: typeof fetch, api: OptimizeSettings['api'], key: string,
+): Promise<number> {
+  if (api === '2') {
+    throw new AppError(400, 'xingpingcn.top 接口免费使用，无需密钥，也没有积分限制', 'OPTIMIZE_CREDIT_NOT_APPLICABLE');
+  }
+  if (!key) throw new AppError(400, '请先填写接口密钥', 'OPTIMIZE_KEY_REQUIRED');
+  const url = api === '1'
+    ? `https://api.hostmonit.com/get_license?license=${encodeURIComponent(key)}`
+    : `https://www.wetest.vip/api/cf2dns/get_license?license=${encodeURIComponent(key)}`;
+  const response = await fetcher(url, { method: 'GET', signal: AbortSignal.timeout(15_000), redirect: 'error' });
+  if (!response.ok) throw new AppError(502, `积分查询接口返回 HTTP ${response.status}`, 'OPTIMIZE_CREDIT_FAILED');
+  const payload = await readJson(response) as { code?: unknown; count?: unknown; info?: unknown };
+  if (Number(payload.code) === 200 && payload.count !== undefined && Number.isFinite(Number(payload.count))) {
+    return Number(payload.count);
+  }
+  const info = typeof payload.info === 'string' ? payload.info : '';
+  throw new AppError(502, info ? `获取剩余请求次数失败：${info}` : '获取剩余请求次数失败', 'OPTIMIZE_CREDIT_FAILED');
+}
+
 const TASK_SELECT = `SELECT t.*,d.name AS zone_name,d.third_id AS zone_third_id,d.account_id,a.type AS account_type,a.config_cipher
   FROM optimize_ip_tasks t
   JOIN dns_domains d ON d.id=t.domain_id
   JOIN dns_accounts a ON a.id=d.account_id`;
-
 export async function loadOptimizeTask(c: Context<AppEnv>, taskId: number): Promise<OptimizeTaskRow> {
   const rows = await c.get('db').query<OptimizeTaskRow>(`${TASK_SELECT} WHERE t.id=?`, [taskId]);
   if (!rows[0]) throw new AppError(404, '优选任务不存在', 'OPTIMIZE_TASK_NOT_FOUND');

@@ -1,14 +1,14 @@
 import { Hono, type Context } from 'hono';
 import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
-import { input, text } from '../core/request';
+import { input } from '../core/request';
 import { requireAdmin, requireCsrf, requireSession, nowSeconds } from '../security/auth';
 import { parseConfig } from '../notify/custom';
 import {
   loadNotificationSettings, normalizeDingTalkAtMobiles, normalizeDingTalkWebhookUrl, normalizeFeishuUserIds,
   normalizeFeishuWebhookUrl, normalizeMailFrom, normalizeMailRecipients, normalizeQqBotAppId, normalizeQqBotAppSecret,
   normalizeQqBotOpenId, normalizeWecomWebhookUrl, normalizeWxPusherUids, notificationSettingsView,
-  saveNotificationSettings, sendConfiguredNotifications,
+  NOTIFICATION_CHANNELS, saveNotificationSettings, sendConfiguredNotifications, type NotificationChannel,
 } from '../notify/settings';
 import { qqBotValidationSignature, sendQqBotMessage, verifyQqBotSignature } from '../notify/qqbot';
 import { deliverQueuedNotifications } from '../notify/certificate';
@@ -156,19 +156,29 @@ export function notifyRoutes() {
     requireSql(c);
     requireAdmin(c);
     const body = await input(c);
+    const requested = typeof body.channel === 'string' ? body.channel.trim().toLowerCase() : '';
+    if (requested && !NOTIFICATION_CHANNELS.includes(requested as NotificationChannel)) {
+      throw new AppError(400, '不支持的通知渠道', 'INVALID_NOTIFICATION_CHANNEL');
+    }
     const settings = await loadNotificationSettings(c);
     if (!settings.secrets.webhookUrl && !settings.secrets.wxpusherAppToken && !settings.secrets.telegramBotToken && !settings.secrets.wecomWebhookUrl && !settings.secrets.dingtalkWebhookUrl && !settings.secrets.feishuWebhookUrl && !settings.secrets.mailTo && !settings.secrets.qqbotOpenId) {
       throw new AppError(400, '请先配置至少一个通知渠道', 'NOTIFICATION_NOT_CONFIGURED');
     }
-    const title = text(body, 'title', 100).trim() || 'DNSMGR 测试通知';
+    const rawTitle = typeof body.title === 'string' ? body.title.trim().slice(0, 100) : '';
+    const title = rawTitle || 'DNSMGR 测试通知';
     const content = typeof body.content === 'string' ? body.content.slice(0, 2000) : '这是一条来自 DNSMGR 的测试通知。';
-    const deliveries = await sendConfiguredNotifications(c, title, content);
+    const allowed = requested ? new Set<NotificationChannel>([requested as NotificationChannel]) : undefined;
+    const deliveries = await sendConfiguredNotifications(c, title, content, allowed);
+    if (deliveries.length === 0) {
+      throw new AppError(400, requested ? '该通知渠道尚未配置' : '请先配置至少一个通知渠道', 'NOTIFICATION_NOT_CONFIGURED');
+    }
     const failed = deliveries.filter((delivery) => !delivery.ok);
     if (failed.length > 0) {
       throw new AppError(503, `测试发送失败：${failed.map((delivery) => delivery.channel).join(', ')}`, 'NOTIFICATION_FAILED');
     }
     return c.json({
       code: 0, msg: '测试通知已发送', status: deliveries[0]?.status ?? 200,
+      channel: requested || 'all',
       channels: deliveries.map(({ channel, status }) => ({ channel, status })),
     });
   });

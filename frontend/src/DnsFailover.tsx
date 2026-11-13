@@ -37,6 +37,8 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [cleanOpen, setCleanOpen] = useState(false);
+  const [cleanDays, setCleanDays] = useState('30');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const selectedDomainId = useRef('');
@@ -123,6 +125,23 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
     finally { setBusy(false); }
   }
 
+  async function clean(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      const result = await send<{ code: 0; deleted: number; msg: string }>('/api/v1/failover/logs/clean', 'POST', { days: Number(cleanDays) }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(result.msg);
+      setCleanOpen(false);
+      if (logsTask !== null) {
+        const refreshed = await request<{ code: 0; items: Log[] }>(`/api/v1/failover/tasks/${logsTask}/logs?page=1&pageSize=50`, { signal: controller.signal });
+        setLogs(refreshed.items);
+      }
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
   async function checkNow(task: Task) {
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
@@ -160,6 +179,7 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
     </div>}
     {overview && <div className="page-tools">
       <button className="button button-secondary" type="button" disabled={busy || loading} onClick={() => void refresh()}>刷新</button>
+      <button className="button button-secondary" type="button" disabled={busy} onClick={() => { setError(''); setNotice(''); setCleanOpen(true); }}>清理日志</button>
       <button className="button button-primary" type="button" onClick={() => navigate('/dmonitor/task')}>管理切换策略</button>
     </div>}
     <section className="panel" aria-labelledby="failover-list-title">
@@ -216,6 +236,13 @@ export function DnsFailover({ session, onExpired, navigate, overview = false }: 
         <label className="form-field"><span>超时（秒）</span><input required type="number" min={1} max={30} value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })} /></label>
         <label className="form-field"><span>连续失败/恢复阈值</span><input required type="number" min={1} max={10} value={form.failureThreshold} onChange={(event) => setForm({ ...form, failureThreshold: event.target.value })} /></label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !form.domainId || !form.recordId}>{busy ? '正在提交…' : '创建策略'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
+    {cleanOpen && <Modal title="清理容灾日志" onClose={() => { if (!busy) setCleanOpen(false); }}>
+      <form className="dns-form" onSubmit={clean}>
+        <label className="form-field"><span>保留天数</span><input type="number" min={0} max={3650} value={cleanDays} onChange={(event) => setCleanDays(event.target.value)} required /></label>
+        <p className="panel-footnote">早于保留天数的运行日志会被删除；填 0 表示清空全部历史日志。策略本身不会被删除。</p>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在清理…' : '开始清理'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setCleanOpen(false)}>取消</button></div>
       </form>
     </Modal>}
   </>;
