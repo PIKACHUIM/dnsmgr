@@ -31,9 +31,9 @@ export function DnsAccounts({ session, onExpired }: Props) {
   const controller = useRef<AbortController | null>(null);
 
   const handle = useCallback((failure: unknown) => {
-    if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
+    if (failure instanceof ApiError && failure.status === 401) onExpired(t('会话已失效，请重新登录。'));
     else setError(errorMessage(failure));
-  }, [onExpired]);
+  }, [onExpired, t]);
 
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
@@ -82,7 +82,7 @@ export function DnsAccounts({ session, onExpired }: Props) {
     controller.current = new AbortController();
     try {
       await send('/api/v1/dns/accounts', 'POST', { type, name, remark, config }, controller.current.signal, { 'X-CSRF-Token': session.csrfToken });
-      setNotice(`账户「${name}」已添加`);
+      setNotice(t('账户「{name}」已添加', { name }));
       setName('');
       setRemark('');
       setConfig({});
@@ -107,21 +107,21 @@ export function DnsAccounts({ session, onExpired }: Props) {
         { domains: remote.items.map((item) => ({ id: item.id, name: item.name, recordCount: item.recordCount })) },
         signal.signal, { 'X-CSRF-Token': session.csrfToken },
       );
-      setNotice(`已同步 ${account.name}：新增 ${result.imported} 个域名，跳过 ${result.skipped} 个`);
+      setNotice(t('已同步 {name}：新增 {imported} 个域名，跳过 {skipped} 个', { name: account.name, imported: result.imported, skipped: result.skipped }));
       await load(signal.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
   }
 
   async function remove(account: Account) {
-    if (busy || !window.confirm(`确认删除账户「${account.name}」？`)) return;
+    if (busy || !window.confirm(t('确认删除账户「{name}」？', { name: account.name }))) return;
     setBusy(true);
     setError('');
     setNotice('');
     const signal = new AbortController();
     try {
       await send(`/api/v1/dns/accounts/${account.id}`, 'DELETE', undefined, signal.signal, { 'X-CSRF-Token': session.csrfToken });
-      setNotice(`账户「${account.name}」已删除`);
+      setNotice(t('账户「{name}」已删除', { name: account.name }));
       await load(signal.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -144,7 +144,7 @@ export function DnsAccounts({ session, onExpired }: Props) {
               <td className="row-actions">{account.type === 'cloudflare' && <a className="button button-secondary" href={`/cloudflare/tunnels/${account.id}`}>Tunnels</a>}<button className="button button-secondary" disabled={busy} onClick={() => void sync(account)}>{t('同步域名')}</button><button className="button button-quiet" disabled={busy} onClick={() => void remove(account)}>{t('删除')}</button></td>
             </tr>)}</tbody>
           </table></div>}
-      {unported.length > 0 && <div className="panel-footnote">尚未移植的驱动：{unported.join('、')}</div>}
+      {unported.length > 0 && <div className="panel-footnote">{t('尚未移植的驱动：{list}', { list: unported.join('、') })}</div>}
     </section>
     <DnsCategories session={session} onExpired={onExpired} />
     {formOpen && <Modal title={t('添加 DNS 账户')} description={t('凭据加密保存')} onClose={() => setFormOpen(false)}>

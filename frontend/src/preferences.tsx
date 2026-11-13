@@ -86,7 +86,7 @@ const BASE_LANGUAGES: Record<string, Language> = {
   en: 'en', ja: 'ja', ko: 'ko', fr: 'fr', de: 'de', it: 'it', es: 'es', pt: 'pt', ru: 'ru',
 };
 
-interface Preferences {
+export interface Preferences {
   theme: Theme;
   skin: Skin;
   language: Language;
@@ -145,7 +145,7 @@ function storedLanguage(): Language | null {
   return null;
 }
 
-function languageTag(language: Language): string {
+export function languageTag(language: Language): string {
   return LANGUAGES.find((item) => item.id === language)?.tag ?? 'en';
 }
 
