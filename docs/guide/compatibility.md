@@ -42,13 +42,14 @@
 | 代理连通性测试 | `POST /system/proxytest` | 部分等价：`POST /api/v1/system/proxy/test` 校验代理地址格式并探测代理端口是否应答（HTTP/HTTPS）。Worker 运行时无法用代理发起出站请求，因此不验证出口 IP 与代理账号；SOCKS5 只校验配置，返回 `reachable: null` |
 | 逐渠道通知测试 | `/system/mailtest`、`/system/tgbottest`、`/system/webhooktest`、`/system/customwebhooktest` | `POST /api/v1/system/notify/test` 支持 `channel`（`webhook`/`wxpusher`/`telegram`/`wecom`/`dingtalk`/`feishu`/`mail`/`qqbot`）单渠道发送；省略时发往全部已配置渠道。未配置的渠道返回 400 `NOTIFICATION_NOT_CONFIGURED`，未知渠道返回 400 `INVALID_NOTIFICATION_CHANNEL` |
 | 分用途通知渠道开关 | `cert_notice_*`、`notice_*`、`expire_notice_*` | 已迁移：证书与部署通知用 `GET|PUT /api/v1/system/cert-notice`（`0` 关闭 / `1` 开启 / `2` 仅失败时），容灾切换通知用 `GET|PUT /api/v1/system/failover-notice`（开关两态），到期提醒沿用 `expire_notice_channels`；设置入口分别在证书设置弹窗与容灾概览页「通知渠道」。所有渠道关闭时，证书通知直接标记 `DISABLED`，不无限重试 |
+| 自定义 Webhook 内容格式 | `custom_webhook_content_format` | 已迁移：`GET|PUT /api/v1/system/notify` 读写 `html` / `markdown` / `text`（缺省 `text`），发送前按旧版规则把 `<b>` 转 `**`、`<br/>` 转换行并去除标签；请求头同时接受旧版每行 `Key: Value` 与 JSON 对象；GET 按请求体模板展开查询参数，模板 JSON 无效时回退 `title`/`content` |
 | 证书部署时间窗 | `deploy_hour_start`、`deploy_hour_end` | 已迁移：`GET|PUT /api/v1/system/certificate-renew` 读写 0–23 时，cron 按 `schedule_tz_offset` 换算本地小时，仅窗口内执行自动部署，跨天按环绕处理（如 22–6），起止相同表示只允许该小时；管理员手动「立即检查一次」与单任务运行不受窗口限制。非法小时返回 400 `INVALID_CERT_RENEW_SETTINGS` |
 | 优选数据源积分查询 | `POST /optimizeip/queryapi` | 已迁移为 `POST /api/v1/optimize/credit`（管理员 + CSRF，审计 `optimize.credit`）：wetest.vip 与 hostmonit 返回剩余次数；xingpingcn.top 无密钥免费源返回 400 `OPTIMIZE_CREDIT_NOT_APPLICABLE`。优选设置弹窗提供「查询积分」按钮 |
 | 容灾日志按天清理 | `POST /dmonitor/clean` | 已迁移为 `POST /api/v1/failover/logs/clean`（`days` 0–3650，审计 `failover.clean`），容灾概览页「清理日志」弹窗；写入时仍保留每任务最近 500 条 |
 | 外部状态探针 | `/dmtask/status`、`/optimizeip/status` | 已迁移，返回纯文本 `ok`/`error`：容灾按启用任务的 `last_check_at` 与 `2×间隔+60s` 判定，优选按启用任务的 `last_run_at` 与 3600 秒判定 |
 | 旧调试页 | `GET /test` | 未迁移（旧实现为空方法） |
 
-另有几类旧端点属于页面内部 AJAX 辅助，已被新接口取代、无需单独移植：`/domain/list` 与 `/domain/data` → `GET /api/v1/dns/domains`，`/domain/updatedate` 与 `/domain/setcategory` → `POST /api/v1/dns/domains/batch` / `PATCH /api/v1/dns/domains/:id`，`/record/list` → `GET /api/v1/dns/domains/:id/records?name=`，`/record/quickinfo/:id` → `GET /api/v1/dns/domains/:id/lines`。`/domain/dnscheck` 旧版即无实现，属于死路由。
+另有几类旧端点属于页面内部 AJAX 辅助，已被新接口取代、无需单独移植：`/domain/list` 与 `/domain/data` → `GET /api/v1/dns/domains`，`/domain/updatedate` 与 `/domain/setcategory` → `POST /api/v1/dns/domains/batch` / `PATCH /api/v1/dns/domains/:id`，`/record/list` → `GET /api/v1/dns/domains/:id/records?name=`，`/record/quickinfo/:id` → `GET /api/v1/dns/domains/:id/lines`，`/record/check/:id` → `POST /api/v1/dns/domains/:id/records/check`，`/user/data` → `GET /api/v1/users`，`/log/data` → `GET /api/v1/dns/logs`。`/domain/dnscheck` 旧版即无实现，属于死路由。
 
 ## 重跑基线与上游差异扫描
 

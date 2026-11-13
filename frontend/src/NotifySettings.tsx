@@ -3,7 +3,7 @@ import { ApiError, errorMessage, request, send, type Session } from './api';
 import { InfoTip } from './InfoTip';
 
 interface Config {
-  url: string; method: string; headers: string; contentType: string; body: string;
+  url: string; method: string; headers: string; contentType: string; contentFormat: string; body: string;
   configured: boolean; webhookConfigured: boolean; urlConfigured: boolean; headersConfigured: boolean; bodyConfigured: boolean;
   wxpusherAppToken: string; wxpusherUids: string; wxpusherConfigured: boolean;
   wxpusherTokenConfigured: boolean; wxpusherUidsConfigured: boolean;
@@ -50,7 +50,7 @@ export function NotifySettings({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [load]);
 
-  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles' | 'feishuWebhookUrl' | 'feishuUserIds' | 'mailTo' | 'mailFrom' | 'qqbotAppId' | 'qqbotAppSecret' | 'qqbotOpenId', value: string) {
+  function update(key: 'url' | 'method' | 'headers' | 'contentType' | 'contentFormat' | 'body' | 'wxpusherAppToken' | 'wxpusherUids' | 'telegramBotToken' | 'telegramChatId' | 'telegramTopicId' | 'wecomWebhookUrl' | 'dingtalkWebhookUrl' | 'dingtalkSecret' | 'dingtalkAtMobiles' | 'feishuWebhookUrl' | 'feishuUserIds' | 'mailTo' | 'mailFrom' | 'qqbotAppId' | 'qqbotAppSecret' | 'qqbotOpenId', value: string) {
     setConfig((current) => {
       if (!current) return current;
       const updated = { ...current, [key]: value };
@@ -79,7 +79,7 @@ export function NotifySettings({ session, onExpired }: Props) {
     try {
       await send('/api/v1/system/notify', 'PUT', {
         url: config.url, method: config.method, headers: config.headers,
-        contentType: config.contentType, body: config.body,
+        contentType: config.contentType, contentFormat: config.contentFormat, body: config.body,
         clearUrl: config.clearUrl, clearHeaders: config.clearHeaders, clearBody: config.clearBody,
         wxpusherAppToken: config.wxpusherAppToken, wxpusherUids: config.wxpusherUids,
         clearWxpusherAppToken: config.clearWxpusherAppToken, clearWxpusherUids: config.clearWxpusherUids,
@@ -138,7 +138,10 @@ export function NotifySettings({ session, onExpired }: Props) {
             <option value="POST">POST</option><option value="PUT">PUT</option><option value="GET">GET</option>
           </select></label>
           <label className="form-field"><span>Content-Type</span><input value={config.contentType} onChange={(event) => update('contentType', event.target.value)} maxLength={128} /></label>
-          <label className="form-field"><span>请求头 JSON</span><input value={config.headers} onChange={(event) => update('headers', event.target.value)} maxLength={4096} placeholder={config.headersConfigured ? '已配置，留空保留' : '{"Authorization":"Bearer ..."}'} /></label>
+          <label className="form-field"><span>内容格式 <InfoTip label="内容格式说明" text="仅影响自定义 Webhook：HTML 原样发送；Markdown 把 <b> 转成 ** 并去除其它标签；纯文本把 <br/> 转成换行并去除标签。" /></span><select value={config.contentFormat} onChange={(event) => update('contentFormat', event.target.value)}>
+            <option value="html">HTML</option><option value="markdown">Markdown</option><option value="text">纯文本</option>
+          </select></label>
+          <label className="form-field"><span>请求头</span><input value={config.headers} onChange={(event) => update('headers', event.target.value)} maxLength={4096} placeholder={config.headersConfigured ? '已配置，留空保留' : '{"Authorization":"Bearer ..."} 或每行 Key: Value'} /></label>
           <label className="form-field" style={{ gridColumn: '1 / -1' }}><span>请求体模板</span>
             <textarea value={config.body} onChange={(event) => update('body', event.target.value)} rows={5} maxLength={8192}
               placeholder={config.bodyConfigured ? '已配置，留空保留' : '{"title":"{title}","content":"{content}"}'} />

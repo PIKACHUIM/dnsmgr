@@ -138,22 +138,29 @@ export function notifyRoutes() {
     const contentType = typeof body.contentType === 'string'
       ? body.contentType.trim().slice(0, 128) || 'application/json'
       : current.contentType;
+    const contentFormat = typeof body.contentFormat === 'string'
+      ? body.contentFormat.trim().toLowerCase()
+      : current.contentFormat;
     if (!['GET', 'POST', 'PUT'].includes(method)) throw new AppError(400, 'Webhook 方法只能是 GET/POST/PUT', 'INVALID_WEBHOOK');
+    if (!['html', 'markdown', 'text'].includes(contentFormat)) {
+      throw new AppError(400, 'Webhook 内容格式只能是 html/markdown/text', 'INVALID_WEBHOOK');
+    }
     try {
       parseConfig({
         custom_webhook_url: secrets.webhookUrl, custom_webhook_method: method,
         custom_webhook_headers: secrets.webhookHeaders, custom_webhook_content_type: contentType,
+        custom_webhook_content_format: contentFormat,
         custom_webhook_body: secrets.webhookBody,
       });
     } catch (error) {
       throw new AppError(400, error instanceof Error ? error.message : 'Webhook 配置无效', 'INVALID_WEBHOOK');
     }
-    await saveNotificationSettings(c, { secrets, method, contentType });
+    await saveNotificationSettings(c, { secrets, method, contentType, contentFormat });
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id, action, target, detail, created_at) VALUES (?,?,?,?,?)',
       [c.get('principal').user.id, 'notify.settings', 'system', `webhook=${Boolean(secrets.webhookUrl)},wxpusher=${Boolean(secrets.wxpusherAppToken)},telegram=${Boolean(secrets.telegramBotToken)},wecom=${Boolean(secrets.wecomWebhookUrl)},dingtalk=${Boolean(secrets.dingtalkWebhookUrl)},feishu=${Boolean(secrets.feishuWebhookUrl)},mail=${Boolean(secrets.mailTo)},qqbot=${Boolean(secrets.qqbotOpenId)}`, nowSeconds()],
     );
-    return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType }, { mailAvailable: Boolean(c.env.EMAIL) }) });
+    return c.json({ code: 0, ...notificationSettingsView({ secrets, method, contentType, contentFormat }, { mailAvailable: Boolean(c.env.EMAIL) }) });
   });
 
   routes.post('/api/v1/system/notify/test', requireSession, requireCsrf, async (c) => {

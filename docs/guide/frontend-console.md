@@ -11,7 +11,7 @@
 | 站点默认皮肤 | 管理员在主题菜单点「设为站点默认」，写入 `app_settings.default_skin`；没有本地 `dnsmgr-skin` 的浏览器读取 `GET /api/v1/preferences/skin` 后应用，选择过皮肤的用户仍以本地值为准 | `ThemeMenu`、`preferences.tsx`、`Console.tsx` |
 | 分用途通知渠道 | 证书设置弹窗内按渠道选择「关闭 / 开启 / 仅失败时」，容灾概览页「通知渠道」弹窗控制切换/恢复通知；全部关闭时通知标记 `DISABLED` | `CertificateSettings.tsx`、`DnsFailover.tsx`、`src/notify/channels.ts` |
 | 证书部署时间窗 | 证书设置弹窗新增「部署时间窗」两个下拉（0–23 时），保存到 `deploy_hour_start`/`deploy_hour_end`；cron 只在该时段自动部署，手动运行不受限 | `CertificateSettings.tsx`、`src/routes/schedule.ts`、`src/deploy.ts` |
-| 运维工具入口 | 通知设置增加单渠道测试下拉；优选设置增加「查询积分」；容灾概览增加「清理日志」；代理设置增加「测试连通性」 | `NotifySettings.tsx`、`OptimizeIp.tsx`、`DnsFailover.tsx`、`ProxySettings.tsx` |
+| 运维工具入口 | 通知设置增加单渠道测试下拉与内容格式选择（HTML/Markdown/纯文本，请求头兼容行式写法）；优选设置增加「查询积分」；容灾概览增加「清理日志」；代理设置增加「测试连通性」 | `NotifySettings.tsx`、`OptimizeIp.tsx`、`DnsFailover.tsx`、`ProxySettings.tsx` |
 
 验证：typecheck、build:frontend、`npm test`、`npm run test:e2e`、`docs:build`/`docs:verify` 均通过（见提交说明）。
 

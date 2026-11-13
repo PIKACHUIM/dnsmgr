@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { environment } from '../src/platform/runtime';
-import { parseConfig, renderTemplate } from '../src/notify/custom';
+import { formatNotificationContent, normalizeContentFormat, parseConfig, renderTemplate, sendCustomWebhook } from '../src/notify/custom';
 import { signQqBotPayload, verifyQqBotSignature } from '../src/notify/qqbot';
 import { createTestDatabase } from './helpers/sqlite';
 
@@ -19,6 +19,32 @@ describe('custom webhook rendering', () => {
     expect(renderTemplate('{title}: {content}', 'T', 'C')).toBe('T: C');
     expect(() => parseConfig({ custom_webhook_url: 'ftp://x' })).toThrow(/http/);
     expect(() => parseConfig({ custom_webhook_url: 'https://x', custom_webhook_headers: '[]' })).toThrow(/JSON/);
+  });
+
+  it('applies legacy content formats and accepts line-based headers', async () => {
+    expect(normalizeContentFormat(undefined)).toBe('text');
+    expect(normalizeContentFormat('HTML')).toBe('html');
+    expect(formatNotificationContent('<b>标题</b><br/>正文', 'markdown')).toBe('**标题**\n正文');
+    expect(formatNotificationContent('<b>标题</b><br/>正文', 'text')).toBe('标题\n正文');
+    expect(formatNotificationContent('<b>标题</b><br/>正文', 'html')).toBe('<b>标题</b><br/>正文');
+
+    const config = parseConfig({
+      custom_webhook_url: 'https://example.com/hook', custom_webhook_method: 'GET',
+      custom_webhook_headers: 'Authorization: Bearer token\nX-Source: dnsmgr',
+      custom_webhook_body: '{"title":"{title}","content":"{content}"}',
+      custom_webhook_content_format: 'text',
+    })!;
+    expect(config.headers).toEqual({ Authorization: 'Bearer token', 'X-Source': 'dnsmgr' });
+
+    let requested = '';
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      requested = String(input);
+      return new Response('ok', { status: 200 });
+    }) as unknown as typeof fetch;
+    await sendCustomWebhook(config, '标题', '<b>正文</b><br/>第二行', fetchImpl);
+    const url = new URL(requested);
+    expect(url.searchParams.get('title')).toBe('标题');
+    expect(url.searchParams.get('content')).toBe('正文\n第二行');
   });
 });
 
@@ -150,6 +176,31 @@ describe('notification settings API', () => {
       body: JSON.stringify({ clearWxpusherAppToken: true, clearWxpusherUids: true }),
     });
     expect(await cleared.json()).toMatchObject({ webhookConfigured: true, wxpusherConfigured: false });
+  });
+
+  it('stores the legacy webhook content format and rejects unknown values', async () => {
+    const invalid = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ contentFormat: 'html5' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_WEBHOOK');
+
+    const saved = await request('/api/v1/system/notify', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({
+        url: 'https://example.com/format', method: 'POST', contentType: 'application/json',
+        contentFormat: 'markdown', headers: 'X-Source: dnsmgr', body: '{"title":"{title}","content":"{content}"}',
+      }),
+    });
+    expect(await saved.json()).toMatchObject({ code: 0, contentFormat: 'markdown' });
+    const view = await request('/api/v1/system/notify', { headers: { cookie } });
+    expect(await view.json()).toMatchObject({ contentFormat: 'markdown' });
+
+    sent = [];
+    const sentResponse = await post('/api/v1/system/notify/test', { title: '标题', content: '<b>粗体</b><br/>下一行' });
+    expect(await sentResponse.json()).toMatchObject({ code: 0, channels: [{ channel: 'webhook', status: 200 }] });
+    expect(sent[0]).toContain('"content":"**粗体**\\n下一行"');
   });
 
   it('reports WxPusher rejection without returning response details or credentials', async () => {

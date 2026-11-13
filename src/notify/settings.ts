@@ -3,13 +3,13 @@ import type { AppEnv } from '../core/types';
 import { AppError } from '../core/errors';
 import { encrypt, decrypt } from '../security/crypto';
 import type { SqlDatabase } from '../storage/sql';
-import { parseConfig, sendCustomWebhook } from './custom';
+import { normalizeContentFormat, parseConfig, sendCustomWebhook } from './custom';
 import { sendQqBotMessage } from './qqbot';
 
 const SECRET_KEY = 'notification_secrets_cipher';
 const SECRET_PURPOSE = 'notification-secrets/v1';
 const LEGACY_SECRET_KEYS = ['custom_webhook_url', 'custom_webhook_headers', 'custom_webhook_body'] as const;
-const SETTING_KEYS = [SECRET_KEY, ...LEGACY_SECRET_KEYS, 'custom_webhook_method', 'custom_webhook_content_type'] as const;
+const SETTING_KEYS = [SECRET_KEY, ...LEGACY_SECRET_KEYS, 'custom_webhook_method', 'custom_webhook_content_type', 'custom_webhook_content_format'] as const;
 
 export interface NotificationSettings {
   secrets: {
@@ -35,6 +35,7 @@ export interface NotificationSettings {
   };
   method: string;
   contentType: string;
+  contentFormat: string;
 }
 
 export const NOTIFICATION_CHANNELS = ['webhook', 'wxpusher', 'telegram', 'wecom', 'dingtalk', 'feishu', 'mail', 'qqbot'] as const;
@@ -107,6 +108,7 @@ export async function loadNotificationSettings(c: Context<AppEnv>): Promise<Noti
     secrets,
     method: values.custom_webhook_method ?? 'POST',
     contentType: values.custom_webhook_content_type ?? 'application/json',
+    contentFormat: normalizeContentFormat(values.custom_webhook_content_format),
   };
 }
 
@@ -118,6 +120,7 @@ export async function saveNotificationSettings(c: Context<AppEnv>, settings: Not
     { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: [SECRET_KEY, encrypted, now] },
     { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: ['custom_webhook_method', settings.method, now] },
     { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: ['custom_webhook_content_type', settings.contentType, now] },
+    { sql: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at', args: ['custom_webhook_content_format', normalizeContentFormat(settings.contentFormat), now] },
     { sql: `DELETE FROM app_settings WHERE key IN (${LEGACY_SECRET_KEYS.map(() => '?').join(',')})`, args: [...LEGACY_SECRET_KEYS] },
   ]);
 }
@@ -139,7 +142,7 @@ export function notificationSettingsView(
     dingtalkWebhookUrl: '', dingtalkSecret: '', dingtalkAtMobiles: '', feishuWebhookUrl: '', feishuUserIds: '',
     telegramBotToken: '', telegramChatId: '', telegramTopicId: '',
     mailTo: '', mailFrom: '', qqbotAppId: '', qqbotAppSecret: '', qqbotOpenId: '',
-    method: settings.method, contentType: settings.contentType,
+    method: settings.method, contentType: settings.contentType, contentFormat: settings.contentFormat,
     configured: webhookConfigured, webhookConfigured,
     urlConfigured: webhookConfigured, headersConfigured: Boolean(secrets.webhookHeaders),
     bodyConfigured: Boolean(secrets.webhookBody),
@@ -473,6 +476,7 @@ export async function sendConfiguredNotifications(
         custom_webhook_method: config.method,
         custom_webhook_headers: config.secrets.webhookHeaders,
         custom_webhook_content_type: config.contentType,
+        custom_webhook_content_format: config.contentFormat,
         custom_webhook_body: config.secrets.webhookBody,
       });
       if (webhook) {
