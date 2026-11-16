@@ -184,7 +184,10 @@ function acmeFailure(error: unknown): AppError {
   if (error instanceof AppError) return error;
   if (error instanceof AcmeProtocolError) {
     if (error.status === 429) return new AppError(429, 'CA 请求被限流，请稍后再试', 'ACME_RATE_LIMITED');
-    return new AppError(502, `CA 请求未完成（HTTP ${error.status}）`, error.problemType?.includes('badNonce') ? 'ACME_NONCE_REJECTED' : 'ACME_CA_REJECTED');
+    if (error.problemType?.includes('badNonce')) {
+      return new AppError(502, 'CA 拒绝了本次 nonce（已过期或已被占用），该请求未被处理；请刷新订单后重试', 'ACME_NONCE_REJECTED');
+    }
+    return new AppError(502, `CA 请求未完成（HTTP ${error.status}）`, 'ACME_CA_REJECTED');
   }
   return new AppError(503, '无法确认 CA 请求结果；请先检查订单状态，不要盲目重试', 'ACME_OUTCOME_UNKNOWN');
 }

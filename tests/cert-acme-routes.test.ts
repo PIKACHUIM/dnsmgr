@@ -58,6 +58,8 @@ let dnsTxtContent = '';
 let dnsWrites: { zone: string; auth: string; name: string }[] = [];
 let failNextDnsDelete = false;
 let failNextNewOrder = false;
+let failNextAuthzWithBadNonce = false;
+let authzNonces: string[] = [];
 let replayNonce = 0;
 let transport: typeof fetch;
 let transportCalls: string[][] = [];
@@ -128,6 +130,14 @@ function fakeFetch(): typeof fetch {
       const authzMatch = url.pathname.match(/^\/acme\/authz\/(\d+)$/);
       if (authzMatch && init?.method === 'POST') {
         const index = Number(authzMatch[1]);
+        const jws = JSON.parse(String(init.body)) as { protected: string };
+        authzNonces.push((JSON.parse(fromBase64Url(jws.protected)) as { nonce: string }).nonce);
+        if (failNextAuthzWithBadNonce) {
+          failNextAuthzWithBadNonce = false;
+          return acmeJson({ type: 'urn:ietf:params:acme:error:badNonce', detail: 'JWS has an invalid anti-replay nonce' }, 400, {
+            'Replay-Nonce': 'nonce-bad-nonce-fresh',
+          });
+        }
         const domain = requestedDomains[index - 1] ?? requestedDomains[0]!;
         return acmeJson({
           status: triggeredAuthz.has(index) ? 'valid' : 'pending',
@@ -225,6 +235,8 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     dnsWrites = [];
     failNextDnsDelete = false;
     failNextNewOrder = false;
+    failNextAuthzWithBadNonce = false;
+    authzNonces = [];
     issuedCertificate = '';
     transport = fakeFetch();
     const budget: RequestBudget = { consume: () => {}, remainingMs: () => 30_000, fetch: transport };
@@ -364,6 +376,24 @@ describe('ACME staging DNS-01 issuance workflow', () => {
       const result = await bounded(`/api/v1/cert/acme/orders/${order.id}/${step}`, body);
       expect(result.status, `${step}: ${JSON.stringify(await result.clone().json())}`).toBe(200);
     }
+  });
+
+  it('retries a badNonce rejection once with the fresh nonce returned by the CA', async () => {
+    const accountId = await createReadyStagingAccount();
+    const orderId = await createDraftOrder(accountId);
+    expect((await post(`/api/v1/cert/acme/orders/${orderId}/place`, {})).status).toBe(200);
+
+    failNextAuthzWithBadNonce = true;
+    authzNonces = [];
+    const authorized = await post(`/api/v1/cert/acme/orders/${orderId}/authorize`, {});
+
+    expect(authorized.status).toBe(200);
+    expect(await authorized.json()).toMatchObject({ id: orderId, status: 'challenge_ready' });
+    expect(authzNonces).toHaveLength(2);
+    expect(authzNonces[1]).toBe('nonce-bad-nonce-fresh');
+    expect(authzNonces[0]).not.toBe(authzNonces[1]);
+    expect(await testDb.db.query('SELECT status,last_error FROM cert_acme_orders WHERE id=?', [orderId]))
+      .toEqual([{ status: 'challenge_ready', last_error: null }]);
   });
 
   it('marks a lost newOrder response unknown and never retries the non-idempotent submission', async () => {

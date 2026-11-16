@@ -180,7 +180,7 @@ export async function fetchAcmeNonce(fetcher: typeof fetch, originOrEnvironment:
   const origin = originOrEnvironment === 'staging' || originOrEnvironment === 'production'
     ? directories[originOrEnvironment]
     : originOrEnvironment;
-  const response = await fetcher(validateAcmeUrlFrom(origin, newNonceUrl), { method: 'HEAD', redirect: 'manual' });
+  const response = await fetcher(validateAcmeUrlFrom(origin, newNonceUrl), { method: 'HEAD', redirect: 'manual', cache: 'no-store' });
   if (response.status < 200 || response.status >= 300) throw new AcmeProtocolError('无法取得 ACME Replay-Nonce', response.status);
   const nonce = response.headers.get('Replay-Nonce');
   if (!nonce || nonce.length > 512) throw new AcmeProtocolError('ACME 响应缺少有效 Replay-Nonce', 502);
@@ -286,7 +286,7 @@ export async function signAcmeJws(options: {
   };
 }
 
-export async function postAcmeJws(fetcher: typeof fetch, options: {
+interface AcmeJwsRequest {
   environment: AcmeEnvironment;
   origin?: string;
   privateKeyPem: string;
@@ -294,7 +294,9 @@ export async function postAcmeJws(fetcher: typeof fetch, options: {
   url: string;
   payload: unknown;
   kid?: string;
-}): Promise<AcmeJwsResponse> {
+}
+
+async function sendAcmeJws(fetcher: typeof fetch, options: AcmeJwsRequest): Promise<AcmeJwsResponse> {
   const url = options.origin ? validateAcmeUrlFrom(options.origin, options.url) : validateAcmeUrl(options.environment, options.url);
   const jws = await signAcmeJws(options);
   const response = await fetcher(url, {
@@ -302,6 +304,7 @@ export async function postAcmeJws(fetcher: typeof fetch, options: {
     headers: { 'Content-Type': 'application/jose+json', Accept: 'application/json, application/pem-certificate-chain' },
     body: JSON.stringify(jws),
     redirect: 'manual',
+    cache: 'no-store',
   });
   if (response.status >= 300 && response.status < 400) throw new AcmeProtocolError('ACME 重定向响应已拒绝', response.status);
   const { body, text } = await readResponse(response);
@@ -322,4 +325,15 @@ export async function postAcmeJws(fetcher: typeof fetch, options: {
     body,
     text,
   };
+}
+
+export async function postAcmeJws(fetcher: typeof fetch, options: AcmeJwsRequest): Promise<AcmeJwsResponse> {
+  try {
+    return await sendAcmeJws(fetcher, options);
+  } catch (error) {
+    // RFC 8555 §6.5：badNonce 表示请求未被处理，用错误响应带的新 nonce 重签一次是安全的。
+    // 这样 nonce 过期或被并发步骤占用时，用户不必手动「准备 nonce」再重试。
+    if (!(error instanceof AcmeProtocolError) || !error.problemType?.includes('badNonce') || !error.replayNonce) throw error;
+    return sendAcmeJws(fetcher, { ...options, nonce: error.replayNonce });
+  }
 }
