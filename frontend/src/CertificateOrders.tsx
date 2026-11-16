@@ -295,7 +295,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     try {
       const result = await send<{ code: 0; id: number }>('/api/v1/cert/acme/orders', 'POST', {
         accountId: issuanceAccountId,
-        domains: domainsText.split(/[\\s,;]+/).map((domain) => domain.trim()).filter(Boolean),
+        domains: domainsText.split(/[\s,;]+/).map((domain) => domain.trim()).filter(Boolean),
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setDomainsText('');
       setOrderOpen(false);
