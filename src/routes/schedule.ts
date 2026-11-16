@@ -18,6 +18,7 @@ import {
 import {
   CERT_RENEW_DAYS, CERT_RENEW_ENABLED, executeCertificateRenewal, readCertificateRenewSettings,
 } from '../schedule/certificate';
+import { executeCertificateIssuance } from '../schedule/acme';
 import { CERT_NOTIFY_ENABLED, deliverQueuedNotifications } from '../notify/certificate';
 import { executeDeployDue } from '../deploy';
 import { executeOptimizeDue } from '../optimize';
@@ -278,6 +279,7 @@ export function scheduleRoutes() {
     const periodicRefreshRan = initialRefreshRan ? false : await executePeriodicExpirationRefresh(c);
     if (!initialRefreshRan && !periodicRefreshRan) await executeExpirationNotice(c, await offsetMinutes(c));
     try { await executeCertificateRenewal(c.env, db(c)); } catch { /* 预算不足时由下一次 cron 继续 */ }
+    try { await executeCertificateIssuance(c.env, db(c)); } catch { /* 预算不足时由下一次 cron 继续 */ }
     try { await executeDeployDue(c, 2); } catch { /* 部署失败由运行记录与通知反馈 */ }
     try { await executeOptimizeDue(c); } catch { /* IP 优选失败记录在任务状态中 */ }
     try { await deliverQueuedNotifications(c.env, db(c), 3); } catch { /* 通知发送失败不影响调度任务 */ }

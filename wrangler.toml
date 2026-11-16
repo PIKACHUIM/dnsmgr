@@ -19,6 +19,11 @@ binding = "DB"
 database_name = "dnsmgrui-data"
 database_id = "7e483cab-5039-4665-b181-f1377f4265a6"
 
+# 免费账户最多 5 个 Cron Trigger，本账户已用满，取下配置会让 deploy 报 10072。
+# 腾出名额或升级 Paid 后取消注释即可每分钟推进已启动的 ACME 签发任务。
+# [triggers]
+# crons = ["* * * * *"]
+
 # 需先在 Cloudflare 账户启用 Email Routing；未启用时部署会失败。
 [[send_email]]
 name = "EMAIL"

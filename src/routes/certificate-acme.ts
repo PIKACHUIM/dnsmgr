@@ -545,6 +545,114 @@ const ADVANCE_NONCE_STATUSES = new Set([
   'ready_to_finalize','finalizing','processing','certificate_ready',
 ]);
 
+export interface AdvanceOutcome {
+  status: string; done: boolean; manual: boolean; pending: boolean; retryAfter: number; steps: string[];
+  authorizationIndex: number; authorizationTotal: number; currentDomain: string | null; certificateOrderId: number | null;
+}
+
+/**
+ * 在单次请求的预算内把签发任务尽可能向前推进。调用方负责权限校验
+ * （HTTP 路由用管理员会话，cron 用合成的 context）。
+ */
+export async function advanceIssuance(
+  c: Context<AppEnv>, orderId: number, options: { tolerant?: boolean } = {},
+): Promise<AdvanceOutcome> {
+  const labels: string[] = [];
+  let status = '';
+  let retryAfter = 0;
+  let manual = false;
+  const run = async (label: string, step: () => Promise<Response>) => {
+    const response = await step();
+    labels.push(label);
+    return response;
+  };
+  try {
+    for (let round = 0; round < ADVANCE_MAX_STEPS; round += 1) {
+      if (c.env.BUDGET.remainingMs() < 5_000) { retryAfter = 5; break; }
+      const rows = await c.get('db').query<{
+        status: string; updated_at: number; replay_nonce: string | null;
+        claimed_nonce: string | null; claimed_at: number | null; authorization_state_json: string;
+      }>('SELECT status,updated_at,replay_nonce,claimed_nonce,claimed_at,authorization_state_json FROM cert_acme_orders WHERE id=?', [orderId]);
+      const row = rows[0];
+      if (!row) throw new AppError(404, '证书签发任务不存在', 'ACME_ORDER_NOT_FOUND');
+      status = row.status;
+      if (status === 'issued') break;
+      if (status === 'failed' && authorizationStates(row.authorization_state_json).some((state) => Boolean(state.dnsRecordId))) {
+        await run('清理遗留 TXT', () => stepCleanupDns(c));
+        continue;
+      }
+      if (!ADVANCE_STATUSES.has(status)) { manual = true; break; }
+      if (ADVANCE_NONCE_STATUSES.has(status) && row.replay_nonce === null) {
+        if (row.claimed_nonce !== null && (row.claimed_at ?? 0) > nowSeconds() - 60) { retryAfter = 15; break; }
+        await prepareOrderNonce(c, orderId);
+        labels.push('刷新 nonce');
+        continue;
+      }
+      if (status === 'draft') {
+        await run('提交订单', () => stepPlaceOrder(c));
+        continue;
+      }
+      if (status === 'authorizing') {
+        await run('读取授权', () => stepAuthorize(c));
+        continue;
+      }
+      if (status === 'challenge_ready') {
+        await run('写入 challenge TXT', () => stepAddDns(c));
+        continue;
+      }
+      if (status === 'dns_present') {
+        const settle = ADVANCE_DNS_SETTLE_SECONDS - (nowSeconds() - row.updated_at);
+        if (settle > 0) { retryAfter = settle; break; }
+        await run('通知 CA 验证', () => stepTrigger(c));
+        continue;
+      }
+      if (status === 'submitted' || status === 'triggering' || status === 'trigger_unknown') {
+        const response = await run('轮询授权', () => stepPollAuthorization(c));
+        const body = await response.json() as { authorization?: string };
+        if (body.authorization === 'valid') continue;
+        retryAfter = ADVANCE_POLL_SECONDS;
+        break;
+      }
+      if (status === 'authorization_valid') {
+        await run('清理 challenge TXT', () => stepCleanupDns(c));
+        continue;
+      }
+      if (status === 'ready_to_finalize') {
+        await run('请求签发', () => stepFinalize(c));
+        continue;
+      }
+      if (status === 'finalizing' || status === 'processing') {
+        const response = await run('轮询 CA 订单', () => stepPollOrder(c));
+        const body = await response.json() as { status?: string };
+        if (body.status === 'processing') { retryAfter = ADVANCE_POLL_SECONDS; break; }
+        continue;
+      }
+      if (status === 'certificate_ready') {
+        await run('保存证书', () => stepFetchCertificate(c));
+        continue;
+      }
+      manual = true;
+      break;
+    }
+  } catch (error) {
+    const reason = error instanceof AppError ? error.reason : '';
+    if (reason === 'REQUEST_BUDGET_EXCEEDED' || reason === 'REQUEST_TIMEOUT') retryAfter = 5;
+    else if ((labels.length > 0 || options.tolerant)
+      && ['ACME_STEP_NOT_AVAILABLE','ACME_DNS_STEP_NOT_AVAILABLE','ACME_DNS_CLEANUP_NOT_AVAILABLE'].includes(reason)) retryAfter = 15;
+    else throw error;
+  }
+  const finalRow = await issuanceById(c, orderId);
+  const states = authorizationStates(finalRow.authorization_state_json);
+  const index = Math.max(0, Math.min(finalRow.authorization_index, states.length));
+  return {
+    status: finalRow.status, done: finalRow.status === 'issued', manual,
+    pending: retryAfter > 0, retryAfter, steps: labels,
+    authorizationIndex: index, authorizationTotal: states.length,
+    currentDomain: states[index]?.identifier ?? domainsFrom(finalRow)[index] ?? null,
+    certificateOrderId: finalRow.cert_order_id,
+  };
+}
+
 export function certificateAcmeRoutes() {
   const routes = new Hono<AppEnv>();
   routes.use('/api/v1/cert/acme/*', async (c, next) => {
@@ -1032,99 +1140,7 @@ export function certificateAcmeRoutes() {
       throw new AppError(409, '当前运行环境的单次请求预算不足，自动推进已停用；请使用分步操作', 'ACME_AUTO_NOT_SUPPORTED');
     }
     const orderId = id(c.req.param('id'), '签发任务');
-    const labels: string[] = [];
-    let status = '';
-    let retryAfter = 0;
-    let manual = false;
-    const run = async (label: string, step: () => Promise<Response>) => {
-      const response = await step();
-      labels.push(label);
-      return response;
-    };
-    try {
-      for (let round = 0; round < ADVANCE_MAX_STEPS; round += 1) {
-        if (c.env.BUDGET.remainingMs() < 5_000) { retryAfter = 5; break; }
-        const rows = await c.get('db').query<{
-          status: string; updated_at: number; replay_nonce: string | null;
-          claimed_nonce: string | null; claimed_at: number | null; authorization_state_json: string;
-        }>('SELECT status,updated_at,replay_nonce,claimed_nonce,claimed_at,authorization_state_json FROM cert_acme_orders WHERE id=?', [orderId]);
-        const row = rows[0];
-        if (!row) throw new AppError(404, '证书签发任务不存在', 'ACME_ORDER_NOT_FOUND');
-        status = row.status;
-        if (status === 'issued') break;
-        if (status === 'failed' && authorizationStates(row.authorization_state_json).some((state) => Boolean(state.dnsRecordId))) {
-          await run('清理遗留 TXT', () => stepCleanupDns(c));
-          continue;
-        }
-        if (!ADVANCE_STATUSES.has(status)) { manual = true; break; }
-        if (ADVANCE_NONCE_STATUSES.has(status) && row.replay_nonce === null) {
-          if (row.claimed_nonce !== null && (row.claimed_at ?? 0) > nowSeconds() - 60) { retryAfter = 15; break; }
-          await prepareOrderNonce(c, orderId);
-          labels.push('刷新 nonce');
-          continue;
-        }
-        if (status === 'draft') {
-          await run('提交订单', () => stepPlaceOrder(c));
-          continue;
-        }
-        if (status === 'authorizing') {
-          await run('读取授权', () => stepAuthorize(c));
-          continue;
-        }
-        if (status === 'challenge_ready') {
-          await run('写入 challenge TXT', () => stepAddDns(c));
-          continue;
-        }
-        if (status === 'dns_present') {
-          const settle = ADVANCE_DNS_SETTLE_SECONDS - (nowSeconds() - row.updated_at);
-          if (settle > 0) { retryAfter = settle; break; }
-          await run('通知 CA 验证', () => stepTrigger(c));
-          continue;
-        }
-        if (status === 'submitted' || status === 'triggering' || status === 'trigger_unknown') {
-          const response = await run('轮询授权', () => stepPollAuthorization(c));
-          const body = await response.json() as { authorization?: string };
-          if (body.authorization === 'valid') continue;
-          retryAfter = ADVANCE_POLL_SECONDS;
-          break;
-        }
-        if (status === 'authorization_valid') {
-          await run('清理 challenge TXT', () => stepCleanupDns(c));
-          continue;
-        }
-        if (status === 'ready_to_finalize') {
-          await run('请求签发', () => stepFinalize(c));
-          continue;
-        }
-        if (status === 'finalizing' || status === 'processing') {
-          const response = await run('轮询 CA 订单', () => stepPollOrder(c));
-          const body = await response.json() as { status?: string };
-          if (body.status === 'processing') { retryAfter = ADVANCE_POLL_SECONDS; break; }
-          continue;
-        }
-        if (status === 'certificate_ready') {
-          await run('保存证书', () => stepFetchCertificate(c));
-          continue;
-        }
-        manual = true;
-        break;
-      }
-    } catch (error) {
-      const reason = error instanceof AppError ? error.reason : '';
-      if (reason === 'REQUEST_BUDGET_EXCEEDED' || reason === 'REQUEST_TIMEOUT') retryAfter = 5;
-      else if (labels.length > 0 && ['ACME_STEP_NOT_AVAILABLE','ACME_DNS_STEP_NOT_AVAILABLE','ACME_DNS_CLEANUP_NOT_AVAILABLE'].includes(reason)) retryAfter = 15;
-      else throw error;
-    }
-    const finalRow = await issuanceById(c, orderId);
-    const states = authorizationStates(finalRow.authorization_state_json);
-    const index = Math.max(0, Math.min(finalRow.authorization_index, states.length));
-    return c.json({
-      code: 0, id: orderId, status: finalRow.status, done: finalRow.status === 'issued', manual,
-      pending: retryAfter > 0, retryAfter, steps: labels,
-      authorizationIndex: index, authorizationTotal: states.length,
-      currentDomain: states[index]?.identifier ?? domainsFrom(finalRow)[index] ?? null,
-      certificateOrderId: finalRow.cert_order_id,
-    });
+    return c.json({ code: 0, id: orderId, ...await advanceIssuance(c, orderId) });
   });
 
 

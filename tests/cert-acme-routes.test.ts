@@ -9,6 +9,7 @@ import type { SqlDatabase, SqlStatement, SqlValue } from '../src/storage/sql';
 import { environment } from '../src/platform/runtime';
 import { encrypt } from '../src/security/crypto';
 import { executeCertificateRenewal } from '../src/schedule/certificate';
+import { executeCertificateIssuance } from '../src/schedule/acme';
 import { createTestDatabase } from './helpers/sqlite';
 
 const appKey = btoa('12345678901234567890123456789012');
@@ -605,6 +606,53 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: 'failed', manual: true, steps: ['清理遗留 TXT'] });
     expect(dnsRecordPresent).toBe(false);
+  });
+
+  it('advances a started issuance from /cron so the browser does not have to stay open', async () => {
+    const config = await (await app.request('https://panel.example/api/v1/system/cron', { headers: { cookie } }, environment(bindings, platform)))
+      .json() as { key: string };
+    const enabled = await app.request('https://panel.example/api/v1/system/cron', {
+      method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ enabled: true }),
+    }, environment(bindings, platform));
+    expect(enabled.status).toBe(200);
+    const cron = () => app.request(`https://panel.example/cron?key=${config.key}`, {}, environment(bindings, platform));
+
+    const accountId = await createReadyStagingAccount();
+    const orderId = await createDraftOrder(accountId);
+    const orderStatus = async () => (await testDb.db.query<{ status: string }>('SELECT status FROM cert_acme_orders WHERE id=?', [orderId]))[0]!.status;
+
+    expect(await (await cron()).text()).toBe('success!');
+    expect(await orderStatus()).toBe('draft');
+
+    expect((await post(`/api/v1/cert/acme/orders/${orderId}/place`, {})).status).toBe(200);
+    expect(await (await cron()).text()).toBe('success!');
+    expect(await orderStatus()).toBe('dns_present');
+    expect(dnsRecordPresent).toBe(true);
+
+    await cron();
+    expect(transportCalls.filter((call) => call[0]!.includes('/acme/challenge/'))).toHaveLength(0);
+
+    await testDb.db.execute('UPDATE cert_acme_orders SET updated_at=updated_at-60 WHERE id=?', [orderId]);
+    for (let round = 0; round < 6 && await orderStatus() !== 'issued'; round += 1) {
+      expect(await (await cron()).text()).toBe('success!');
+      await testDb.db.execute('UPDATE cert_acme_orders SET updated_at=updated_at-60 WHERE id=?', [orderId]);
+    }
+    expect(await orderStatus()).toBe('issued');
+    expect(dnsRecordPresent).toBe(false);
+  });
+
+  it('leaves an issuance that needs manual DNS reconciliation untouched by cron', async () => {
+    const accountId = await createReadyStagingAccount();
+    const orderId = await createDraftOrder(accountId);
+    await testDb.db.execute(
+      "UPDATE cert_acme_orders SET status='dns_outcome_unknown',last_error='DNS_CHALLENGE_CREATE_OUTCOME_UNKNOWN' WHERE id=?", [orderId],
+    );
+    const before = transportCalls.length;
+    expect(await executeCertificateIssuance(bindings, testDb.db)).toMatchObject({ processed: false });
+    expect(transportCalls.length).toBe(before);
+    expect(await testDb.db.query('SELECT status FROM cert_acme_orders WHERE id=?', [orderId]))
+      .toEqual([{ status: 'dns_outcome_unknown' }]);
   });
 
   it('persists each ACME phase, cleans its exact TXT record, and stores an issued encrypted order', async () => {

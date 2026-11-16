@@ -63,7 +63,7 @@ function newId(): number {
   return Number(value & BigInt(Number.MAX_SAFE_INTEGER)) || 1;
 }
 
-function stepContext(env: Bindings, db: SqlDatabase, userId: number, orderId: number): Context<AppEnv> {
+export function stepContext(env: Bindings, db: SqlDatabase, userId: number, orderId: number): Context<AppEnv> {
   return {
     env,
     get: (key: string) => key === 'db' ? db

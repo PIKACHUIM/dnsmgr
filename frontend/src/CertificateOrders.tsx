@@ -385,9 +385,9 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
           setAutoNotice({ id: order.id, message: `自动推进停在「${issuanceStatus(result.status)}」，需要人工核对后再继续。` });
           return;
         }
-        setAutoNotice({ id: order.id, message: `自动推进中：${issuanceStatus(result.status)}${progress}${recent}` });
+        setAutoNotice({ id: order.id, message: `自动推进中：${issuanceStatus(result.status)}${progress}${recent}${result.pending ? '（已开启站点定时任务时，关闭本页也会继续）' : ''}` });
         if (Date.now() - startedAt > 15 * 60_000) {
-          setAutoNotice({ id: order.id, message: '自动推进已持续 15 分钟，已暂停；可稍后再次点击继续。' });
+          setAutoNotice({ id: order.id, message: '自动推进已持续 15 分钟，本页已暂停；开启站点定时任务或稍后再次点击可继续。' });
           return;
         }
         await sleep(Math.min(60, Math.max(2, result.retryAfter || 3)) * 1000);
@@ -547,7 +547,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     {accountsOnly && <CertificateCname session={session} onExpired={onExpired} />}
     {!accountsOnly && <>
     <section className="panel" aria-labelledby="acme-issuance-title">
-      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2><InfoTip label="签发说明" text="「自动完成签发」会逐个域名重复「读取授权 → 写 TXT → 通知验证 → 清理 TXT」，写入 TXT 后等待权威 DNS 生效再验证；遇到结果未知或需要核对的 DNS 状态会停下并要求人工处理。" /></div><button className="button button-primary" type="button" disabled={busy || accounts.every((account) => account.status !== 'ready')} onClick={() => { setError(''); setNotice(''); setOrderOpen(true); }}><Icon name="plus" />申请证书</button></div>
+      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2><InfoTip label="签发说明" text="「自动完成签发」会逐个域名重复「读取授权 → 写 TXT → 通知验证 → 清理 TXT」，写入 TXT 后等待权威 DNS 生效再验证；已开启站点定时任务（系统设置 → Cron）时，关闭本页后仍会继续推进。遇到结果未知或需要核对的 DNS 状态会停下并要求人工处理。" /></div><button className="button button-primary" type="button" disabled={busy || accounts.every((account) => account.status !== 'ready')} onClick={() => { setError(''); setNotice(''); setOrderOpen(true); }}><Icon name="plus" />申请证书</button></div>
       <div className="certificate-issuance-list">
         {issuances.length === 0 ? <div className="panel-empty">尚无 ACME 签发任务。</div> : issuances.map((order) => {
           const step = issuanceStep(order);
