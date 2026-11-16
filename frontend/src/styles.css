@@ -287,7 +287,7 @@ body { margin: 0; font-size: var(--font-body); line-height: 1.7; letter-spacing:
 button, input { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
-button:disabled { cursor: wait; }
+button:disabled { cursor: not-allowed; }
 a { color: var(--color-accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
@@ -310,6 +310,7 @@ a.button:hover { text-decoration: none; }
 .button-primary:active:not(:disabled) { transform: translateY(1px); }
 .button-primary:disabled { background: var(--color-muted); border-color: var(--color-muted); }
 .button-secondary { color: var(--color-text); background: var(--color-surface); border-color: var(--color-control-border); }
+.button-secondary:disabled { opacity: .65; }
 .button-secondary:hover:not(:disabled), .button-quiet:hover:not(:disabled) { background: var(--color-subtle); }
 .button-quiet { color: var(--color-muted); background: transparent; }
 .button-quiet:disabled { opacity: .65; }
