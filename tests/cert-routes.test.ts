@@ -110,15 +110,53 @@ describe('certificate order API', () => {
     });
     expect(downloaded.status).toBe(200);
     expect(downloaded.headers.get('content-type')).toContain('application/x-pkcs12');
-    expect(downloaded.headers.get('content-disposition')).toContain(`certificate-${created.id}.p12`);
+    expect(downloaded.headers.get('content-disposition')).toContain(`certificate-${created.id}.pfx`);
     expect(downloaded.headers.get('cache-control')).toContain('no-store');
+    const password = downloaded.headers.get('x-cert-pfx-password') ?? '';
+    expect(password).toMatch(/^[A-HJ-NP-Za-km-z2-9]{16}$/);
+    expect(password).not.toBe('123456');
     const binary = Array.from(new Uint8Array(await downloaded.arrayBuffer()), (byte) => String.fromCharCode(byte)).join('');
     const downloadedPfx = forge.asn1.fromDer(binary);
-    expect(forge.pkcs12.pkcs12FromAsn1(downloadedPfx, false, '123456').version).toBe(3);
+    expect(forge.pkcs12.pkcs12FromAsn1(downloadedPfx, false, password).version).toBe(3);
+    expect(() => forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(binary), false, '123456')).toThrow();
+
+    const second = await request(`/api/v1/cert/orders/${created.id}/export`, {
+      method: 'POST', headers: { cookie, 'X-CSRF-Token': csrf },
+    });
+    expect(second.headers.get('x-cert-pfx-password')).not.toBe(password);
     const audit = await testDb.db.query<{ action: string; target: string; detail: string }>(
       "SELECT action,target,detail FROM audit_logs WHERE action='cert.order.export'",
     );
-    expect(audit).toEqual([{ action: 'cert.order.export', target: String(created.id), detail: 'admin PFX download' }]);
+    expect(audit).toEqual([
+      { action: 'cert.order.export', target: String(created.id), detail: 'admin PFX download (one-time password)' },
+      { action: 'cert.order.export', target: String(created.id), detail: 'admin PFX download (one-time password)' },
+    ]);
+    expect(JSON.stringify(audit)).not.toContain(fixture.privateKey);
+    expect(JSON.stringify(audit)).not.toContain(password);
+  });
+
+  it('exports PEM material for display and copying without leaking it into storage or audits', async () => {
+    const { cookie, csrf } = await adminSession();
+    const imported = await importFixture(cookie, csrf);
+    const { id } = await imported.json() as { id: number };
+    const path = `/api/v1/cert/orders/${id}/export`;
+
+    expect((await post(path, { format: 'pem' }, { cookie })).status).toBe(403);
+    expect((await post(path, { format: 'zip' }, { cookie, 'X-CSRF-Token': csrf })).status).toBe(400);
+    expect(await (await post(path, { format: 'zip' }, { cookie, 'X-CSRF-Token': csrf })).json())
+      .toMatchObject({ reason: 'INVALID_EXPORT_FORMAT' });
+
+    const response = await post(path, { format: 'pem' }, { cookie, 'X-CSRF-Token': csrf });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(response.headers.get('content-type')).toContain('application/json');
+    const payload = await response.json() as { code: 0; item: { id: number; crt: string; key: string } };
+    expect(payload).toEqual({ code: 0, item: { id, crt: fixture.fullchain, key: fixture.privateKey } });
+
+    const audit = await testDb.db.query<{ action: string; target: string; detail: string }>(
+      "SELECT action,target,detail FROM audit_logs WHERE action='cert.order.export'",
+    );
+    expect(audit).toEqual([{ action: 'cert.order.export', target: String(id), detail: 'admin PEM material view' }]);
     expect(JSON.stringify(audit)).not.toContain(fixture.privateKey);
   });
 

@@ -5,7 +5,9 @@ const maxCertificates = 10;
 const maxFullchainBytes = 48 * 1024;
 const maxPrivateKeyBytes = 16 * 1024;
 const domainPattern = /^(?:\*\.)?(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+/** 旧签名 `POST /api/cert/order` 沿用 PHP 的固定密码，既有自动化依赖该行为；面板下载改用随机密码。 */
 export const legacyPfxPassword = '123456';
+const pfxPasswordAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
 export interface InspectedCertificate {
   domains: string[];
@@ -89,25 +91,46 @@ export function inspectCertificate(fullchain: string, privateKeyPem: string): In
   return { domains, issuer, keySize, issuedAt, expiresAt };
 }
 
-export function exportLegacyPfx(fullchain: string, privateKeyPem: string): string {
+function buildPkcs12(fullchain: string, privateKeyPem: string, password: string): string {
   try {
     const material = parseMaterial(fullchain, privateKeyPem);
     const pfx = forge.pkcs12.toPkcs12Asn1(
       material.privateKey,
       material.certificates,
-      legacyPfxPassword,
+      password,
       { algorithm: '3des', count: 2048 },
     );
-    return forge.util.encode64(forge.asn1.toDer(pfx).getBytes());
+    return forge.asn1.toDer(pfx).getBytes();
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError(503, 'PFX 文件生成失败', 'CERT_PFX_FAILED');
   }
 }
 
+/** 生成每次下载都不同的 PFX 密码；去掉易混淆字符，并用拒绝采样避免取模偏差。 */
+export function randomPfxPassword(length = 16): string {
+  const characters: string[] = [];
+  while (characters.length < length) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(length))) {
+      if (byte >= 224) continue;
+      characters.push(pfxPasswordAlphabet[byte % pfxPasswordAlphabet.length]!);
+      if (characters.length === length) break;
+    }
+  }
+  return characters.join('');
+}
+
+export function pfxBytes(fullchain: string, privateKeyPem: string, password: string): Uint8Array {
+  if (!password) throw new AppError(500, 'PFX 密码不能为空', 'CERT_PFX_PASSWORD_MISSING');
+  return Uint8Array.from(buildPkcs12(fullchain, privateKeyPem, password), (character) => character.charCodeAt(0));
+}
+
+export function exportLegacyPfx(fullchain: string, privateKeyPem: string): string {
+  return forge.util.encode64(buildPkcs12(fullchain, privateKeyPem, legacyPfxPassword));
+}
+
 export function legacyPfxBytes(fullchain: string, privateKeyPem: string): Uint8Array {
-  const encoded = exportLegacyPfx(fullchain, privateKeyPem);
-  return Uint8Array.from(forge.util.decode64(encoded), (character) => character.charCodeAt(0));
+  return pfxBytes(fullchain, privateKeyPem, legacyPfxPassword);
 }
 
 export function certificateDerBase64Url(fullchain: string): string {

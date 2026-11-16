@@ -618,6 +618,12 @@ a.button:hover { text-decoration: none; }
 .certificate-security-note { margin: 0; padding: 16px 0 0; }
 .certificate-import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .certificate-import-form textarea { min-height: 220px; }
+.certificate-material { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.certificate-material textarea { min-height: 240px; }
+.certificate-material-pfx { grid-column: 1 / -1; display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--color-border); }
+.certificate-material-pfx h3 { margin: 0; font-size: 16px; }
+.certificate-material-pfx .notice { margin: 0; }
+.certificate-material-pfx .notice .button { margin-top: 10px; }
 .certificate-setup-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .certificate-setup-form .certificate-confirm,
 .certificate-confirm { display: flex; grid-column: 1 / -1; align-items: center; gap: 9px; color: var(--color-text); font-size: var(--font-sm); }

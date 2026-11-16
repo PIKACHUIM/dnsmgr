@@ -4,7 +4,7 @@ import { AppError } from '../core/errors';
 import { input, text } from '../core/request';
 import { decrypt, encrypt } from '../security/crypto';
 import { nowSeconds, requireAdmin, requireCertificateSession, requireCsrf, requireLegacyApi } from '../security/auth';
-import { inspectCertificate, legacyPfxBytes, exportLegacyPfx, certificateDerBase64Url } from '../certificates';
+import { inspectCertificate, exportLegacyPfx, pfxBytes, randomPfxPassword, certificateDerBase64Url } from '../certificates';
 import {
   AcmeProtocolError, fetchAcmeNonce, postAcmeJws, validateAcmeUrlFrom,
   type AcmeDirectory, type AcmeEnvironment,
@@ -113,6 +113,16 @@ async function auditExport(c: Context<AppEnv>, id: number, detail: string): Prom
   }
 }
 
+/** 导出格式：无请求体时保持旧行为返回 PFX；`pem` 返回证书与私钥，供页面展示、复制或分开下载。 */
+async function exportFormat(c: Context<AppEnv>): Promise<'pfx' | 'pem'> {
+  const type = c.req.header('Content-Type')?.split(';')[0]?.trim();
+  if (!type) return 'pfx';
+  const body = await input(c);
+  const format = body.format ?? 'pfx';
+  if (format !== 'pfx' && format !== 'pem') throw new AppError(400, '不支持的导出格式', 'INVALID_EXPORT_FORMAT');
+  return format;
+}
+
 function pageParams(c: Context<AppEnv>): { limit: number; offset: number } {
   const rawLimit = c.req.query('limit') ?? '20';
   const rawOffset = c.req.query('offset') ?? '0';
@@ -218,14 +228,25 @@ export function certificateRoutes() {
     const id = orderId(c.req.param('id'));
     const order = await loadOrder(c, id);
     if (!order) throw new AppError(404, '证书订单不存在', 'CERT_ORDER_NOT_FOUND');
+    const format = await exportFormat(c);
     const { fullchain, privateKey } = await readMaterial(c, order);
-    const pfx = legacyPfxBytes(fullchain, privateKey);
-    await auditExport(c, id, 'admin PFX download');
+    if (format === 'pem') {
+      await auditExport(c, id, 'admin PEM material view');
+      return c.json({ code: 0, item: { id, crt: fullchain, key: privateKey } }, 200, {
+        'Cache-Control': 'no-store',
+        Pragma: 'no-cache',
+      });
+    }
+    const password = randomPfxPassword();
+    const pfx = pfxBytes(fullchain, privateKey, password);
+    await auditExport(c, id, 'admin PFX download (one-time password)');
     return new Response(pfx.buffer as ArrayBuffer, {
       headers: {
         'Content-Type': 'application/x-pkcs12',
-        'Content-Disposition': `attachment; filename="certificate-${id}.p12"`,
+        'Content-Disposition': `attachment; filename="certificate-${id}.pfx"`,
         'Cache-Control': 'no-store',
+        Pragma: 'no-cache',
+        'X-Cert-Pfx-Password': password,
       },
     });
   });

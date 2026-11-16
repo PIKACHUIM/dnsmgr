@@ -122,6 +122,8 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const [orderOpen, setOrderOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [renewOpen, setRenewOpen] = useState(false);
+  const [material, setMaterial] = useState<{ orderId: number; domains: string[]; crt: string; key: string } | null>(null);
+  const [pfxPassword, setPfxPassword] = useState('');
 
   const handle = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
@@ -317,31 +319,71 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     finally { setBusy(false); }
   }
 
-  async function download(order: CertificateOrder) {
+  function saveBlob(filename: string, blob: Blob) {
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }
+
+  async function exportRequest(orderId: number, format: 'pem' | 'pfx'): Promise<Response | null> {
+    const response = await fetch(`/api/v1/cert/orders/${orderId}/export`, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: {
+        Accept: format === 'pfx' ? 'application/x-pkcs12' : 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': session.csrfToken,
+      },
+      body: JSON.stringify({ format }),
+    });
+    if (response.ok) return response;
+    let body: Record<string, unknown> = {};
+    try { body = await response.json() as Record<string, unknown>; } catch { body = {}; }
+    if (response.status === 401) { onExpired('会话已失效，请重新登录。'); return null; }
+    throw new ApiError(typeof body.msg === 'string' ? body.msg : '证书导出未完成。', response.status, body);
+  }
+
+  async function openMaterial(order: CertificateOrder) {
     if (busy) return;
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setNotice(''); setPfxPassword('');
     try {
-      const response = await fetch(`/api/v1/cert/orders/${order.id}/export`, {
-        method: 'POST', credentials: 'same-origin', cache: 'no-store',
-        headers: { Accept: 'application/x-pkcs12', 'X-CSRF-Token': session.csrfToken },
-      });
-      if (!response.ok) {
-        let body: Record<string, unknown> = {};
-        try { body = await response.json() as Record<string, unknown>; } catch { body = {}; }
-        if (response.status === 401) { onExpired('会话已失效，请重新登录。'); return; }
-        throw new ApiError(typeof body.msg === 'string' ? body.msg : '证书下载未完成。', response.status, body);
-      }
-      const objectUrl = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      anchor.download = `certificate-${order.id}.p12`;
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-      setNotice(`订单 ${order.id} 的 PFX 已下载；兼容密码为 123456`);
+      const response = await exportRequest(order.id, 'pem');
+      if (!response) return;
+      const payload = await response.json() as { item: { crt: string; key: string } };
+      setMaterial({ orderId: order.id, domains: order.domains, crt: payload.item.crt, key: payload.item.key });
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
+  }
+
+  function closeMaterial() {
+    if (busy) return;
+    setMaterial(null);
+    setPfxPassword('');
+  }
+
+  async function downloadPfx(orderId: number) {
+    if (busy) return;
+    setBusy(true); setError(''); setNotice(''); setPfxPassword('');
+    try {
+      const response = await exportRequest(orderId, 'pfx');
+      if (!response) return;
+      const password = response.headers.get('X-Cert-Pfx-Password') ?? '';
+      saveBlob(`certificate-${orderId}.pfx`, await response.blob());
+      setPfxPassword(password);
+      setNotice(`订单 ${orderId} 的 PFX 已下载；本次随机密码只显示这一次，请立即保存。`);
+    } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
+  async function copyText(label: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setNotice(`${label}已复制到剪贴板。`);
+    } catch { setError('复制失败，请手动选择文本内容后复制。'); }
   }
 
   async function toggleAuto(order: CertificateOrder, isAuto: boolean) {
@@ -441,13 +483,13 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
               <td><label className="certificate-confirm"><input type="checkbox" checked={order.isAuto} disabled={busy || order.revokedAt !== null} onChange={(event) => void toggleAuto(order, event.target.checked)} />自动</label>{order.revokedAt !== null && <span className="value-detail">已吊销 {date(order.revokedAt)}</span>}</td>
               <td className="certificate-order-actions">
                 <button className="button button-secondary" type="button" disabled={busy} onClick={() => openOrderEdit(order)}>编辑</button>
-                <button className="button button-secondary" type="button" disabled={busy} onClick={() => void download(order)}>下载 PFX</button>
+                <button className="button button-secondary" type="button" disabled={busy} onClick={() => void openMaterial(order)}>证书 / 下载</button>
                 {order.source === 'acme' && order.revokedAt === null && <button className="button button-quiet" type="button" disabled={busy} onClick={() => void revokeOrder(order)}>吊销</button>}
                 <button className="button button-quiet" type="button" disabled={busy} onClick={() => void removeOrder(order)}>删除</button>
               </td>
             </tr>)}</tbody>
           </table></div>}
-      <div className="panel-footnote">PFX 兼容密码 123456</div>
+      <div className="panel-footnote">证书与私钥可分别复制或下载为 .crt / .key；PFX 每次下载使用随机密码，只显示一次。</div>
     </section>
     </>}
     {accountOpen && <Modal title="创建 ACME 账户" wide onClose={() => { if (!busy) setAccountOpen(false); }}>
@@ -489,6 +531,36 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
         <label className="form-field"><span>完整证书链（PEM）</span><textarea value={fullchain} onChange={(event) => setFullchain(event.target.value)} required maxLength={48 * 1024} autoComplete="off" spellCheck={false} aria-label="完整证书链 PEM" placeholder="-----BEGIN CERTIFICATE-----" /></label>
         <label className="form-field"><span>未加密 RSA 私钥（PEM）</span><textarea value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} required maxLength={16 * 1024} autoComplete="off" spellCheck={false} aria-label="RSA 私钥 PEM" placeholder="-----BEGIN PRIVATE KEY-----" /></label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !fullchain.trim() || !privateKey.trim()}>{busy ? '正在处理…' : '验证并导入'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setImportOpen(false)}>取消</button></div>
+      </form>
+    </Modal>}
+    {material && <Modal title={`证书材料 #${material.orderId}`} wide onClose={closeMaterial}>
+      <div className="certificate-domains">{material.domains.map((domain) => <span className="data-badge mono" key={domain}>{domain}</span>)}</div>
+      <form className="dns-form certificate-material" onSubmit={(event) => event.preventDefault()}>
+        <label className="form-field"><span>证书（PEM 格式）</span>
+          <textarea readOnly value={material.crt} spellCheck={false} aria-label="证书 PEM" />
+        </label>
+        <label className="form-field"><span>私钥（PEM 格式）</span>
+          <textarea readOnly value={material.key} spellCheck={false} aria-label="私钥 PEM" />
+        </label>
+        <div className="form-actions">
+          <button className="button button-secondary" type="button" disabled={busy} onClick={() => void copyText('证书', material.crt)}>复制证书</button>
+          <button className="button button-secondary" type="button" disabled={busy} onClick={() => saveBlob(`fullchain-${material.orderId}.crt`, new Blob([material.crt], { type: 'application/x-pem-file' }))}>下载 .crt</button>
+          <button className="button button-secondary" type="button" disabled={busy} onClick={() => void copyText('私钥', material.key)}>复制私钥</button>
+          <button className="button button-secondary" type="button" disabled={busy} onClick={() => saveBlob(`private-${material.orderId}.key`, new Blob([material.key], { type: 'application/x-pem-file' }))}>下载 .key</button>
+        </div>
+        <div className="certificate-material-pfx">
+          <h3>IIS / PKCS#12（PFX）</h3>
+          <p className="form-hint">每次下载都会生成新的随机密码，密码只在本次下载后显示，关闭窗口后无法再次查看。</p>
+          <div className="form-actions">
+            <button className="button button-primary" type="button" disabled={busy} onClick={() => void downloadPfx(material.orderId)}>下载 PFX</button>
+            <button className="button button-quiet" type="button" disabled={busy} onClick={closeMaterial}>关闭</button>
+          </div>
+          {pfxPassword && <div className="notice" role="status">
+            <span>本次 PFX 密码（只显示这一次）</span>
+            <strong className="mono">{pfxPassword}</strong>
+            <button className="button button-secondary" type="button" disabled={busy} onClick={() => void copyText('PFX 密码', pfxPassword)}>复制密码</button>
+          </div>}
+        </div>
       </form>
     </Modal>}
     {renewOpen && <Modal title="续签设置" onClose={() => { if (!busy) setRenewOpen(false); }}>
