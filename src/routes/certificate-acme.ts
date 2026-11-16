@@ -201,6 +201,18 @@ async function accountById(c: Context<AppEnv>, accountId: number): Promise<Accou
   return rows[0];
 }
 
+function acmeContactEmail(value: string): string {
+  const email = value.trim().toLowerCase();
+  const [localPart, domainPart, extra] = email.split('@');
+  const domainLabels = (domainPart ?? '').split('.');
+  if (extra !== undefined || !localPart || !/^[a-z0-9.!#$%&'*+\-/=?^_`{|}~]+$/i.test(localPart)
+    || domainLabels.length < 2 || domainLabels.some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))
+    || domainLabels.at(-1)!.length < 2) {
+    throw new AppError(400, '联系邮箱格式无效', 'INVALID_ACME_EMAIL');
+  }
+  return email;
+}
+
 const ISSUANCE_SELECT = `SELECT o.*, a.config_cipher AS dns_config_cipher, a.type AS dns_type,
       d.name AS dns_zone_name, d.third_id AS dns_zone_remote_id,
       z.id AS challenge_zone_id, z.name AS challenge_zone_name, z.third_id AS challenge_zone_remote_id,
@@ -272,7 +284,10 @@ async function readDirectory(row: AccountRow): Promise<AcmeDirectory> {
   return directory(row);
 }
 
-async function signedPost(c: Context<AppEnv>, row: Pick<IssuanceRow, 'directory' | 'directory_json' | 'account_key_cipher' | 'account_id' | 'account_kid' | 'claimed_nonce'>, url: string, payload: unknown): Promise<AcmeJwsResponse> {
+async function signedPost(c: Context<AppEnv>, row: Pick<IssuanceRow, 'directory' | 'account_key_cipher' | 'account_id' | 'claimed_nonce'> & {
+  directory_json: string | null;
+  account_kid: string | null;
+}, url: string, payload: unknown): Promise<AcmeJwsResponse> {
   if (!row.claimed_nonce) throw new AppError(409, '请先获取新的 ACME nonce', 'ACME_NONCE_REQUIRED');
   const apiDirectory = directory({ directory: row.directory, directory_json: row.directory_json });
   const origin = new URL(apiDirectory.newNonce).origin;
@@ -281,7 +296,7 @@ async function signedPost(c: Context<AppEnv>, row: Pick<IssuanceRow, 'directory'
   catch { throw new AppError(503, 'ACME 账户密钥无法解密', 'ACME_ACCOUNT_KEY_UNAVAILABLE'); }
   return postAcmeJws(c.env.BUDGET.fetch, {
     environment: row.directory, origin, privateKeyPem: accountKey, nonce: row.claimed_nonce,
-    url: validateAcmeUrlFrom(origin, url), payload, kid: row.account_kid,
+    url: validateAcmeUrlFrom(origin, url), payload, ...(row.account_kid ? { kid: row.account_kid } : {}),
   });
 }
 
@@ -516,14 +531,7 @@ export function certificateAcmeRoutes() {
   routes.post('/api/v1/cert/acme/accounts', requireCertificateSession, requireCsrf, async (c) => {
     requireAdmin(c);
     const body = await input(c);
-    const email = text(body, 'email', 254).trim().toLowerCase();
-    const [localPart, domainPart, extra] = email.split('@');
-    const domainLabels = (domainPart ?? '').split('.');
-    if (extra !== undefined || !localPart || !/^[a-z0-9.!#$%&'*+\-/=?^_`{|}~]+$/i.test(localPart)
-      || domainLabels.length < 2 || domainLabels.some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))
-      || domainLabels.at(-1)!.length < 2) {
-      throw new AppError(400, '联系邮箱格式无效', 'INVALID_ACME_EMAIL');
-    }
+    const email = acmeContactEmail(text(body, 'email', 254));
     const ca = body.ca === undefined ? 'letsencrypt' : isAcmeCa(body.ca) ? body.ca : null;
     if (!ca) throw new AppError(400, '不支持的 ACME 服务商', 'INVALID_ACME_CA');
     const catalogEntry = acmeCaCatalog[ca];
@@ -592,6 +600,61 @@ export function certificateAcmeRoutes() {
       },
     ]);
     return c.json({ code: 0, id: accountId });
+  });
+
+  routes.patch('/api/v1/cert/acme/accounts/:id', requireCertificateSession, requireCsrf, async (c) => {
+    requireAdmin(c);
+    const accountId = id(c.req.param('id'), 'ACME 账户');
+    const body = await input(c);
+    const email = acmeContactEmail(text(body, 'email', 254));
+    const account = await accountById(c, accountId);
+    if (account.status === 'disabled') throw new AppError(409, 'ACME 账户已停用', 'ACME_ACCOUNT_DISABLED');
+    if (account.email === email) return c.json({ code: 0, id: accountId, email, contactUpdated: false });
+    if (account.claimed_nonce !== null && (account.claimed_at ?? 0) > nowSeconds() - 60) {
+      throw new AppError(409, 'ACME 账户请求仍在处理中，暂不能修改联系邮箱', 'ACME_REQUEST_IN_FLIGHT');
+    }
+    if (!account.kid) {
+      const local = await c.get('db').batch([
+        {
+          sql: 'UPDATE cert_acme_accounts SET email=?,updated_at=? WHERE id=? AND (claimed_at IS NULL OR claimed_at<=?)',
+          args: [email, nowSeconds(), accountId, nowSeconds() - 60],
+        },
+        {
+          sql: 'INSERT INTO audit_logs (user_id,action,target,detail,created_at) SELECT ?,?,?,?,? WHERE changes()=1',
+          args: [c.get('principal').user.id, 'cert.acme.account.update', String(accountId),
+            `${account.ca} ${account.directory} contact email updated before registration`, nowSeconds()],
+        },
+      ]);
+      requireAffected(local[0]?.changes ?? 0, 'ACME_ACCOUNT_UPDATE_FAILED');
+      return c.json({ code: 0, id: accountId, email, contactUpdated: false });
+    }
+    // 已注册账户的联系邮箱保存在 CA，需要带 nonce 提交一次账户更新。
+    const reserved = await reserveAccountNonce(c, accountId, 'ready', 'ready');
+    let response: AcmeJwsResponse;
+    try {
+      response = await signedPost(c, {
+        directory: reserved.directory, directory_json: reserved.directory_json,
+        account_key_cipher: reserved.account_key_cipher, account_id: reserved.id,
+        account_kid: reserved.kid, claimed_nonce: reserved.claimed_nonce,
+      }, reserved.kid!, { contact: [`mailto:${email}`] });
+    } catch (error) {
+      await releaseAccountNonce(c, accountId, reserved.claimed_nonce!, error instanceof AcmeProtocolError ? error.replayNonce : null);
+      handleAcmeError(error);
+    }
+    const stored = await c.get('db').batch([
+      {
+        sql: `UPDATE cert_acme_accounts SET email=?,replay_nonce=?,claimed_nonce=NULL,claimed_at=NULL,updated_at=?
+          WHERE id=? AND claimed_nonce=?`,
+        args: [email, validateRemoteNonce(response), nowSeconds(), accountId, reserved.claimed_nonce],
+      },
+      {
+        sql: 'INSERT INTO audit_logs (user_id,action,target,detail,created_at) SELECT ?,?,?,?,? WHERE changes()=1',
+        args: [c.get('principal').user.id, 'cert.acme.account.update', String(accountId),
+          `${account.ca} ${account.directory} contact email updated at the CA`, nowSeconds()],
+      },
+    ]);
+    requireAffected(stored[0]?.changes ?? 0, 'ACME_ACCOUNT_UPDATE_FAILED');
+    return c.json({ code: 0, id: accountId, email, contactUpdated: true });
   });
 
   routes.post('/api/v1/cert/acme/accounts/:id/directory', requireCertificateSession, requireCsrf, async (c) => {

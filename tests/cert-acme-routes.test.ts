@@ -51,6 +51,7 @@ let issuedCertificate = '';
 let issuerPair: forge.pki.rsa.KeyPair;
 let requestedDomains: string[] = [];
 let triggeredAuthz = new Set<number>();
+let accountContact = '';
 let dnsRecordPresent = false;
 let secondDnsRecordPresent = false;
 let dnsTxtContent = '';
@@ -105,6 +106,12 @@ function fakeFetch(): typeof fetch {
       }
       if (url.pathname === '/acme/new-account' && init?.method === 'POST') {
         return acmeJson({ status: 'valid' }, 201, { Location: `${stagingOrigin}/acme/acct/1` });
+      }
+      if (url.pathname === '/acme/acct/1' && init?.method === 'POST') {
+        const jws = JSON.parse(String(init.body)) as { payload: string };
+        const payload = JSON.parse(fromBase64Url(jws.payload)) as { contact?: string[] };
+        accountContact = payload.contact?.[0] ?? '';
+        return acmeJson({ status: 'valid', contact: payload.contact ?? [] });
       }
       if (url.pathname === '/acme/new-order' && init?.method === 'POST') {
         const jws = JSON.parse(String(init.body)) as { payload: string };
@@ -211,6 +218,7 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     simulatedCaError = '';
     requestedDomains = [];
     triggeredAuthz = new Set();
+    accountContact = '';
     dnsRecordPresent = false;
     secondDnsRecordPresent = false;
     dnsTxtContent = '';
@@ -269,6 +277,44 @@ describe('ACME staging DNS-01 issuance workflow', () => {
   const remove = (path: string) => app.request(`https://panel.example${path}`, {
     method: 'DELETE', headers: { cookie, 'X-CSRF-Token': csrf },
   }, environment(bindings, platform));
+
+  const patch = (path: string, body: unknown) => app.request(`https://panel.example${path}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf }, body: JSON.stringify(body),
+  }, environment(bindings, platform));
+
+  it('updates the ACME contact email locally before registration and at the CA afterwards', async () => {
+    const created = await post('/api/v1/cert/acme/accounts', { email: 'admin@example.test', environment: 'staging' });
+    const account = await created.json() as { id: number };
+
+    const early = await patch(`/api/v1/cert/acme/accounts/${account.id}`, { email: 'OPS@Example.Test' });
+    expect(early.status).toBe(200);
+    expect(await early.json()).toMatchObject({ id: account.id, email: 'ops@example.test', contactUpdated: false });
+    expect(await testDb.db.query('SELECT email FROM cert_acme_accounts WHERE id=?', [account.id]))
+      .toEqual([{ email: 'ops@example.test' }]);
+    expect(transportCalls.filter((call) => call[0]!.endsWith('/acme/acct/1'))).toHaveLength(0);
+
+    const invalid = await patch(`/api/v1/cert/acme/accounts/${account.id}`, { email: 'not-an-email' });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ reason: 'INVALID_ACME_EMAIL' });
+
+    await post(`/api/v1/cert/acme/accounts/${account.id}/directory`, {});
+    await post(`/api/v1/cert/acme/accounts/${account.id}/prepare-nonce`, {});
+    expect((await post(`/api/v1/cert/acme/accounts/${account.id}/register`, { agreeToTerms: true })).status).toBe(200);
+
+    const synced = await patch(`/api/v1/cert/acme/accounts/${account.id}`, { email: 'security@example.test' });
+    expect(synced.status).toBe(200);
+    expect(await synced.json()).toMatchObject({ id: account.id, email: 'security@example.test', contactUpdated: true });
+    expect(accountContact).toBe('mailto:security@example.test');
+    expect(transportCalls.filter((call) => call[0]!.endsWith('/acme/acct/1'))).toHaveLength(1);
+    expect(await testDb.db.query('SELECT email,status,claimed_nonce FROM cert_acme_accounts WHERE id=?', [account.id]))
+      .toEqual([{ email: 'security@example.test', status: 'ready', claimed_nonce: null }]);
+    expect(await testDb.db.query<{ detail: string }>(
+      "SELECT detail FROM audit_logs WHERE action='cert.acme.account.update' ORDER BY id",
+    )).toEqual([
+      { detail: 'letsencrypt staging contact email updated before registration' },
+      { detail: 'letsencrypt staging contact email updated at the CA' },
+    ]);
+  });
 
   it('keeps every staging ACME issuance request within ESA four-fetch budget', async () => {
     let spent = 0;

@@ -24,6 +24,7 @@ export function DnsAccounts({ session, onExpired }: Props) {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Account | null>(null);
   const [type, setType] = useState('');
   const [name, setName] = useState('');
   const [remark, setRemark] = useState('');
@@ -63,11 +64,12 @@ export function DnsAccounts({ session, onExpired }: Props) {
 
   const selected = providers.find((provider) => provider.type === type);
 
-  function openForm() {
-    setName('');
-    setRemark('');
+  function openForm(account: Account | null = null) {
+    setEditing(account);
+    setName(account?.name ?? '');
+    setRemark(account?.remark ?? '');
     setConfig({});
-    setType(providers.find((provider) => provider.supported)?.type ?? '');
+    setType(account?.type ?? providers.find((provider) => provider.supported)?.type ?? '');
     setError('');
     setNotice('');
     setFormOpen(true);
@@ -76,16 +78,25 @@ export function DnsAccounts({ session, onExpired }: Props) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (busy) return;
+    const target = editing;
+    const changedCredentials = Object.values(config).some((value) => value.trim() !== '');
     setBusy(true);
     setError('');
     setNotice('');
     controller.current = new AbortController();
     try {
-      await send('/api/v1/dns/accounts', 'POST', { type, name, remark, config }, controller.current.signal, { 'X-CSRF-Token': session.csrfToken });
-      setNotice(t('账户「{name}」已添加', { name }));
+      const payload: Record<string, unknown> = { type, name, remark };
+      if (!target || changedCredentials) payload.config = config;
+      await send(
+        target ? `/api/v1/dns/accounts/${target.id}` : '/api/v1/dns/accounts',
+        target ? 'PUT' : 'POST',
+        payload, controller.current.signal, { 'X-CSRF-Token': session.csrfToken },
+      );
+      setNotice(target ? t('账户「{name}」已更新', { name }) : t('账户「{name}」已添加', { name }));
       setName('');
       setRemark('');
       setConfig({});
+      setEditing(null);
       setFormOpen(false);
       await load(controller.current.signal);
     } catch (failure) { handle(failure); }
@@ -131,7 +142,7 @@ export function DnsAccounts({ session, onExpired }: Props) {
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="account-list-title">
-      <div className="panel-heading"><div><h2 id="account-list-title">{t('已配置账户')}</h2></div><div className="panel-heading-actions"><span className="panel-meta">{accounts.length} {t('个')}</span><button className="button button-primary" type="button" onClick={openForm}><Icon name="plus" />{t('添加账户')}</button></div></div>
+      <div className="panel-heading"><div><h2 id="account-list-title">{t('已配置账户')}</h2></div><div className="panel-heading-actions"><span className="panel-meta">{accounts.length} {t('个')}</span><button className="button button-primary" type="button" onClick={() => openForm()}><Icon name="plus" />{t('添加账户')}</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />{t('正在读取账户…')}</div>
         : accounts.length === 0 ? <div className="panel-empty">{t('还没有 DNS 账户。添加后即可同步域名。')}</div>
           : <div className="table-wrap"><table className="data-table">
@@ -141,25 +152,27 @@ export function DnsAccounts({ session, onExpired }: Props) {
               <td className="mono">{account.type}</td>
               <td>{account.domainCount}</td>
               <td>{account.remark ?? '—'}</td>
-              <td className="row-actions">{account.type === 'cloudflare' && <a className="button button-secondary" href={`/cloudflare/tunnels/${account.id}`}>Tunnels</a>}<button className="button button-secondary" disabled={busy} onClick={() => void sync(account)}>{t('同步域名')}</button><button className="button button-quiet" disabled={busy} onClick={() => void remove(account)}>{t('删除')}</button></td>
+              <td className="row-actions">{account.type === 'cloudflare' && <a className="button button-secondary" href={`/cloudflare/tunnels/${account.id}`}>Tunnels</a>}<button className="button button-secondary" disabled={busy} onClick={() => openForm(account)}>{t('编辑')}</button><button className="button button-secondary" disabled={busy} onClick={() => void sync(account)}>{t('同步域名')}</button><button className="button button-quiet" disabled={busy} onClick={() => void remove(account)}>{t('删除')}</button></td>
             </tr>)}</tbody>
           </table></div>}
       {unported.length > 0 && <div className="panel-footnote">{t('尚未移植的驱动：{list}', { list: unported.join('、') })}</div>}
     </section>
     <DnsCategories session={session} onExpired={onExpired} />
-    {formOpen && <Modal title={t('添加 DNS 账户')} description={t('凭据加密保存')} onClose={() => setFormOpen(false)}>
+    {formOpen && <Modal title={editing ? t('编辑 DNS 账户') : t('添加 DNS 账户')} description={editing ? t('凭据留空表示保持现有凭据') : t('凭据加密保存')} onClose={() => { if (!busy) setFormOpen(false); }}>
       <form className="dns-form" onSubmit={submit}>
         <label className="form-field"><span>{t('账户名称')}</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={64} required placeholder={t('例如 主账号')} autoComplete="off" /></label>
         <label className="form-field"><span>{t('服务商')}</span>
-          <select value={type} onChange={(event) => { setType(event.target.value); setConfig({}); }} required>
+          <select value={type} onChange={(event) => { setType(event.target.value); setConfig({}); }} required disabled={Boolean(editing)}>
             {providers.map((provider) => <option key={provider.type} value={provider.type} disabled={!provider.supported}>{provider.name}{provider.supported ? '' : `（${t('未移植')}）`}</option>)}
           </select>
         </label>
         {selected?.fields.map((field) => <label className="form-field" key={field.key}>
           <span>{t(field.label)}{field.required || field.label.includes('（') ? '' : `（${t('可选')}）`}</span>
           <input
-            type={field.secret ? 'password' : 'text'} value={config[field.key] ?? ''} required={field.required}
-            autoComplete="off" onChange={(event) => setConfig((current) => ({ ...current, [field.key]: event.target.value }))}
+            type={field.secret ? 'password' : 'text'} value={config[field.key] ?? ''}
+            required={field.required && !editing} autoComplete="off"
+            placeholder={editing ? t('留空保持不变') : undefined}
+            onChange={(event) => setConfig((current) => ({ ...current, [field.key]: event.target.value }))}
           />
         </label>)}
         <label className="form-field"><span>{t('备注（可选）')}</span><input value={remark} maxLength={100} onChange={(event) => setRemark(event.target.value)} /></label>

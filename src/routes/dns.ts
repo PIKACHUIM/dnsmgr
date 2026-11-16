@@ -508,18 +508,25 @@ export function dnsRoutes() {
     const body = await input(c);
     const name = text(body, 'name', 64).trim();
     if (!/^[\p{L}\p{N}_.@ -]{1,64}$/u.test(name)) throw new AppError(400, '账户名称格式无效', 'INVALID_ACCOUNT_NAME');
-    let config: Record<string, string>;
-    try { config = validateProviderConfig(current.type, body.config); } catch (error) { providerError(error); }
     const remark = typeof body.remark === 'string' ? body.remark.trim().slice(0, 100) : null;
-    let provider: DnsProvider;
-    try { provider = createProvider(current.type, config, providerFetch(c)); } catch (error) { providerError(error); }
-    try { await provider.check(); } catch (error) { providerError(error); }
+    // 省略或传空 config 表示沿用已保存的凭据，便于只改名称/备注。
+    const provided = body.config !== undefined && body.config !== null
+      && !(typeof body.config === 'object' && !Array.isArray(body.config) && Object.keys(body.config).length === 0);
+    let configCipher = current.config_cipher;
+    if (provided) {
+      let config: Record<string, string>;
+      try { config = validateProviderConfig(current.type, body.config); } catch (error) { providerError(error); }
+      let provider: DnsProvider;
+      try { provider = createProvider(current.type, config, providerFetch(c)); } catch (error) { providerError(error); }
+      try { await provider.check(); } catch (error) { providerError(error); }
+      configCipher = await encrypt(JSON.stringify(config), c.env.APP_KEY, `dns-account/${accountId}`);
+    }
     await db(c).execute(
       'UPDATE dns_accounts SET name=?, config_cipher=?, remark=?, updated_at=? WHERE id=?',
-      [name, await encrypt(JSON.stringify(config), c.env.APP_KEY, `dns-account/${accountId}`), remark, nowSeconds(), accountId],
+      [name, configCipher, remark, nowSeconds(), accountId],
     );
-    await audit(c, 'account.update', name, `type=${current.type}`);
-    return c.json({ code: 0 });
+    await audit(c, 'account.update', name, `type=${current.type} credentials=${provided ? 'updated' : 'unchanged'}`);
+    return c.json({ code: 0, id: accountId });
   });
 
   routes.delete('/api/v1/dns/accounts/:id', requireSession, requireCsrf, async (c) => {

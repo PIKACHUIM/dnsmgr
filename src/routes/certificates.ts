@@ -27,6 +27,7 @@ interface CertificateOrderRow extends Record<string, unknown> {
   is_auto: number;
   revoked_at: number | null;
   renewed_from: number | null;
+  remark: string | null;
   domain: string | null;
   sort: number | null;
 }
@@ -46,6 +47,7 @@ interface CertificateOrder {
   revokedAt: number | null;
   renewedFrom: number | null;
   domains: string[];
+  remark: string | null;
   fullchainCipher: string;
   privateKeyCipher: string;
 }
@@ -76,7 +78,7 @@ async function loadOrder(c: Context<AppEnv>, id: number): Promise<CertificateOrd
   const rows = await c.get('db').query<CertificateOrderRow>(
     `SELECT o.id, o.source, o.status, o.issuer, o.key_type, o.key_size, o.issued_at, o.expires_at,
       o.fullchain_cipher, o.private_key_cipher, o.created_by, o.created_at, o.updated_at,
-      o.is_auto, o.revoked_at, o.renewed_from, d.domain, d.sort
+      o.is_auto, o.revoked_at, o.renewed_from, o.remark, d.domain, d.sort
      FROM cert_orders o LEFT JOIN cert_order_domains d ON d.order_id=o.id
      WHERE o.id=? ORDER BY d.sort`, [id],
   );
@@ -86,7 +88,7 @@ async function loadOrder(c: Context<AppEnv>, id: number): Promise<CertificateOrd
     id: row.id, source: row.source, status: row.status, issuer: row.issuer,
     keyType: row.key_type, keySize: row.key_size, issuedAt: row.issued_at, expiresAt: row.expires_at,
     createdAt: row.created_at, updatedAt: row.updated_at,
-    isAuto: row.is_auto === 1, revokedAt: row.revoked_at, renewedFrom: row.renewed_from,
+    isAuto: row.is_auto === 1, revokedAt: row.revoked_at, renewedFrom: row.renewed_from, remark: row.remark,
     domains: rows.flatMap((entry) => entry.domain === null ? [] : [entry.domain]),
     fullchainCipher: row.fullchain_cipher, privateKeyCipher: row.private_key_cipher,
   };
@@ -158,7 +160,7 @@ export function certificateRoutes() {
     const { limit, offset } = pageParams(c);
     const rows = await c.get('db').query<CertificateOrderRow>(
       `SELECT o.id, o.source, o.status, o.issuer, o.key_type, o.key_size, o.issued_at, o.expires_at,
-        o.created_by, o.created_at, o.updated_at, o.is_auto, o.revoked_at, o.renewed_from, d.domain, d.sort
+        o.created_by, o.created_at, o.updated_at, o.is_auto, o.revoked_at, o.renewed_from, o.remark, d.domain, d.sort
        FROM (SELECT * FROM cert_orders ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?) o
        LEFT JOIN cert_order_domains d ON d.order_id=o.id
        ORDER BY o.created_at DESC,o.id DESC,d.sort`, [limit, offset],
@@ -169,7 +171,8 @@ export function certificateRoutes() {
         id: row.id, source: row.source, status: row.status, issuer: row.issuer,
         keyType: row.key_type, keySize: row.key_size, issuedAt: row.issued_at, expiresAt: row.expires_at,
         createdAt: row.created_at, updatedAt: row.updated_at,
-        isAuto: row.is_auto === 1, revokedAt: row.revoked_at, renewedFrom: row.renewed_from, domains: [],
+        isAuto: row.is_auto === 1, revokedAt: row.revoked_at, renewedFrom: row.renewed_from,
+        remark: row.remark, domains: [],
       };
       if (row.domain !== null) item.domains.push(row.domain);
       items.set(row.id, item);
@@ -247,19 +250,30 @@ export function certificateRoutes() {
     requireAdmin(c);
     const id = orderId(c.req.param('id'));
     const body = await input(c);
-    if (typeof body.isAuto !== 'boolean') throw new AppError(400, '请提供 isAuto 布尔值', 'INVALID_CERT_ORDER_UPDATE');
+    if (body.isAuto !== undefined && typeof body.isAuto !== 'boolean') {
+      throw new AppError(400, '请提供 isAuto 布尔值', 'INVALID_CERT_ORDER_UPDATE');
+    }
+    if (body.remark !== undefined && typeof body.remark !== 'string') {
+      throw new AppError(400, '请提供 remark 字符串', 'INVALID_CERT_ORDER_UPDATE');
+    }
+    if (body.isAuto === undefined && body.remark === undefined) {
+      throw new AppError(400, '请提供 isAuto 或 remark', 'INVALID_CERT_ORDER_UPDATE');
+    }
     const order = await loadOrder(c, id);
     if (!order) throw new AppError(404, '证书订单不存在', 'CERT_ORDER_NOT_FOUND');
-    if (body.isAuto && order.revokedAt !== null) throw new AppError(409, '已吊销的证书不能开启自动续签', 'CERT_ORDER_REVOKED');
+    if (body.isAuto === true && order.revokedAt !== null) throw new AppError(409, '已吊销的证书不能开启自动续签', 'CERT_ORDER_REVOKED');
+    const isAuto = body.isAuto === undefined ? order.isAuto : body.isAuto;
+    const remark = typeof body.remark === 'string' ? body.remark.trim().slice(0, 100) || null : order.remark;
     const now = nowSeconds();
     await c.get('db').batch([
-      { sql: 'UPDATE cert_orders SET is_auto=?,updated_at=? WHERE id=?', args: [body.isAuto ? 1 : 0, now, id] },
+      { sql: 'UPDATE cert_orders SET is_auto=?,remark=?,updated_at=? WHERE id=?', args: [isAuto ? 1 : 0, remark, now, id] },
       {
         sql: 'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
-        args: [c.get('principal').user.id, 'cert.order.auto', String(id), body.isAuto ? 'auto renewal enabled' : 'auto renewal disabled', now],
+        args: [c.get('principal').user.id, 'cert.order.update', String(id),
+          `${body.isAuto === undefined ? 'auto renewal unchanged' : isAuto ? 'auto renewal enabled' : 'auto renewal disabled'}; remark ${body.remark === undefined ? 'unchanged' : remark ? 'updated' : 'cleared'}`, now],
       },
     ]);
-    return c.json({ code: 0, id, isAuto: body.isAuto });
+    return c.json({ code: 0, id, isAuto, remark });
   });
 
   routes.delete('/api/v1/cert/orders/:id', requireCertificateSession, requireCsrf, async (c) => {

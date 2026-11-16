@@ -361,4 +361,9 @@ export const en: Record<string, string> = {
   '尚未移植的驱动：{list}': 'Drivers not migrated yet: {list}',
   '设为站点默认': 'Set as site default',
   '已将「{name}」设为站点默认皮肤': '"{name}" is now the site default skin',
+  '编辑': 'Edit',
+  '编辑 DNS 账户': 'Edit DNS account',
+  '凭据留空表示保持现有凭据': 'Leave credentials blank to keep the saved ones',
+  '留空保持不变': 'Leave blank to keep',
+  '账户「{name}」已更新': 'Account "{name}" updated',
 };

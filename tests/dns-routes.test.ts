@@ -146,6 +146,43 @@ describe('DNS account, domain and record API', () => {
     expect(payload.items).toEqual([{ id: created.id, type: 'cloudflare', name: '主账号', remark: 'primary', domainCount: 0, createdAt: expect.any(Number), updatedAt: expect.any(Number) }]);
   });
 
+  it('edits an account without resubmitting credentials and revalidates when they change', async () => {
+    const { cookie, csrf } = await session();
+    const created = await (await post('/api/v1/dns/accounts', {
+      type: 'cloudflare', name: '主账号', config: { apikey: 'token' }, remark: 'primary',
+    }, { cookie, 'X-CSRF-Token': csrf })).json() as { id: number };
+    const headers = { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf };
+    const before = await testDb.db.query<{ config_cipher: string }>('SELECT config_cipher FROM dns_accounts WHERE id=?', [created.id]);
+
+    const renamed = await request(`/api/v1/dns/accounts/${created.id}`, {
+      method: 'PUT', headers, body: JSON.stringify({ name: '备份账号', remark: 'renamed' }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(await testDb.db.query('SELECT name,remark FROM dns_accounts WHERE id=?', [created.id]))
+      .toEqual([{ name: '备份账号', remark: 'renamed' }]);
+    expect(await testDb.db.query('SELECT config_cipher FROM dns_accounts WHERE id=?', [created.id])).toEqual(before);
+    expect(await testDb.db.query("SELECT detail FROM audit_logs WHERE action='account.update'"))
+      .toEqual([{ detail: 'type=cloudflare credentials=unchanged' }]);
+
+    const rotated = await request(`/api/v1/dns/accounts/${created.id}`, {
+      method: 'PUT', headers, body: JSON.stringify({ name: '备份账号', config: { apikey: 'new-token' } }),
+    });
+    expect(rotated.status).toBe(200);
+    const after = await testDb.db.query<{ config_cipher: string }>('SELECT config_cipher FROM dns_accounts WHERE id=?', [created.id]);
+    expect(after[0]!.config_cipher).not.toBe(before[0]!.config_cipher);
+    expect(await testDb.db.query('SELECT remark FROM dns_accounts WHERE id=?', [created.id])).toEqual([{ remark: null }]);
+
+    const emptyConfig = await request(`/api/v1/dns/accounts/${created.id}`, {
+      method: 'PUT', headers, body: JSON.stringify({ name: '备份账号', config: {} }),
+    });
+    expect(emptyConfig.status).toBe(200);
+    const missing = await request(`/api/v1/dns/accounts/${created.id}`, {
+      method: 'PUT', headers, body: JSON.stringify({ name: '备份账号', config: { apikey: '' } }),
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ reason: 'INVALID_ACCOUNT_CONFIG' });
+  });
+
   it('requires admin rights and CSRF for account mutations', async () => {
     const { cookie } = await session();
     expect((await post('/api/v1/dns/accounts', { type: 'cloudflare', name: 'x', config: { apikey: 't' } }, { cookie })).status).toBe(403);

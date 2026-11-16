@@ -21,6 +21,7 @@ interface CertificateOrder {
   revokedAt: number | null;
   renewedFrom: number | null;
   domains: string[];
+  remark: string | null;
 }
 
 interface AcmeAccount {
@@ -113,6 +114,11 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [accountOpen, setAccountOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<AcmeAccount | null>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editingOrder, setEditingOrder] = useState<CertificateOrder | null>(null);
+  const [orderRemark, setOrderRemark] = useState('');
+  const [orderAuto, setOrderAuto] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [renewOpen, setRenewOpen] = useState(false);
@@ -210,6 +216,53 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
       setNotice(`ACME ${account.environment} 账户已注册。`);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
+    finally { setBusy(false); }
+  }
+
+  function openAccountEdit(account: AcmeAccount) {
+    setEditingAccount(account);
+    setEditEmail(account.email);
+    setError('');
+    setNotice('');
+  }
+
+  async function saveAccountEmail(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy || !editingAccount) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      const result = await send<{ code: 0; contactUpdated: boolean }>(
+        `/api/v1/cert/acme/accounts/${editingAccount.id}`, 'PATCH', { email: editEmail },
+        controller.signal, { 'X-CSRF-Token': session.csrfToken },
+      );
+      setNotice(`ACME 账户 #${editingAccount.id} 的联系邮箱已更新${result.contactUpdated ? '，并已同步到 CA' : ''}。`);
+      setEditingAccount(null);
+      await load(controller.signal);
+    } catch (failure) { handle(failure); await load(controller.signal); }
+    finally { setBusy(false); }
+  }
+
+  function openOrderEdit(order: CertificateOrder) {
+    setEditingOrder(order);
+    setOrderRemark(order.remark ?? '');
+    setOrderAuto(order.isAuto);
+    setError('');
+    setNotice('');
+  }
+
+  async function saveOrder(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy || !editingOrder) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      await send(`/api/v1/cert/orders/${editingOrder.id}`, 'PATCH', { remark: orderRemark, isAuto: orderAuto },
+        controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`证书订单 #${editingOrder.id} 已更新。`);
+      setEditingOrder(null);
+      await load(controller.signal);
+    } catch (failure) { handle(failure); await load(controller.signal); }
     finally { setBusy(false); }
   }
 
@@ -346,6 +399,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
             <button className="button button-primary" type="button" disabled={busy || !termsAccepted[account.id] || !account.nonceReady || account.requestInFlight} onClick={() => void registerAccount(account)}>注册账户</button>
           </>}
           {account.status === 'ready' && <span className="data-badge">已注册</span>}
+          <button className="button button-secondary" type="button" disabled={busy} onClick={() => openAccountEdit(account)}>编辑</button>
           <button className="button button-quiet" type="button" disabled={busy || account.requestInFlight} onClick={() => void removeAccount(account)}>删除</button>
         </div>
       </article>)}</div>}
@@ -379,13 +433,14 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
           : <div className="table-wrap"><table className="data-table certificate-table">
             <thead><tr><th>订单</th><th>域名</th><th>签发机构</th><th>密钥</th><th>有效期</th><th>自动续签</th><th>操作</th></tr></thead>
             <tbody>{items.map((order) => <tr key={order.id}>
-              <td><strong className="mono">#{order.id}</strong><span className="value-detail">{order.source === 'acme' ? 'ACME 签发' : '手动导入'}</span>{order.renewedFrom && <span className="value-detail">续签自 #{order.renewedFrom}</span>}</td>
+              <td><strong className="mono">#{order.id}</strong><span className="value-detail">{order.source === 'acme' ? 'ACME 签发' : '手动导入'}</span>{order.remark && <span className="value-detail">{order.remark}</span>}{order.renewedFrom && <span className="value-detail">续签自 #{order.renewedFrom}</span>}</td>
               <td className="certificate-domains">{order.domains.map((domain) => <span className="data-badge mono" key={domain}>{domain}</span>)}</td>
               <td>{order.issuer}</td>
               <td className="mono">{order.keyType} {order.keySize}</td>
               <td><span>{date(order.issuedAt)}</span><span className="value-detail">到期 {date(order.expiresAt)}</span></td>
               <td><label className="certificate-confirm"><input type="checkbox" checked={order.isAuto} disabled={busy || order.revokedAt !== null} onChange={(event) => void toggleAuto(order, event.target.checked)} />自动</label>{order.revokedAt !== null && <span className="value-detail">已吊销 {date(order.revokedAt)}</span>}</td>
               <td className="certificate-order-actions">
+                <button className="button button-secondary" type="button" disabled={busy} onClick={() => openOrderEdit(order)}>编辑</button>
                 <button className="button button-secondary" type="button" disabled={busy} onClick={() => void download(order)}>下载 PFX</button>
                 {order.source === 'acme' && order.revokedAt === null && <button className="button button-quiet" type="button" disabled={busy} onClick={() => void revokeOrder(order)}>吊销</button>}
                 <button className="button button-quiet" type="button" disabled={busy} onClick={() => void removeOrder(order)}>删除</button>
@@ -438,6 +493,21 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     </Modal>}
     {renewOpen && <Modal title="续签设置" onClose={() => { if (!busy) setRenewOpen(false); }}>
       <CertificateSettings session={session} onExpired={onExpired} onSaved={() => { setRenewOpen(false); setNotice('自动续签设置已保存'); }} />
+    </Modal>}
+    {editingAccount && <Modal title={`编辑 ACME 账户 #${editingAccount.id}`} onClose={() => { if (!busy) setEditingAccount(null); }}>
+      <form className="dns-form" onSubmit={saveAccountEmail}>
+        <label className="form-field"><span>联系邮箱</span><input type="email" value={editEmail} onChange={(event) => setEditEmail(event.target.value)} required maxLength={254} autoComplete="email" /></label>
+        <p className="form-hint">{editingAccount.status === 'ready' ? '邮箱保存在 CA 账户上，保存时会带一次性 nonce 向 CA 更新联系邮箱。' : '该账户尚未在 CA 注册，保存后注册时将使用新的联系邮箱。'}</p>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !editEmail.trim() || editEmail.trim().toLowerCase() === editingAccount.email}>{busy ? '正在保存…' : '保存修改'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setEditingAccount(null)}>取消</button></div>
+      </form>
+    </Modal>}
+    {editingOrder && <Modal title={`编辑证书订单 #${editingOrder.id}`} onClose={() => { if (!busy) setEditingOrder(null); }}>
+      <form className="dns-form" onSubmit={saveOrder}>
+        <label className="form-field"><span>备注（可选）</span><input value={orderRemark} onChange={(event) => setOrderRemark(event.target.value)} maxLength={100} placeholder="例如 官网主站" /></label>
+        <label className="certificate-confirm"><input type="checkbox" checked={orderAuto} disabled={editingOrder.revokedAt !== null} onChange={(event) => setOrderAuto(event.target.checked)} />自动续签{editingOrder.revokedAt !== null ? '（已吊销的证书不能开启）' : ''}</label>
+        <p className="form-hint">证书内容与域名属于已签发材料，不能修改；这里只调整备注与自动续签。</p>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存修改'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setEditingOrder(null)}>取消</button></div>
+      </form>
     </Modal>}
   </>;
 }

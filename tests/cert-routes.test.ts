@@ -189,7 +189,7 @@ describe('certificate order API', () => {
     expect(spent).toBeLessThanOrEqual(4);
   });
 
-  it('supports order detail, auto-renewal toggle, deletion and manual revoke rejection', async () => {
+  it('supports order detail, editing remark and auto-renewal, deletion and manual revoke rejection', async () => {
     const { cookie, csrf } = await adminSession();
     const imported = await importFixture(cookie, csrf);
     const { id } = await imported.json() as { id: number };
@@ -197,7 +197,7 @@ describe('certificate order API', () => {
     const detail = await request(`/api/v1/cert/orders/${id}`, { headers: { cookie } });
     expect(detail.status).toBe(200);
     expect(await detail.json()).toMatchObject({
-      item: { id, isAuto: false, revokedAt: null, renewedFrom: null, domains: fixture.domains },
+      item: { id, isAuto: false, revokedAt: null, renewedFrom: null, remark: null, domains: fixture.domains },
       renewals: [], issuance: null,
     });
 
@@ -207,14 +207,40 @@ describe('certificate order API', () => {
     });
     expect(enabled.status).toBe(200);
     expect(await testDb.db.query('SELECT is_auto FROM cert_orders WHERE id=?', [id])).toEqual([{ is_auto: 1 }]);
-    expect(await testDb.db.query("SELECT action,detail FROM audit_logs WHERE action='cert.order.auto'"))
-      .toEqual([{ action: 'cert.order.auto', detail: 'auto renewal enabled' }]);
+    expect(await testDb.db.query("SELECT action,detail FROM audit_logs WHERE action='cert.order.update'"))
+      .toEqual([{ action: 'cert.order.update', detail: 'auto renewal enabled; remark unchanged' }]);
+
+    const remarked = await request(`/api/v1/cert/orders/${id}`, {
+      method: 'PATCH', headers: { cookie, 'content-type': 'application/json', 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ remark: ' 官网主站 ' }),
+    });
+    expect(remarked.status).toBe(200);
+    expect(await remarked.json()).toMatchObject({ id, isAuto: true, remark: '官网主站' });
+    expect(await testDb.db.query('SELECT is_auto,remark FROM cert_orders WHERE id=?', [id]))
+      .toEqual([{ is_auto: 1, remark: '官网主站' }]);
+    const listed = await request('/api/v1/cert/orders?limit=10&offset=0', { headers: { cookie } });
+    expect((await listed.json() as { items: { id: number; remark: string | null }[] }).items)
+      .toEqual([expect.objectContaining({ id, remark: '官网主站' })]);
+
+    const cleared = await request(`/api/v1/cert/orders/${id}`, {
+      method: 'PATCH', headers: { cookie, 'content-type': 'application/json', 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ remark: '   ' }),
+    });
+    expect(await cleared.json()).toMatchObject({ id, remark: null });
+    expect(await testDb.db.query('SELECT remark FROM cert_orders WHERE id=?', [id])).toEqual([{ remark: null }]);
 
     const invalid = await request(`/api/v1/cert/orders/${id}`, {
       method: 'PATCH', headers: { cookie, 'content-type': 'application/json', 'X-CSRF-Token': csrf },
       body: JSON.stringify({ isAuto: 'yes' }),
     });
     expect(invalid.status).toBe(400);
+
+    const empty = await request(`/api/v1/cert/orders/${id}`, {
+      method: 'PATCH', headers: { cookie, 'content-type': 'application/json', 'X-CSRF-Token': csrf },
+      body: JSON.stringify({}),
+    });
+    expect(empty.status).toBe(400);
+    expect(await empty.json()).toMatchObject({ reason: 'INVALID_CERT_ORDER_UPDATE' });
 
     const revoke = await post(`/api/v1/cert/orders/${id}/revoke`, {}, { cookie, 'X-CSRF-Token': csrf });
     expect(revoke.status).toBe(501);

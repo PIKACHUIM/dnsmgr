@@ -361,4 +361,9 @@ export const de: Record<string, string> = {
   '尚未移植的驱动：{list}': 'Noch nicht migrierte Treiber: {list}',
   '设为站点默认': 'Als Website-Standard festlegen',
   '已将「{name}」设为站点默认皮肤': '„{name}“ ist jetzt das Standarddesign der Website',
+  '编辑': 'Bearbeiten',
+  '编辑 DNS 账户': 'DNS-Konto bearbeiten',
+  '凭据留空表示保持现有凭据': 'Anmeldedaten leer lassen, um die gespeicherten zu behalten',
+  '留空保持不变': 'Leer lassen zum Behalten',
+  '账户「{name}」已更新': 'Konto „{name}" aktualisiert',
 };

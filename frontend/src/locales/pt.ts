@@ -361,4 +361,9 @@ export const pt: Record<string, string> = {
   '尚未移植的驱动：{list}': 'Controladores ainda não migrados: {list}',
   '设为站点默认': 'Definir como predefinição do site',
   '已将「{name}」设为站点默认皮肤': '«{name}» é agora o tema predefinido do site',
+  '编辑': 'Editar',
+  '编辑 DNS 账户': 'Editar conta DNS',
+  '凭据留空表示保持现有凭据': 'Deixe as credenciais em branco para manter as salvas',
+  '留空保持不变': 'Deixar em branco para manter',
+  '账户「{name}」已更新': 'Conta "{name}" atualizada',
 };
