@@ -28,10 +28,12 @@ interface AcmeAccount {
   id: number; environment: 'staging' | 'production'; ca: string; email: string; status: string;
   termsOfService: string | null; nonceReady: boolean; requestInFlight: boolean; createdAt: number; updatedAt: number;
 }
+interface AcmeEvent { action: string; detail: string; createdAt: number }
 interface AcmeIssuance {
   id: number; environment: 'staging' | 'production'; ca: string; status: string; domains: string[];
+  authorizationIndex: number; authorizationTotal: number; currentDomain: string | null;
   certificateOrderId: number | null; lastError: string | null; canPoll: boolean; nonceReady: boolean;
-  requestInFlight: boolean; needsDnsCleanup: boolean; createdAt: number; updatedAt: number;
+  requestInFlight: boolean; needsDnsCleanup: boolean; events: AcmeEvent[]; createdAt: number; updatedAt: number;
 }
 interface Props { session: Session; onExpired: (message: string) => void; section?: 'all' | 'accounts' }
 
@@ -53,6 +55,30 @@ function date(value: number): string {
   return new Date(value * 1000).toLocaleString();
 }
 
+function authorizationProgress(order: AcmeIssuance): string {
+  if (order.authorizationTotal === 0) return '';
+  return `授权 ${order.authorizationIndex}/${order.authorizationTotal}`;
+}
+
+function nextAuthorizationLabel(order: AcmeIssuance): string {
+  if (order.authorizationTotal === 0) return '读取下一项授权';
+  const position = `${order.authorizationIndex + 1}/${order.authorizationTotal}`;
+  return `读取第 ${position} 项授权${order.currentDomain ? `（${order.currentDomain}）` : ''}`;
+}
+
+function eventText(event: AcmeEvent): string {
+  const challengeName = (prefix: string) => (event.detail.startsWith(prefix) ? event.detail.slice(prefix.length) : '');
+  switch (event.action) {
+    case 'cert.acme.order.create': return '创建签发任务';
+    case 'cert.acme.order.placed': return `提交 ACME 订单${event.detail.replace(/^(\d+) ACME authorizations$/, ' · 共 $1 项域名授权')}`;
+    case 'cert.acme.dns.create': return `写入 TXT${challengeName('TXT challenge ') ? ` · ${challengeName('TXT challenge ')}` : ''}`;
+    case 'cert.acme.dns.cleanup': return `清理 TXT${challengeName('TXT challenge removed · ') ? ` · ${challengeName('TXT challenge removed · ')}` : ''}`;
+    case 'cert.acme.order.issued': return '证书签发完成';
+    case 'cert.acme.order.cancel': return '本地取消任务';
+    default: return `${event.action}${event.detail ? ` · ${event.detail}` : ''}`;
+  }
+}
+
 function issuanceStep(order: AcmeIssuance): { action: string; label: string } | null {
   if (order.needsDnsCleanup && order.status === 'failed') return { action: 'cleanup-dns', label: '清理 challenge TXT' };
   if (!order.nonceReady && (['draft','authorizing','challenge_ready','dns_present','triggering','trigger_unknown','submitted','ready_to_finalize','finalizing','processing','certificate_ready'].includes(order.status)
@@ -61,7 +87,7 @@ function issuanceStep(order: AcmeIssuance): { action: string; label: string } | 
   }
   switch (order.status) {
     case 'draft': return { action: 'place', label: '提交 ACME 订单' };
-    case 'authorizing': return { action: 'authorize', label: '读取下一项授权' };
+    case 'authorizing': return { action: 'authorize', label: nextAuthorizationLabel(order) };
     case 'challenge_ready': return { action: 'add-dns', label: '创建 DNS TXT' };
     case 'dns_present': return { action: 'trigger', label: '通知 CA 验证' };
     case 'submitted':
@@ -112,6 +138,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState<{ id: number; message: string } | null>(null);
   const [notice, setNotice] = useState('');
   const [accountOpen, setAccountOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<AcmeAccount | null>(null);
@@ -309,13 +336,17 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
 
   async function issuanceAction(order: AcmeIssuance, action: string, success: string) {
     if (busy) return;
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setNotice(''); setActionError(null);
     const controller = new AbortController();
     try {
       await send(`/api/v1/cert/acme/orders/${order.id}/${action}`, 'POST', {}, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(success);
       await load(controller.signal);
-    } catch (failure) { handle(failure); await load(controller.signal); }
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
+      else setActionError({ id: order.id, message: errorMessage(failure) });
+      await load(controller.signal);
+    }
     finally { setBusy(false); }
   }
 
@@ -449,21 +480,28 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     {accountsOnly && <CertificateCname session={session} onExpired={onExpired} />}
     {!accountsOnly && <>
     <section className="panel" aria-labelledby="acme-issuance-title">
-      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2><InfoTip label="签发说明" text="每个订单分步推进，自动写入并清理本系统创建的 TXT challenge。CA 请求结果未知时必须先核对状态，不会自动重试。" /></div><button className="button button-primary" type="button" disabled={busy || accounts.every((account) => account.status !== 'ready')} onClick={() => { setError(''); setNotice(''); setOrderOpen(true); }}><Icon name="plus" />申请证书</button></div>
+      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2><InfoTip label="签发说明" text="每个订单分步推进；多域名订单会逐个域名重复「读取授权 → 写 TXT → 通知验证 → 清理 TXT」。CA 请求结果未知时必须先核对状态，不会自动重试。" /></div><button className="button button-primary" type="button" disabled={busy || accounts.every((account) => account.status !== 'ready')} onClick={() => { setError(''); setNotice(''); setOrderOpen(true); }}><Icon name="plus" />申请证书</button></div>
       <div className="certificate-issuance-list">
         {issuances.length === 0 ? <div className="panel-empty">尚无 ACME 签发任务。</div> : issuances.map((order) => {
           const step = issuanceStep(order);
           const canCancel = ['draft','outcome_unknown','failed'].includes(order.status) && !order.needsDnsCleanup;
           return <article className="certificate-issuance-card" key={order.id}>
-            <div className="certificate-issuance-heading"><div><strong className="mono">任务 #{order.id}</strong><span className="value-detail">{caName(order.ca)} · {order.environment === 'staging' ? '测试 CA' : '生产 CA'} · {issuanceStatus(order.status)}</span></div>
+            <div className="certificate-issuance-heading"><div><strong className="mono">任务 #{order.id}</strong><span className="value-detail">{caName(order.ca)} · {order.environment === 'staging' ? '测试 CA' : '生产 CA'} · {issuanceStatus(order.status)}{authorizationProgress(order) ? ` · ${authorizationProgress(order)}` : ''}</span></div>
               <div className="certificate-domains">{order.domains.map((domain) => <span className="data-badge mono" key={domain}>{domain}</span>)}</div>
             </div>
             {order.lastError && <p className="form-hint certificate-order-error">{order.lastError}</p>}
+            {actionError?.id === order.id && <p className="form-hint certificate-order-error" role="alert">{actionError.message}</p>}
             <div className="certificate-account-actions">
               {step && <button className="button button-primary" type="button" disabled={busy} onClick={() => void issuanceAction(order, step.action, `任务 ${order.id}：${step.label} 已提交。`)}>{step.label}</button>}
               {canCancel && <button className="button button-quiet" type="button" disabled={busy} onClick={() => void issuanceAction(order, 'cancel', `任务 ${order.id} 已在本地取消。`)}>取消本地任务</button>}
               {order.certificateOrderId && <span className="data-badge">证书订单 #{order.certificateOrderId}</span>}
             </div>
+            {order.events.length > 0 && <ol className="certificate-issuance-log">
+              {order.events.map((event) => <li key={`${event.createdAt}-${event.action}-${event.detail}`}>
+                <time dateTime={new Date(event.createdAt * 1000).toISOString()}>{date(event.createdAt)}</time>
+                <span>{eventText(event)}</span>
+              </li>)}
+            </ol>}
           </article>;
         })}
       </div>

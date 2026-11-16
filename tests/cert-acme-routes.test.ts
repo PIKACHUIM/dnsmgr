@@ -294,6 +294,18 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     method: 'PATCH', headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf }, body: JSON.stringify(body),
   }, environment(bindings, platform));
 
+  async function listIssuance(orderId: number) {
+    const response = await app.request('https://panel.example/api/v1/cert/acme/orders', { headers: { cookie } }, environment(bindings, platform));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { items: {
+      id: number; status: string; authorizationIndex: number; authorizationTotal: number;
+      currentDomain: string | null; events: { action: string; detail: string }[];
+    }[] };
+    const item = payload.items.find((entry) => entry.id === orderId);
+    expect(item).toBeDefined();
+    return item!;
+  }
+
   it('updates the ACME contact email locally before registration and at the CA afterwards', async () => {
     const created = await post('/api/v1/cert/acme/accounts', { email: 'admin@example.test', environment: 'staging' });
     const account = await created.json() as { id: number };
@@ -471,6 +483,9 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     await step('poll-authorization');
     expect((await step('cleanup-dns')).status).toBe(200);
     expect(dnsRecordPresent).toBe(false);
+    expect(await listIssuance(order.id)).toMatchObject({
+      status: 'authorizing', authorizationIndex: 1, authorizationTotal: 2, currentDomain: 'second.test',
+    });
 
     await step('authorize');
     await step('add-dns');
@@ -483,6 +498,16 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     await step('poll-authorization');
     expect(await (await step('cleanup-dns')).json()).toMatchObject({ status: 'ready_to_finalize', authorizationIndex: 2 });
     expect(secondDnsRecordPresent).toBe(false);
+    const completed = await listIssuance(order.id);
+    expect(completed).toMatchObject({
+      status: 'ready_to_finalize', authorizationIndex: 2, authorizationTotal: 2, currentDomain: null,
+    });
+    expect(completed.events.map((event) => event.action)).toEqual([
+      'cert.acme.dns.cleanup', 'cert.acme.dns.create', 'cert.acme.dns.cleanup',
+      'cert.acme.dns.create', 'cert.acme.order.placed', 'cert.acme.order.create',
+    ]);
+    expect(completed.events[0]!.detail).toContain('second.test');
+    expect(JSON.stringify(completed.events)).not.toContain('dns01-test-token');
   });
 
   it('persists each ACME phase, cleans its exact TXT record, and stores an issued encrypted order', async () => {

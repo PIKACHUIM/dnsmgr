@@ -496,15 +496,25 @@ function nextAuthorizationStatus(states: AuthorizationState[], index: number, ex
   return 'ready_to_finalize';
 }
 
-function outputOrder(row: Pick<IssuanceRow, 'id' | 'directory' | 'ca' | 'status' | 'domains_json' | 'authorization_state_json' | 'cert_order_id' | 'last_error' | 'remote_order_url' | 'replay_nonce' | 'claimed_nonce' | 'claimed_at' | 'created_at' | 'updated_at'>) {
+interface OrderEvent { action: string; detail: string; createdAt: number }
+
+function outputOrder(
+  row: Pick<IssuanceRow, 'id' | 'directory' | 'ca' | 'status' | 'domains_json' | 'authorization_state_json' | 'authorization_index' | 'cert_order_id' | 'last_error' | 'remote_order_url' | 'replay_nonce' | 'claimed_nonce' | 'claimed_at' | 'created_at' | 'updated_at'>,
+  events: OrderEvent[] = [],
+) {
   const states = authorizationStates(row.authorization_state_json);
+  const domains = domainsFrom(row);
+  const index = Math.max(0, Math.min(row.authorization_index ?? 0, states.length));
   return {
-    id: row.id, environment: row.directory, ca: row.ca, status: row.status, domains: domainsFrom(row),
+    id: row.id, environment: row.directory, ca: row.ca, status: row.status, domains,
+    authorizationIndex: index, authorizationTotal: states.length,
+    currentDomain: states[index]?.identifier ?? domains[index] ?? null,
     certificateOrderId: row.cert_order_id, lastError: row.last_error,
     canPoll: row.remote_order_url !== null,
     nonceReady: row.replay_nonce !== null,
     requestInFlight: row.claimed_nonce !== null && (row.claimed_at ?? 0) > nowSeconds() - 60,
     needsDnsCleanup: states.some((state) => Boolean(state.dnsRecordId)),
+    events,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -766,10 +776,24 @@ export function certificateAcmeRoutes() {
   routes.get('/api/v1/cert/acme/orders', requireCertificateSession, async (c) => {
     requireAdmin(c);
     const rows = await c.get('db').query<IssuanceRow>(
-      `SELECT id,directory,ca,status,domains_json,authorization_state_json,cert_order_id,last_error,remote_order_url,replay_nonce,claimed_nonce,claimed_at,created_at,updated_at
+      `SELECT id,directory,ca,status,domains_json,authorization_state_json,authorization_index,cert_order_id,last_error,remote_order_url,replay_nonce,claimed_nonce,claimed_at,created_at,updated_at
        FROM cert_acme_orders ORDER BY created_at DESC,id DESC LIMIT 100`,
     );
-    return c.json({ code: 0, items: rows.map(outputOrder) });
+    const since = rows.length === 0 ? nowSeconds() : Math.min(...rows.map((row) => row.created_at));
+    const history = rows.length === 0 ? [] : await c.get('db').query<{ target: string; action: string; detail: string; created_at: number }>(
+      `SELECT target,action,detail,created_at FROM audit_logs
+       WHERE action LIKE 'cert.acme.%' AND created_at>=? ORDER BY id DESC LIMIT 500`, [since],
+    );
+    const byTarget = new Map<string, OrderEvent[]>();
+    for (const entry of history) {
+      const list = byTarget.get(entry.target) ?? [];
+      if (list.length < 6) list.push({ action: entry.action, detail: entry.detail, createdAt: entry.created_at });
+      byTarget.set(entry.target, list);
+    }
+    return c.json({ code: 0, items: rows.map((row) => outputOrder(row,
+      [...(byTarget.get(String(row.id)) ?? []), ...(byTarget.get(String(row.cert_order_id)) ?? [])]
+        .sort((left, right) => right.createdAt - left.createdAt).slice(0, 6),
+    )) });
   });
 
   routes.post('/api/v1/cert/acme/accounts/:id/recover-registration', requireCertificateSession, requireCsrf, async (c) => {

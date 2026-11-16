@@ -642,6 +642,10 @@ a.button:hover { text-decoration: none; }
 .certificate-issuance-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .certificate-issuance-heading > div:first-child > strong, .certificate-issuance-heading > div:first-child > span { display: block; }
 .certificate-order-error { margin: 0; color: var(--color-warning); }
+.certificate-issuance-log { display: grid; gap: 4px; margin: 0; padding: 10px 0 0; border-top: 1px solid var(--color-border); list-style: none; }
+.certificate-issuance-log li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: var(--font-xs); color: var(--color-muted); }
+.certificate-issuance-log time { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.certificate-issuance-log span { color: var(--color-text); overflow-wrap: anywhere; }
 .certificate-domains { display: flex; flex-wrap: wrap; gap: 5px; max-width: 360px; }
 .certificate-order-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .executor-token-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }

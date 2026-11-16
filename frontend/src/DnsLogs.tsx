@@ -13,6 +13,21 @@ interface Props {
 
 const PAGE_SIZE = 30;
 
+const actionLabels: Record<string, string> = {
+  'cert.acme.account.create': '创建 ACME 账户',
+  'cert.acme.account.register': '注册 ACME 账户',
+  'cert.acme.account.update': '更新 ACME 账户',
+  'cert.acme.account.delete': '删除 ACME 账户',
+  'cert.acme.account.recover': '恢复 ACME 账户注册',
+  'cert.acme.order.create': '创建签发任务',
+  'cert.acme.order.placed': '提交 ACME 订单',
+  'cert.acme.order.cancel': '取消签发任务',
+  'cert.acme.order.issued': '证书签发完成',
+  'cert.acme.renew.create': '创建自动续签任务',
+  'cert.acme.dns.create': '写入 challenge TXT',
+  'cert.acme.dns.cleanup': '清理 challenge TXT',
+};
+
 function formatTime(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString('zh-CN', { hour12: false });
 }
@@ -81,7 +96,7 @@ export function DnsLogs({ session, onExpired }: Props) {
             <tbody>{rows.map((row) => <tr key={row.id}>
               <td className="mono">{formatTime(row.createdAt)}</td>
               <td>{row.userId}</td>
-              <td><span className="mono">{row.action}</span></td>
+              <td>{actionLabels[row.action] ? <><span>{actionLabels[row.action]}</span><span className="value-detail mono">{row.action}</span></> : <span className="mono">{row.action}</span>}</td>
               <td>{row.target || '—'}</td>
               <td>{row.detail || '—'}</td>
             </tr>)}</tbody>
