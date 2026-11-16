@@ -235,6 +235,10 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     return (await created.json() as { id: number }).id;
   }
 
+  const remove = (path: string) => app.request(`https://panel.example${path}`, {
+    method: 'DELETE', headers: { cookie, 'X-CSRF-Token': csrf },
+  }, environment(bindings, platform));
+
   it('keeps every staging ACME issuance request within ESA four-fetch budget', async () => {
     let spent = 0;
     let budget: RequestBudget;
@@ -417,6 +421,34 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     await testDb.db.execute('UPDATE users SET level=1 WHERE id=1');
     const denied = await post('/api/v1/cert/acme/accounts', { email: 'user@example.test', environment: 'staging' });
     expect(denied.status).toBe(403);
+  });
+
+  it('deletes an account only when it is idle and not referenced by issuance tasks', async () => {
+    const accountId = await createReadyStagingAccount();
+
+    await testDb.db.execute(
+      "UPDATE cert_acme_accounts SET claimed_nonce='test-claim', claimed_at=? WHERE id=?",
+      [Math.floor(Date.now() / 1000), accountId],
+    );
+    const inFlight = await remove(`/api/v1/cert/acme/accounts/${accountId}`);
+    expect(inFlight.status).toBe(409);
+    expect(await inFlight.json()).toMatchObject({ reason: 'ACME_REQUEST_IN_FLIGHT' });
+
+    await testDb.db.execute('UPDATE cert_acme_accounts SET claimed_nonce=NULL, claimed_at=NULL WHERE id=?', [accountId]);
+    const orderId = await createDraftOrder(accountId);
+    const referenced = await remove(`/api/v1/cert/acme/accounts/${accountId}`);
+    expect(referenced.status).toBe(409);
+    expect(await referenced.json()).toMatchObject({ reason: 'ACME_ACCOUNT_IN_USE' });
+
+    await post(`/api/v1/cert/acme/orders/${orderId}/cancel`, {});
+    const deleted = await remove(`/api/v1/cert/acme/accounts/${accountId}`);
+    expect(deleted.status).toBe(200);
+    expect(await testDb.db.query('SELECT id FROM cert_acme_accounts WHERE id=?', [accountId])).toEqual([]);
+    expect(await testDb.db.query('SELECT id FROM cert_acme_orders WHERE account_id=?', [accountId])).toEqual([]);
+    expect(await testDb.db.query<{ action: string }>(
+      'SELECT action FROM audit_logs WHERE target=? ORDER BY id DESC LIMIT 1', [String(accountId)],
+    )).toEqual([{ action: 'cert.acme.account.delete' }]);
+    expect((await remove(`/api/v1/cert/acme/accounts/${accountId}`)).status).toBe(404);
   });
 
   it('renews an auto-enabled certificate end to end without a browser session', async () => {

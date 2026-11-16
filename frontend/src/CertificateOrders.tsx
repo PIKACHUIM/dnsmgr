@@ -220,6 +220,27 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     finally { setBusy(false); }
   }
 
+  async function removeAccount(account: AcmeAccount) {
+    if (busy) return;
+    const caution = account.status === 'ready'
+      ? 'CA 侧已注册的账户不会被注销，只是本系统不再保存它的私钥。'
+      : '该账户尚未在 CA 注册。';
+    if (!window.confirm(`删除 ACME 账户 #${account.id}？${caution}已结束的签发任务记录会一并删除，已签发的证书订单保留。`)) return;
+    setBusy(true); setError(''); setNotice('');
+    const controller = new AbortController();
+    try {
+      await send(`/api/v1/cert/acme/accounts/${account.id}`, 'DELETE', {}, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(`ACME 账户 #${account.id} 已删除。`);
+      setTermsAccepted((current) => {
+        const next = { ...current };
+        delete next[account.id];
+        return next;
+      });
+      await load(controller.signal);
+    } catch (failure) { handle(failure); await load(controller.signal); }
+    finally { setBusy(false); }
+  }
+
   async function createAcmeOrder(event: React.FormEvent) {
     event.preventDefault();
     if (busy || !issuanceAccountId || !dnsDomainId) return;
@@ -332,6 +353,7 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
             <button className="button button-primary" type="button" disabled={busy || !termsAccepted[account.id] || !account.nonceReady || account.requestInFlight} onClick={() => void registerAccount(account)}>注册账户</button>
           </>}
           {account.status === 'ready' && <span className="data-badge">已注册</span>}
+          <button className="button button-quiet" type="button" disabled={busy || account.requestInFlight} onClick={() => void removeAccount(account)}>删除</button>
         </div>
       </article>)}</div>}
     </section>

@@ -462,6 +462,37 @@ export function certificateAcmeRoutes() {
     return c.json({ code: 0, id: idValue, ca, environment, status: 'pending_directory' });
   });
 
+  routes.delete('/api/v1/cert/acme/accounts/:id', requireCertificateSession, requireCsrf, async (c) => {
+    requireAdmin(c);
+    const accountId = id(c.req.param('id'), 'ACME 账户');
+    const account = await accountById(c, accountId);
+    if (account.claimed_nonce !== null && (account.claimed_at ?? 0) > nowSeconds() - 60) {
+      throw new AppError(409, 'ACME 账户请求仍在处理中，暂不能删除', 'ACME_REQUEST_IN_FLIGHT');
+    }
+    const orders = await c.get('db').query<{ total: number; active: number }>(
+      `SELECT COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN status IN ('issued','failed','cancelled') THEN 0 ELSE 1 END),0) AS active
+       FROM cert_acme_orders WHERE account_id=?`, [accountId],
+    );
+    if ((orders[0]?.active ?? 0) > 0) {
+      throw new AppError(409, '该账户仍有未结束的签发任务，请先完成或取消', 'ACME_ACCOUNT_IN_USE');
+    }
+    const finished = orders[0]?.total ?? 0;
+    await c.get('db').batch([
+      { sql: "DELETE FROM cert_acme_orders WHERE account_id=? AND status IN ('issued','failed','cancelled')", args: [accountId] },
+      { sql: 'DELETE FROM cert_acme_accounts WHERE id=?', args: [accountId] },
+      {
+        sql: 'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
+        args: [
+          c.get('principal').user.id, 'cert.acme.account.delete', String(accountId),
+          `${account.ca} ${account.directory} ${account.kid ? 'registered' : 'unregistered'} account removed; ${finished} finished jobs removed`,
+          nowSeconds(),
+        ],
+      },
+    ]);
+    return c.json({ code: 0, id: accountId });
+  });
+
   routes.post('/api/v1/cert/acme/accounts/:id/directory', requireCertificateSession, requireCsrf, async (c) => {
     requireAdmin(c);
     const accountId = id(c.req.param('id'), 'ACME 账户');
