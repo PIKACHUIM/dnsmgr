@@ -7,9 +7,10 @@ import { decrypt } from '../security/crypto';
 import { createProvider } from '../dns/registry';
 import type { DnsDomain } from '../dns/types';
 import {
-  OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN, OPTIMIZE_PROXY, executeOptimizeDue, fetchOptimizeCredit, loadOptimizeTask,
-  optimizeProxyPrefix, readOptimizeSettings, runOptimizeTask, type IpGroup, type OptimizeTaskRow,
+  AUTO_LINE, OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN, OPTIMIZE_PROXY, executeOptimizeDue, fetchOptimizeCredit,
+  loadOptimizeTask, optimizeProxyPrefix, readOptimizeSettings, runOptimizeTask, type IpGroup, type OptimizeTaskRow,
 } from '../optimize';
+import { supportsAutoLines } from '../dns/lines';
 
 function requireSql(c: Context<AppEnv>): void {
   if (c.get('storage').config.format !== 'sql') {
@@ -97,11 +98,6 @@ export function optimizeRoutes() {
     const body = await input(c);
     const api = body.api === undefined ? null : body.api === '0' || body.api === '1' || body.api === '2' ? body.api : undefined;
     if (api === undefined) throw new AppError(400, '不支持的 IP 优选接口', 'INVALID_OPTIMIZE_API');
-    if (api === '0') {
-      const current = await readOptimizeSettings(c.get('db'));
-      const key = typeof body.key === 'string' ? body.key.trim() : '';
-      if (!key && !current.key) throw new AppError(400, 'wetest.vip 接口需要填写密钥', 'OPTIMIZE_KEY_REQUIRED');
-    }
     const minMinutes = body.minMinutes === undefined ? null : boundedInteger(body.minMinutes, 30, 10, 1440, 'INVALID_OPTIMIZE_INTERVAL');
     const proxy = typeof body.proxy === 'string' ? body.proxy.trim().slice(0, 300) : null;
     if (proxy) optimizeProxyPrefix(proxy);
@@ -158,15 +154,21 @@ export function optimizeRoutes() {
     const provider = createProvider(row.type, config, c.env.BUDGET.fetch);
     const zone: DnsDomain = { id: row.third_id, name: row.name, recordCount: 0 };
     const lines = await provider.recordLines(zone);
-    return c.json({ code: 0, lines: lines ?? [] });
+    return c.json({ code: 0, lines: lines ?? [], autoLine: supportsAutoLines(row.type) });
   });
 
   routes.post('/api/v1/optimize/tasks', requireSession, requireCsrf, async (c) => {
     requireAdmin(c);
     const body = await input(c);
     const domainId = numericId(body.domainId, '域名');
-    const domains = await c.get('db').query<{ id: number }>('SELECT id FROM dns_domains WHERE id=?', [domainId]);
+    const domains = await c.get('db').query<{ id: number; type: string }>(
+      'SELECT d.id,a.type FROM dns_domains d JOIN dns_accounts a ON a.id=d.account_id WHERE d.id=?', [domainId],
+    );
     if (!domains[0]) throw new AppError(404, '域名不存在', 'DOMAIN_NOT_FOUND');
+    // 与旧版一致：Cloudflare 托管的域名不能做 CF 优选，必须使用其他 DNS 服务商。
+    if (domains[0].type === 'cloudflare') {
+      throw new AppError(400, '不支持对 Cloudflare 托管的域名添加优选，请改用其他 DNS 服务商', 'OPTIMIZE_CLOUDFLARE_UNSUPPORTED');
+    }
     const rr = recordName(body.rr);
     if (body.recordType !== 'A' && body.recordType !== 'AAAA') {
       throw new AppError(400, '记录类型只能是 A 或 AAAA', 'INVALID_OPTIMIZE_RECORD_TYPE');
@@ -176,6 +178,9 @@ export function optimizeRoutes() {
     const recordCount = boundedInteger(body.recordCount ?? 2, 2, 1, 50, 'INVALID_OPTIMIZE_COUNT');
     const ttl = boundedInteger(body.ttl ?? 600, 600, 1, 86400, 'INVALID_OPTIMIZE_TTL');
     const line = lineValue(body.line);
+    if (line === AUTO_LINE && !supportsAutoLines(domains[0].type)) {
+      throw new AppError(400, '当前服务商不支持自动线路，请为任务指定 DNS 线路', 'OPTIMIZE_AUTO_LINE_UNSUPPORTED');
+    }
     const now = nowSeconds();
     const duplicate = await c.get('db').query<{ id: number }>(
       'SELECT id FROM optimize_ip_tasks WHERE domain_id=? AND rr=? AND record_type=? AND ip_group=? AND line=?',

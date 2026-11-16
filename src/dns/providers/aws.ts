@@ -203,7 +203,7 @@ export function createAwsProvider(config: AwsConfig, fetchImpl: typeof fetch = f
   }
 
   async function addRecordImpl(domain: DnsDomain, input: DnsRecordInput): Promise<string> {
-    const type = input.type === 'SPF' ? 'TXT' : input.type;
+    const type = input.type;
     const name = fqdn(input.name, domain.name);
     const raw = formatValue(type, input.value, input.mx);
     const set = await currentSet(domain, name, type);
@@ -312,7 +312,7 @@ export function createAwsProvider(config: AwsConfig, fetchImpl: typeof fetch = f
 
     async updateRecord(domain, recordId, input) {
       const old = decodeId(recordId);
-      const type = input.type === 'SPF' ? 'TXT' : input.type;
+      const type = input.type;
       const name = fqdn(input.name, domain.name);
       const raw = formatValue(type, input.value, input.mx);
       if (old.type === type && old.name.toLowerCase() === input.name.toLowerCase()) {

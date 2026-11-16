@@ -89,12 +89,12 @@ export function OptimizeIpSettings({ session, onExpired, onSaved }: SettingsProp
         <label className="form-field"><span>IP 数据源</span><select value={api} onChange={(event) => setApi(event.target.value as '0' | '1' | '2')}>
           {(Object.keys(apiNames) as ('0' | '1' | '2')[]).map((value) => <option key={value} value={value}>{apiNames[value]}</option>)}
         </select></label>
-        <label className="form-field"><span>接口密钥</span><input type="password" value={key} onChange={(event) => setKey(event.target.value)} maxLength={200} autoComplete="new-password" placeholder={keyConfigured ? '已配置，留空保留' : api === '2' ? '当前数据源无需密钥' : '填写接口密钥'} /></label>
+        <label className="form-field"><span>接口密钥</span><input type="password" value={key} onChange={(event) => setKey(event.target.value)} maxLength={200} autoComplete="new-password" placeholder={keyConfigured ? '已配置，留空保留' : api === '2' ? '当前数据源无需密钥' : '留空使用免费密钥 o1zrmHAF'} /></label>
         {api === '2' && <label className="form-field"><span>代理地址（可选）</span><input value={proxy} onChange={(event) => setProxy(event.target.value)} maxLength={300} placeholder="留空则直接访问 GitHub，例如 https://ghfast.top/https://raw.githubusercontent.com/" /></label>}
         <div className="form-field"><div className="form-label"><label htmlFor="optimize-interval">执行间隔（分钟）</label><InfoTip label="执行间隔说明" text="cron 每次只执行一个到期任务，两次执行至少间隔设定分钟数。写入操作单次最多 5 个，超出部分会在下一次继续。" /></div>
           <input id="optimize-interval" type="number" inputMode="numeric" min={10} max={1440} value={minMinutes} onChange={(event) => setMinMinutes(event.target.value)} required />
         </div>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button><button className="button button-secondary" type="button" disabled={busy || (api !== '2' && !keyConfigured && !key.trim())} onClick={() => void queryCredit()}>查询积分</button></div>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button><button className="button button-secondary" type="button" disabled={busy} onClick={() => void queryCredit()}>查询积分</button></div>
       </form>}
   </>;
 }
@@ -103,6 +103,7 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
   const [tasks, setTasks] = useState<OptimizeTask[]>([]);
   const [zones, setZones] = useState<DnsZone[]>([]);
   const [lines, setLines] = useState<DnsLine[]>([]);
+  const [autoLine, setAutoLine] = useState(false);
   const [domainId, setDomainId] = useState('');
   const [rr, setRr] = useState('');
   const [recordType, setRecordType] = useState<'A' | 'AAAA'>('A');
@@ -147,10 +148,11 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
   useEffect(() => {
     if (!domainId) return;
     const controller = new AbortController();
-    request<{ code: 0; lines: DnsLine[] }>(`/api/v1/optimize/lines?domainId=${domainId}`, { signal: controller.signal })
+    request<{ code: 0; lines: DnsLine[]; autoLine?: boolean }>(`/api/v1/optimize/lines?domainId=${domainId}`, { signal: controller.signal })
       .then((result) => {
         if (controller.signal.aborted) return;
         setLines(result.lines);
+        setAutoLine(result.autoLine === true);
         if (result.lines[0] && !result.lines.some((entry) => entry.id === line)) setLine(result.lines[0].id);
       })
       .catch((failure) => { if (!controller.signal.aborted) handle(failure); });
@@ -221,7 +223,7 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
           <tbody>{tasks.map((task) => <tr key={task.id}>
             <td><strong className="mono">{task.rr}.{task.domainName}</strong><span className="value-detail">{task.remark ?? `任务 #${task.id}`}</span></td>
             <td>{task.recordType}<span className="value-detail">TTL {task.ttl}</span></td>
-            <td>{task.ipGroup} · {cdnNames[task.cdnType] ?? task.cdnType}<span className="value-detail">DNS 线路 {task.line}</span></td>
+            <td>{task.ipGroup} · {cdnNames[task.cdnType] ?? task.cdnType}<span className="value-detail">DNS 线路 {task.line === 'auto' ? '自动（全部）' : task.line}</span></td>
             <td>{task.recordCount}</td>
             <td><span>{task.lastStatus ?? '未运行'}</span><span className="value-detail">{date(task.lastRunAt)}</span>{task.lastError && <span className="value-detail certificate-order-error">{task.lastError}</span>}</td>
             <td className="certificate-order-actions">
@@ -241,15 +243,20 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
         <label className="form-field"><span>记录类型</span><select value={recordType} onChange={(event) => setRecordType(event.target.value as 'A' | 'AAAA')}>
           <option value="A">A（IPv4）</option><option value="AAAA">AAAA（IPv6）</option>
         </select></label>
-        <label className="form-field"><span>线路分组</span><select value={ipGroup} onChange={(event) => setIpGroup(event.target.value as 'DEF' | 'CT' | 'CU' | 'CM')}>
+        {line !== 'auto' && <label className="form-field"><span>线路分组</span><select value={ipGroup} onChange={(event) => setIpGroup(event.target.value as 'DEF' | 'CT' | 'CU' | 'CM')}>
           <option value="DEF">默认</option><option value="CT">电信 CT</option><option value="CU">联通 CU</option><option value="CM">移动 CM</option>
-        </select></label>
+        </select></label>}
         <label className="form-field"><span>数据源线路</span><select value={cdnType} onChange={(event) => setCdnType(event.target.value)}>
           {(Object.keys(cdnNames) as string[]).map((value) => <option key={value} value={value}>{cdnNames[Number(value)]}</option>)}
         </select></label>
         <label className="form-field"><span>DNS 线路</span><select value={line} onChange={(event) => setLine(event.target.value)}>
+          {autoLine && <option value="auto">自动（按分组写全部线路）</option>}
           {lines.length === 0 ? <option value="0">默认</option> : lines.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select></label>
+        {line === 'auto' && <div className="form-field" style={{ gridColumn: '1 / -1' }}>
+          <span>自动线路说明</span>
+          <p className="panel-footnote">默认/电信/联通/移动四个分组的数据会分别写入服务商对应线路，接口没有返回数据的分组会跳过；默认分组为空时使用电信数据。</p>
+        </div>}
         <label className="form-field"><span>记录数量</span><input type="number" inputMode="numeric" min={1} max={50} value={recordCount} onChange={(event) => setRecordCount(event.target.value)} required /></label>
         <label className="form-field"><span>TTL（秒）</span><input type="number" inputMode="numeric" min={1} max={86400} value={ttl} onChange={(event) => setTtl(event.target.value)} required /></label>
         <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !rr.trim() || !domainId}>{busy ? '正在保存…' : '创建优选任务'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button></div>

@@ -28,6 +28,28 @@ function cloudflareFetch() {
       dohQueries.push(url);
       return json(dohPayload);
     }
+    if (url.hostname === 'alidns.aliyuncs.com') {
+      const action = url.searchParams.get('Action');
+      if (action === 'DescribeDomainRecordInfo') {
+        return json({
+          RecordId: 'r1', RR: 'www', Type: 'A', Value: '192.0.2.8', Line: 'default',
+          TTL: 600, Status: 'ENABLE', Remark: 'primary',
+        });
+      }
+      if (action === 'DescribeDomainRecords') {
+        return json({ TotalCount: 1, DomainRecords: { Record: [{
+          RecordId: 'r1', RR: 'www', Type: 'A', Value: '192.0.2.8', Line: 'default',
+          TTL: 600, Status: 'ENABLE', Remark: 'primary',
+        }] } });
+      }
+      if (action === 'DescribeDomainInfo') {
+        return json({ RecordLines: { RecordLine: [
+          { LineCode: 'default', LineDisplayName: '默认' },
+          { LineCode: 'telecom', LineDisplayName: '电信' },
+        ] } });
+      }
+      return json({});
+    }
     if (url.hostname === 'data.iana.org') {
       return json({ services: [[['com'], ['https://rdap.verisign.com/com/v1/']]] });
     }
@@ -56,6 +78,9 @@ function cloudflareFetch() {
       return json({ ResponseMetadata: requestId, Result: {} });
     }
     if (url.hostname === 'api.routewize.com') {
+      if (url.pathname === '/v1/zone/view/') {
+        return json({ code: 0, zone_views: [{ id: 0, name: '*' }] });
+      }
       if (url.pathname === '/v1/dns/host_info/') {
         return json({ code: 0, records: [{
           domain_name: 'www.example.com.', zone_name: 'example.com.', domain_record_id: 11,
@@ -409,7 +434,7 @@ describe('DNS account, domain and record API', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ total: 9, rows: [{
       RecordId: 'record-1', Domain: 'example.com', Name: 'www', Type: 'A', Value: '192.0.2.8',
-      Line: '0', LineName: '0', TTL: 300, MX: null, Weight: null, Remark: 'primary', Status: 1,
+      Line: '0', LineName: '仅 DNS', TTL: 300, MX: null, Weight: null, Remark: 'primary', Status: 1,
       UpdateTime: '2026-01-02T03:04:05Z',
     }] });
     const providerRequest = new URL(String((budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]));
@@ -478,11 +503,58 @@ describe('DNS account, domain and record API', () => {
     expect(hostDetails.status).toBe(200);
     expect(await hostDetails.json()).toMatchObject({ total: 1, rows: [{
       RecordId: '11_22', Domain: 'example.com', Name: 'www', Type: 'A', Value: '192.0.2.9',
-      Line: '0', LineName: '0', TTL: 600, Remark: null, Status: 1,
+      Line: '0', LineName: '默认', TTL: 600, Remark: null, Status: 1,
     }] });
-    expect(new URL(String((budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0])).searchParams.get('domain_name'))
+    const detailCalls = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.slice(fetchCount + 5);
+    expect(detailCalls.map((call) => new URL(String(call[0])).pathname))
+      .toEqual(['/v1/dns/host_info/', '/v1/zone/view/']);
+    expect(new URL(String(detailCalls[0]![0])).searchParams.get('domain_name'))
       .toBe('www.example.com.');
-    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 6);
+    expect((budget.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(fetchCount + 7);
+  });
+
+  it('passes legacy group and sort filters to Aliyun and reads record details', async () => {
+    const { cookie, csrf } = await session();
+    const [domain] = await seedDomain(cookie, csrf);
+    const owner = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domain!.id]);
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['aliyun', owner[0]!.account_id]);
+
+    const apiKey = 'aliyun-group-api-key';
+    await testDb.db.execute('UPDATE users SET is_api=1,apikey_cipher=? WHERE id=1', [await encrypt(apiKey, appKey, 'api-key')]);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const form = new URLSearchParams({
+      uid: '1', timestamp, sign: md5(`1${timestamp}${apiKey}`),
+      offset: '0', limit: '10', groupid: '1234', sortName: 'Name', sortOrder: 'desc',
+    });
+    const callsBefore = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    const legacy = await request(`/api/record/data/${domain!.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    });
+    expect(legacy.status).toBe(200);
+    expect(await legacy.json()).toMatchObject({ total: 1, rows: [{ Line: 'default', LineName: '默认' }] });
+    const legacyCalls = (budget.fetch as ReturnType<typeof vi.fn>).mock.calls.slice(callsBefore)
+      .map((call) => new URL(String(call[0])));
+    expect(legacyCalls.map((call) => call.searchParams.get('Action')))
+      .toEqual(['DescribeDomainRecords', 'DescribeDomainInfo']);
+    expect(legacyCalls[0]!.searchParams.get('GroupId')).toBe('1234');
+    expect(legacyCalls[0]!.searchParams.get('OrderBy')).toBe('RR');
+    expect(legacyCalls[0]!.searchParams.get('Direction')).toBe('DESC');
+
+    const detail = await request(`/api/v1/dns/domains/${domain!.id}/records/r1`, { headers: { cookie } });
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({
+      code: 0, record: { id: 'r1', name: 'www', type: 'A', value: '192.0.2.8', line: 'default', status: 1 },
+    });
+    expect(new URL(String((budget.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0])).searchParams.get('Action'))
+      .toBe('DescribeDomainRecordInfo');
+
+    expect((await request(`/api/v1/dns/domains/${domain!.id}/records?group=abc`, { headers: { cookie } })).status).toBe(400);
+    expect((await request(`/api/v1/dns/domains/${domain!.id}/records/bad%20id`, { headers: { cookie } })).status).toBe(400);
+
+    await testDb.db.execute('UPDATE dns_accounts SET type=? WHERE id=?', ['cloudflare', owner[0]!.account_id]);
+    const unsupported = await request(`/api/v1/dns/domains/${domain!.id}/records/r1`, { headers: { cookie } });
+    expect(unsupported.status).toBe(501);
+    expect(await unsupported.json()).toMatchObject({ reason: 'RECORD_INFO_UNSUPPORTED' });
   });
 
   it('updates signed record remarks for authorized providers', async () => {

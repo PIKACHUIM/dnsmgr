@@ -90,6 +90,17 @@ export interface RecordQuery {
   type?: string;
   line?: string;
   status?: '0' | '1';
+  /** 厂商侧记录分组编号（旧版记录列表的 groupid 过滤） */
+  group?: string;
+  /** 厂商侧排序；仅 `ProviderMeta.sortFields` 声明的字段可用 */
+  sort?: RecordSort;
+}
+
+export type RecordSortField = 'Name' | 'Type' | 'LineName' | 'Value' | 'UpdateTime';
+
+export interface RecordSort {
+  field: RecordSortField;
+  order: 'asc' | 'desc';
 }
 
 /** 平台驱动只需实现真实存在的能力；不支持的操作必须抛错，不能静默成功。 */
@@ -100,6 +111,8 @@ export interface DnsProvider {
   listDomains(page: { page: number; pageSize: number; keyword?: string }): Promise<PageResult<DnsDomain>>;
   addDomain(name: string): Promise<DnsDomain>;
   listRecords(domain: DnsDomain, query: RecordQuery): Promise<PageResult<DnsRecord>>;
+  /** 可选：按记录编号读取单条记录详情；未实现表示平台只能从列表反查 */
+  recordInfo?(domain: DnsDomain, recordId: string): Promise<DnsRecord>;
   /** 可选：按主机名分组的摘要列表；用于一次请求无法逐组读取明细的服务商 */
   listRecordHosts?(domain: DnsDomain, query: RecordQuery): Promise<PageResult<DnsRecordHost>>;
   addRecord(domain: DnsDomain, input: DnsRecordInput): Promise<string>;

@@ -13,6 +13,10 @@ export interface DnspodConfig {
 const HOST = 'dnspod.tencentcloudapi.com';
 const SERVICE = 'dnspod';
 const VERSION = '2021-03-23';
+/** 旧版列表的排序字段与 DNSPod `SortField` 的对应关系。 */
+const SORT_COLUMNS: Record<string, string> = {
+  Name: 'name', Type: 'type', LineName: 'line', Value: 'value', UpdateTime: 'updated_on',
+};
 
 export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fetch = fetch): DnsProvider {
   let grade: string | null = null;
@@ -134,18 +138,35 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
     },
 
     async listRecords(domain, query: RecordQuery): Promise<PageResult<DnsRecord>> {
+      const group = query.group && query.group !== '0' ? Number(query.group) : 0;
+      // 状态、记录值与分组过滤只在新版过滤接口可用（旧版 `DescribeRecordList` 会忽略这些条件）。
+      const filtered = Boolean(group > 0 || query.status || query.value);
       const params: Record<string, unknown> = {
         Domain: domainName(domain),
         Offset: (query.page - 1) * query.pageSize,
         Limit: query.pageSize,
       };
-      if (query.name) params.Subdomain = query.name;
-      if (query.type) params.RecordType = apiType(query.type);
-      if (query.value) params.Keyword = query.value;
       if (query.keyword) params.Keyword = query.keyword;
-      if (query.line) params.RecordLineId = query.line;
-      if (query.status) params.RecordStatus = [query.status === '1' ? 'ENABLE' : 'DISABLE'];
-      const data = await request('DescribeRecordList', params);
+      if (filtered) {
+        if (query.name) params.SubDomain = query.name;
+        if (query.type) params.RecordType = [apiType(query.type)];
+        if (query.line) params.RecordLine = [query.line];
+        if (query.value) params.RecordValue = query.value;
+        if (query.status) params.RecordStatus = [query.status === '1' ? 'ENABLE' : 'DISABLE'];
+        if (Number.isSafeInteger(group) && group > 0) params.GroupId = [group];
+      } else {
+        if (query.name) params.Subdomain = query.name;
+        if (query.type) params.RecordType = apiType(query.type);
+        if (query.line) params.RecordLineId = query.line;
+      }
+      if (query.sort) {
+        const sortField = SORT_COLUMNS[query.sort.field];
+        if (sortField) {
+          params.SortField = sortField;
+          params.SortType = query.sort.order === 'desc' ? 'DESC' : 'ASC';
+        }
+      }
+      const data = await request(filtered ? 'DescribeRecordFilterList' : 'DescribeRecordList', params);
       const items = asArray(data.RecordList).map(toRecord);
       const info = data.RecordCountInfo ? asRecord(data.RecordCountInfo) : {};
       return { total: num(info.TotalCount, items.length), items };

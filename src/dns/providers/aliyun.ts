@@ -12,6 +12,10 @@ export interface AliyunConfig {
 
 const ENDPOINT = 'https://alidns.aliyuncs.com/';
 const VERSION = '2015-01-09';
+/** 旧版列表的排序字段与阿里云 `OrderBy` 的对应关系。 */
+const SORT_COLUMNS: Record<string, string> = {
+  Name: 'RR', Type: 'Type', LineName: 'Line', Value: 'Value', UpdateTime: 'UpdateDate',
+};
 
 export function createAliyunProvider(config: AliyunConfig, fetchImpl: typeof fetch = fetch): DnsProvider {
   async function request(action: string, params: Record<string, string | number | undefined> = {}): Promise<Record<string, unknown>> {
@@ -96,11 +100,24 @@ export function createAliyunProvider(config: AliyunConfig, fetchImpl: typeof fet
       if (query.value) params.ValueKeyWord = query.value;
       if (query.line) params.Line = query.line;
       if (query.keyword) params.KeyWord = query.keyword;
+      if (query.group) params.GroupId = query.group;
       if (query.status) params.Status = query.status === '1' ? 'Enable' : 'Disable';
       if (query.name || query.value || query.type || query.line) params.SearchMode = 'ADVANCED';
+      if (query.sort) {
+        const orderBy = SORT_COLUMNS[query.sort.field];
+        if (orderBy) {
+          params.OrderBy = orderBy;
+          params.Direction = query.sort.order === 'desc' ? 'DESC' : 'ASC';
+        }
+      }
       const data = await request('DescribeDomainRecords', params);
       const items = asArray(asRecord(data.DomainRecords ?? {}).Record).map((raw) => toRecord(raw, domain));
       return { total: num(data.TotalCount, items.length), items };
+    },
+
+    async recordInfo(domain, recordId) {
+      const data = await request('DescribeDomainRecordInfo', { RecordId: recordId });
+      return toRecord(data, domain);
     },
 
     async addRecord(domain, input: DnsRecordInput) {

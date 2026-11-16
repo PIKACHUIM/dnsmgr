@@ -13,6 +13,10 @@ export interface TencentEoConfig {
 }
 
 const VERSION = '2022-09-01';
+/** 旧版列表的排序字段与 EdgeOne `SortBy` 的对应关系。 */
+const SORT_COLUMNS: Record<string, string> = {
+  Name: 'name', Type: 'type', Value: 'content', UpdateTime: 'modified-on',
+};
 
 export function createTencentEoProvider(config: TencentEoConfig, fetchImpl: typeof fetch = fetch): DnsProvider {
   const host = config.site_type === 'intl' ? 'teo.intl.tencentcloudapi.com' : 'teo.tencentcloudapi.com';
@@ -125,6 +129,9 @@ export function createTencentEoProvider(config: TencentEoConfig, fetchImpl: type
         Offset: (query.page - 1) * query.pageSize,
         Limit: query.pageSize,
         Filters: filters,
+        ...(query.sort && SORT_COLUMNS[query.sort.field]
+          ? { SortBy: SORT_COLUMNS[query.sort.field], SortOrder: query.sort.order }
+          : {}),
       });
       let items = asArray(data.DnsRecords).map((raw) => toRecord(raw, domain));
       if (query.status) items = items.filter((record) => String(record.status) === query.status);

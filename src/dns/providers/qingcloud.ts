@@ -4,7 +4,6 @@ import {
   DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord,
   type DnsRecordHost, type DnsRecordInput, type PageResult, type RecordQuery,
 } from '../types';
-import { unsupported } from '../unsupported';
 
 export interface QingcloudConfig {
   access_key_id: string;
@@ -170,6 +169,7 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
         return {
           id: full,
           name: relativeName(full, domain.name),
+          // 与明细列表统一：1 表示启用。旧版主机组行把 enabled 映射成 '0'（与同文件明细列表相反），此处不沿用。
           status: (String(host.status ?? 'enabled') === 'disabled' ? 0 : 1) as 0 | 1,
           count,
           remark: typeof host.description === 'string' && host.description ? host.description : null,
@@ -233,9 +233,16 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
       });
     },
 
-    async deleteRecord(_domain, recordId) {
+    async deleteRecord(domain, recordId) {
       const [domainRecordId, valueId] = recordId.split('_');
-      if (!domainRecordId || !valueId) throw new DnsError('recordId 格式无效', 400, 'INVALID_RECORD_ID');
+      if (!domainRecordId || !valueId) {
+        // 旧版视图在主机组行上用完整主机名作为记录编号，删除该主机下的全部记录。
+        const zone = domain.name.replace(/\.$/, '');
+        const raw = recordId.trim().replace(/\.$/, '');
+        if (raw !== zone && !raw.endsWith(`.${zone}`)) throw new DnsError('记录编号格式无效', 400, 'INVALID_RECORD_ID');
+        await execute('DELETE', '/v1/domain/', { domain_names: JSON.stringify([hostName(recordId, domain.name)]), zone_name: domain.id });
+        return;
+      }
       const current = asRecord(await execute('GET', `/v1/dr_id/${encodeURIComponent(domainRecordId)}`));
       const detail = asRecord(current.data ?? {});
       const record: { weight: number; values: { value: string; status: number }[] }[] = [];
@@ -272,8 +279,18 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
       });
     },
 
-    async setRecordRemark() {
-      unsupported('设置解析记录备注');
+    async setRecordRemark(domain, recordId, remark) {
+      // 青云的备注挂在主机名上：主机组行直接使用完整主机名，明细记录先查出所属主机。
+      const zone = domain.name.replace(/\.$/, '');
+      let host = recordId.trim().replace(/\.$/, '');
+      if (host !== zone && !host.endsWith(`.${zone}`)) {
+        const [domainRecordId] = recordId.split('_');
+        if (!domainRecordId) throw new DnsError('recordId 格式无效', 400, 'INVALID_RECORD_ID');
+        const detail = asRecord(asRecord(await execute('GET', `/v1/dr_id/${encodeURIComponent(domainRecordId)}`)).data ?? {});
+        host = String(detail.domain_name ?? '').replace(/\.$/, '');
+      }
+      if (!host) throw new DnsError('无法确定记录所属主机', 409, 'DNS_RECORD_NOT_FOUND');
+      await execute('POST', '/v1/dns/host/', { zone_name: domain.id, domain_name: `${host}.`, description: remark ?? '' });
     },
 
     async recordLines(domain): Promise<DnsLine[] | null> {

@@ -5,7 +5,8 @@ import { AppError } from './core/errors';
 import { decrypt } from './security/crypto';
 import { nowSeconds } from './security/auth';
 import { createProvider } from './dns/registry';
-import type { DnsDomain } from './dns/types';
+import { lineCodeFor, supportsAutoLines, type LineGroup } from './dns/lines';
+import type { DnsDomain, DnsProvider } from './dns/types';
 
 export const OPTIMIZE_API = 'optimize_ip_api';
 export const OPTIMIZE_KEY = 'optimize_ip_key';
@@ -13,7 +14,12 @@ export const OPTIMIZE_MIN = 'optimize_ip_min';
 export const OPTIMIZE_PROXY = 'optimize_ip_proxy';
 export const OPTIMIZE_LAST = 'optimize_ip_time';
 
-export type IpGroup = 'DEF' | 'CT' | 'CU' | 'CM';
+/** 旧版 wetest.vip 的公开免费密钥，未填写密钥时沿用。 */
+export const DEFAULT_OPTIMIZE_KEY = 'o1zrmHAF';
+/** 线路填 `auto` 表示按数据源分组写入服务商的全部线路。 */
+export const AUTO_LINE = 'auto';
+
+export type IpGroup = LineGroup;
 export type IpVersion = 'v4' | 'v6';
 
 export interface OptimizeSettings {
@@ -59,7 +65,7 @@ export function normalizeOptimizeSettings(values: Map<string, string>): Optimize
   const api = values.get(OPTIMIZE_API);
   const rawMin = Number(values.get(OPTIMIZE_MIN) ?? 30);
   return {
-    api: api === '0' || api === '1' ? api : '2',
+    api: api === '1' || api === '2' ? api : '0',
     key: values.get(OPTIMIZE_KEY) ?? '',
     minMinutes: Number.isInteger(rawMin) && rawMin >= 10 && rawMin <= 1440 ? rawMin : 30,
     proxy: values.get(OPTIMIZE_PROXY) ?? '',
@@ -136,13 +142,11 @@ export async function fetchOptimizedIps(
   const url = settings.api === '1'
     ? 'https://api.hostmonit.com/get_optimization_ip'
     : `https://www.wetest.vip/api/cf2dns/${CDN_SLUG[cdnType] ?? CDN_SLUG[1]}`;
-  if (settings.api === '0' && !settings.key) {
-    throw new AppError(400, '请先在优选设置中填写接口密钥', 'OPTIMIZE_KEY_REQUIRED');
-  }
+  const key = settings.key || DEFAULT_OPTIMIZE_KEY;
   const response = await fetcher(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json; charset=UTF-8' },
-    body: JSON.stringify({ key: settings.key, type: version }),
+    body: JSON.stringify({ key, type: version }),
     signal: AbortSignal.timeout(20_000),
     redirect: 'error',
   });
@@ -170,10 +174,10 @@ export async function fetchOptimizeCredit(
   if (api === '2') {
     throw new AppError(400, 'xingpingcn.top 接口免费使用，无需密钥，也没有积分限制', 'OPTIMIZE_CREDIT_NOT_APPLICABLE');
   }
-  if (!key) throw new AppError(400, '请先填写接口密钥', 'OPTIMIZE_KEY_REQUIRED');
+  const license = key || DEFAULT_OPTIMIZE_KEY;
   const url = api === '1'
-    ? `https://api.hostmonit.com/get_license?license=${encodeURIComponent(key)}`
-    : `https://www.wetest.vip/api/cf2dns/get_license?license=${encodeURIComponent(key)}`;
+    ? `https://api.hostmonit.com/get_license?license=${encodeURIComponent(license)}`
+    : `https://www.wetest.vip/api/cf2dns/get_license?license=${encodeURIComponent(license)}`;
   const response = await fetcher(url, { method: 'GET', signal: AbortSignal.timeout(15_000), redirect: 'error' });
   if (!response.ok) throw new AppError(502, `积分查询接口返回 HTTP ${response.status}`, 'OPTIMIZE_CREDIT_FAILED');
   const payload = await readJson(response) as { code?: unknown; count?: unknown; info?: unknown };
@@ -216,20 +220,63 @@ export async function executeOptimizeTask(c: Context<AppEnv>, task: OptimizeTask
   const settings = await readOptimizeSettings(c.get('db'));
   const version: IpVersion = task.record_type === 'AAAA' ? 'v6' : 'v4';
   const groups = await fetchOptimizedIps(c.env.BUDGET.fetch, settings, task.cdn_type, version);
-  const source = groups[task.ip_group].length > 0 ? groups[task.ip_group] : groups.CT;
   // 华为云一条记录可承载多个 IP，旧版把本线路的 IP 合并成单条记录。
   const merged = task.account_type === 'huawei';
-  const desired = (merged
-    ? [[...source.slice(0, task.record_count)].sort().join(',')]
-    : source.slice(0, task.record_count)).filter(Boolean);
-  if (desired.length === 0) throw new AppError(502, 'IP 优选接口未返回可用地址', 'OPTIMIZE_SOURCE_EMPTY');
+  const result: OptimizeRunResult = { added: 0, updated: 0, removed: 0, unchanged: 0, partial: false, desired: 0 };
+  const writes: (() => Promise<void>)[] = [];
 
+  const desiredFor = (group: IpGroup): string[] => {
+    const source = groups[group].length > 0 ? groups[group] : group === 'DEF' ? groups.CT : [];
+    if (merged) {
+      const mergedValue = [...source.slice(0, task.record_count)].sort().join(',');
+      return mergedValue ? [mergedValue] : [];
+    }
+    return source.slice(0, task.record_count);
+  };
+
+  const targets = taskTargets(task);
+  let matched = false;
+  for (const target of targets) {
+    const desired = desiredFor(target.group);
+    if (desired.length === 0) continue;
+    matched = true;
+    result.desired += desired.length;
+    await planLine(provider, zone, task, target.line, desired, merged, result, writes);
+  }
+  if (!matched) throw new AppError(502, 'IP 优选接口未返回可用地址', 'OPTIMIZE_SOURCE_EMPTY');
+
+  const reserved = 2 + targets.length;
+  const budget = Math.max(1, (c.env.RUNTIME?.maxFetches ?? 50) - reserved);
+  for (const write of writes.slice(0, budget)) await write();
+  result.partial = writes.length > budget;
+  return result;
+}
+
+interface LineTarget { group: IpGroup; line: string }
+
+/** 单个任务写入的线路：显式线路只写一条，`auto` 按分组写入服务商的全部线路。 */
+export function taskTargets(task: OptimizeTaskRow): LineTarget[] {
+  if (task.line !== AUTO_LINE) return [{ group: task.ip_group, line: task.line }];
+  if (!supportsAutoLines(task.account_type)) {
+    throw new AppError(400, '当前服务商不支持自动线路，请为任务指定 DNS 线路', 'OPTIMIZE_AUTO_LINE_UNSUPPORTED');
+  }
+  const targets: LineTarget[] = [];
+  for (const group of ['DEF', 'CT', 'CU', 'CM'] as IpGroup[]) {
+    const line = lineCodeFor(task.account_type, group);
+    if (line !== null) targets.push({ group, line });
+  }
+  return targets;
+}
+
+async function planLine(
+  provider: DnsProvider, zone: DnsDomain, task: OptimizeTaskRow, line: string, desired: string[],
+  merged: boolean, result: OptimizeRunResult, writes: (() => Promise<void>)[],
+): Promise<void> {
   const listed = await provider.listRecords(zone, { page: 1, pageSize: 100, name: task.rr });
-  const onLine = listed.items.filter((record) => record.line === task.line);
+  const sameLine = (value: string) => (value === '' ? 'default' : value) === line;
+  const onLine = listed.items.filter((record) => sameLine(record.line));
   const cnames = onLine.filter((record) => record.type === 'CNAME');
   const existing = onLine.filter((record) => record.type === task.record_type).slice(0, 100);
-  const result: OptimizeRunResult = { added: 0, updated: 0, removed: 0, unchanged: 0, partial: false, desired: desired.length };
-  const writes: (() => Promise<void>)[] = [];
   // 同一线路存在 CNAME 时无法再写入 A/AAAA，旧版会先删除这些 CNAME 记录。
   for (const record of cnames) {
     writes.push(async () => { await provider.deleteRecord(zone, record.id); });
@@ -243,7 +290,7 @@ export async function executeOptimizeTask(c: Context<AppEnv>, task: OptimizeTask
     if (!record) {
       writes.push(async () => {
         await provider.addRecord(zone, {
-          name: task.rr, type: task.record_type, value: ip, line: task.line, ttl: task.ttl,
+          name: task.rr, type: task.record_type, value: ip, line, ttl: task.ttl,
           mx: null, weight: null, remark: null,
         });
         result.added += 1;
@@ -256,7 +303,7 @@ export async function executeOptimizeTask(c: Context<AppEnv>, task: OptimizeTask
     }
     writes.push(async () => {
       await provider.updateRecord(zone, record.id, {
-        name: task.rr, type: task.record_type, value: ip, line: task.line, ttl: task.ttl,
+        name: task.rr, type: task.record_type, value: ip, line, ttl: task.ttl,
         mx: record.mx, weight: record.weight, remark: record.remark,
       });
       result.updated += 1;
@@ -268,10 +315,6 @@ export async function executeOptimizeTask(c: Context<AppEnv>, task: OptimizeTask
       result.removed += 1;
     });
   }
-  const budget = 5;
-  for (const write of writes.slice(0, budget)) await write();
-  result.partial = writes.length > budget;
-  return result;
 }
 
 function taskClaimStatement(task: OptimizeTaskRow) {

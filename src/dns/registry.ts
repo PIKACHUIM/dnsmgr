@@ -34,13 +34,20 @@ export interface ProviderMeta {
   name: string;
   supported: boolean;
   fields: ProviderField[];
-  capabilities: { status: boolean; remark: boolean; weight: boolean; lines: boolean; addDomain: boolean };
+  capabilities: { status: boolean; remark: boolean; weight: boolean; lines: boolean; addDomain: boolean; redirect?: boolean };
   /** 仅在部分服务商可用的记录类型，例如阿里云的 ALIAS、PowerDNS 的 LOC/LUA。 */
   recordTypes?: string[];
+  /** 厂商侧支持的排序字段；声明后旧版记录列表不再整表拉取后本地排序。 */
+  sortFields?: string[];
 }
 
+/** 仅支持域名转发（显性/隐性 URL）的服务商可用。 */
+const REDIRECT_RECORD_TYPES = ['URL', 'REDIRECT_URL', 'FORWARD_URL'];
+
 /** 多数服务商通用的记录类型；ALIAS/LOC/LUA/APP 需要服务商单独声明。 */
-const BASE_RECORD_TYPES = RECORD_TYPES.filter((type) => !['ALIAS', 'LOC', 'LUA', 'APP'].includes(type));
+const BASE_RECORD_TYPES = RECORD_TYPES.filter((type) => !['ALIAS', 'LOC', 'LUA', 'APP', ...REDIRECT_RECORD_TYPES].includes(type));
+
+const ALL_SORT_FIELDS = ['Name', 'Type', 'LineName', 'Value', 'UpdateTime'];
 
 const akSk = (idLabel: string, secretLabel: string): ProviderField[] => [
   { key: 'AccessKeyId', label: idLabel, required: true },
@@ -54,7 +61,8 @@ const catalog: ProviderMeta[] = [
       { key: 'apikey', label: 'API Token / Global API Key', required: true, secret: true },
       { key: 'email', label: '账号邮箱（仅 Global API Key 需要）', required: false },
     ],
-    capabilities: { status: true, remark: true, weight: false, lines: true, addDomain: true },
+    capabilities: { status: true, remark: true, weight: false, lines: true, addDomain: true, redirect: true },
+    sortFields: ALL_SORT_FIELDS,
   },
   {
     type: 'aliyun', name: '阿里云', supported: true,
@@ -62,8 +70,9 @@ const catalog: ProviderMeta[] = [
       { key: 'AccessKeyId', label: 'AccessKeyId', required: true },
       { key: 'AccessKeySecret', label: 'AccessKeySecret', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: true, weight: true, lines: true, addDomain: true },
+    capabilities: { status: true, remark: true, weight: true, lines: true, addDomain: true, redirect: true },
     recordTypes: ['ALIAS'],
+    sortFields: ALL_SORT_FIELDS,
   },
   {
     type: 'dnspod', name: '腾讯云 DNSPod', supported: true,
@@ -71,7 +80,8 @@ const catalog: ProviderMeta[] = [
       { key: 'SecretId', label: 'SecretId', required: true },
       { key: 'SecretKey', label: 'SecretKey', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: true, weight: true, lines: true, addDomain: true },
+    capabilities: { status: true, remark: true, weight: true, lines: true, addDomain: true, redirect: true },
+    sortFields: ALL_SORT_FIELDS,
   },
   {
     type: 'tencenteo', name: '腾讯云 EdgeOne', supported: true,
@@ -81,6 +91,7 @@ const catalog: ProviderMeta[] = [
       { key: 'site_type', label: '站点类型（intl 表示国际站）', required: false },
     ],
     capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: false },
+    sortFields: ['Name', 'Type', 'Value', 'UpdateTime'],
   },
   {
     type: 'aliyunesa', name: '阿里云 ESA', supported: true,
@@ -105,6 +116,7 @@ const catalog: ProviderMeta[] = [
     type: 'huawei', name: '华为云 DNS', supported: true,
     fields: akSk('AccessKeyId', 'SecretAccessKey'),
     capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true },
+    sortFields: ['Name', 'Type', 'UpdateTime'],
   },
   {
     type: 'huoshan', name: '火山引擎 DNS', supported: true,
@@ -117,7 +129,7 @@ const catalog: ProviderMeta[] = [
       { key: 'AccessKeyId', label: 'AccessKeyId', required: true },
       { key: 'AccessKeySecret', label: 'AccessKeySecret', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true },
+    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true, redirect: true },
   },
   {
     type: 'qingcloud', name: '青云 DNS', supported: true,
@@ -125,12 +137,12 @@ const catalog: ProviderMeta[] = [
       { key: 'access_key_id', label: 'access_key_id', required: true },
       { key: 'secret_access_key', label: 'secret_access_key', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true },
+    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: false },
   },
   {
     type: 'namesilo', name: 'NameSilo', supported: true,
     fields: [{ key: 'apikey', label: 'API Key', required: true, secret: true }],
-    capabilities: { status: false, remark: false, weight: false, lines: true, addDomain: true },
+    capabilities: { status: false, remark: false, weight: false, lines: true, addDomain: false },
   },
   {
     type: 'spaceship', name: 'Spaceship', supported: true,
@@ -138,7 +150,7 @@ const catalog: ProviderMeta[] = [
       { key: 'apikey', label: 'API Key', required: true },
       { key: 'apisecret', label: 'API Secret', required: true, secret: true },
     ],
-    capabilities: { status: false, remark: false, weight: false, lines: true, addDomain: false },
+    capabilities: { status: false, remark: false, weight: false, lines: true, addDomain: false, redirect: true },
     recordTypes: ['ALIAS'],
   },
   {
@@ -147,7 +159,7 @@ const catalog: ProviderMeta[] = [
       { key: 'username', label: '用户名', required: true },
       { key: 'api_password', label: 'API 密码', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: false, weight: false, lines: true, addDomain: true },
+    capabilities: { status: true, remark: false, weight: false, lines: true, addDomain: false },
   },
   {
     type: 'bt', name: '宝塔 DNS', supported: true,
@@ -164,7 +176,7 @@ const catalog: ProviderMeta[] = [
       { key: 'apiid', label: 'API ID', required: true },
       { key: 'apisecret', label: 'API Secret', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true },
+    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true, redirect: true },
   },
   {
     type: 'dnsmgr', name: 'DNSMGR', supported: true,
@@ -237,9 +249,14 @@ export function providerMeta(type: string): ProviderMeta {
   return meta;
 }
 
-/** 某个服务商可用的记录类型：通用类型加上服务商单独声明的类型。 */
+/** 某个服务商可用的记录类型：通用类型、服务商单独声明的类型与转发类型。 */
 export function recordTypesFor(type: string): string[] {
-  return [...BASE_RECORD_TYPES, ...(providerMeta(type).recordTypes ?? [])];
+  const meta = providerMeta(type);
+  return [
+    ...BASE_RECORD_TYPES,
+    ...(meta.recordTypes ?? []),
+    ...(meta.capabilities.redirect ? REDIRECT_RECORD_TYPES : []),
+  ];
 }
 
 export function recordTypeSupported(type: string, recordType: string): boolean {

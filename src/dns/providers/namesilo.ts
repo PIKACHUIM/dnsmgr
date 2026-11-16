@@ -74,9 +74,9 @@ export function createNamesiloProvider(config: NamesiloConfig, fetchImpl: typeof
       return { total: num(asRecord(data.pager ?? {}).total, items.length), items };
     },
 
-    async addDomain(name) {
-      await request('addDomain', { domain: name });
-      return { id: name, name, recordCount: 0 };
+    async addDomain() {
+      // 旧版驱动同样返回失败：NameSilo 的 DNS 必须先在注册商侧建好。
+      unsupported('添加域名');
     },
 
     async listRecords(domain, query): Promise<PageResult<DnsRecord>> {

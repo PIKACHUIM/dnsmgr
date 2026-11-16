@@ -12,6 +12,10 @@ export interface HuaweiConfig {
 }
 
 const HOST = 'dns.myhuaweicloud.com';
+/** 旧版列表的排序字段与华为云 `sort_key` 的对应关系。 */
+const SORT_COLUMNS: Record<string, string> = {
+  Name: 'name', Type: 'type', UpdateTime: 'updated_at',
+};
 
 export function createHuaweiProvider(config: HuaweiConfig, fetchImpl: typeof fetch = fetch): DnsProvider {
   async function request(method: string, path: string, query: Record<string, string | number | undefined> = {}, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -135,6 +139,13 @@ export function createHuaweiProvider(config: HuaweiConfig, fetchImpl: typeof fet
       };
       if (query.name) params.search_mode = 'equal';
       if (query.status) params.status = query.status === '1' ? 'ACTIVE' : 'DISABLE';
+      if (query.sort) {
+        const sortKey = SORT_COLUMNS[query.sort.field];
+        if (sortKey) {
+          params.sort_key = sortKey;
+          params.sort_dir = query.sort.order;
+        }
+      }
       const data = await request('GET', zonePath(domain), params);
       const items = asArray(data.recordsets).map((raw) => toRecord(raw, domain))
         .filter((record) => !query.name || record.name.toLowerCase() === query.name.toLowerCase());

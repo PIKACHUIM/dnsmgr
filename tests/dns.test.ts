@@ -341,4 +341,26 @@ describe('provider registry', () => {
     expect(recordTypeSupported('dnspod', 'APP')).toBe(false);
     expect(recordTypeSupported('dnspod', 'A')).toBe(true);
   });
+
+  it('gates URL forwarding types by provider declaration', () => {
+    for (const type of ['URL', 'REDIRECT_URL', 'FORWARD_URL']) {
+      expect(recordTypeSupported('cloudflare', type)).toBe(true);
+      expect(recordTypeSupported('aliyun', type)).toBe(true);
+      expect(recordTypeSupported('spaceship', type)).toBe(true);
+      expect(recordTypeSupported('aws', type)).toBe(false);
+      expect(recordTypeSupported('powerdns', type)).toBe(false);
+    }
+  });
+
+  it('declares legacy capability flags for domain creation and server-side sorting', () => {
+    expect(providerMeta('namesilo').capabilities.addDomain).toBe(false);
+    expect(providerMeta('west').capabilities.addDomain).toBe(false);
+    expect(providerMeta('qingcloud').capabilities.addDomain).toBe(false);
+    expect(providerMeta('cloudflare').capabilities.addDomain).toBe(true);
+    expect(providerMeta('aliyun').sortFields).toEqual(['Name', 'Type', 'LineName', 'Value', 'UpdateTime']);
+    expect(providerMeta('cloudflare').sortFields).toContain('LineName');
+    expect(providerMeta('huawei').sortFields).toEqual(['Name', 'Type', 'UpdateTime']);
+    expect(providerMeta('tencenteo').sortFields).toEqual(['Name', 'Type', 'Value', 'UpdateTime']);
+    expect(providerMeta('baidu').sortFields).toBeUndefined();
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DnsError } from '../src/dns/types';
+import { createAliyunProvider } from '../src/dns/providers/aliyun';
 import { createAwsProvider } from '../src/dns/providers/aws';
 import { createBaiduProvider } from '../src/dns/providers/baidu';
 import { createBtProvider } from '../src/dns/providers/bt';
@@ -77,6 +78,44 @@ describe('AWS Route53 driver', () => {
   it('rejects unsupported status changes instead of silently succeeding', async () => {
     const provider = createAwsProvider({ AccessKeyId: 'AK', SecretAccessKey: 'SK' }, fakeFetch(() => ({ body: {} })).implementation);
     await expect(provider.setRecordStatus(zone, 'x', false)).rejects.toBeInstanceOf(DnsError);
+  });
+});
+
+describe('Aliyun drive', () => {
+  it('filters by record group and asks for server-side sorting', async () => {
+    const { calls, implementation } = fakeFetch(() => ({
+      body: {
+        TotalCount: 1,
+        DomainRecords: {
+          Record: [{ RecordId: 'r1', RR: 'www', Type: 'A', Value: '1.1.1.1', Line: 'default', TTL: 600, Status: 'ENABLE' }],
+        },
+      },
+    }));
+    const provider = createAliyunProvider({ AccessKeyId: 'ak', AccessKeySecret: 'sk' }, implementation);
+    const page = await provider.listRecords(zone, {
+      page: 2, pageSize: 50, group: '1234', sort: { field: 'UpdateTime', order: 'desc' },
+    });
+    expect(page).toEqual({ total: 1, items: [expect.objectContaining({ id: 'r1', name: 'www', line: 'default', status: 1 })] });
+    const params = new URL(calls[0]!.url).searchParams;
+    expect(params.get('Action')).toBe('DescribeDomainRecords');
+    expect(params.get('GroupId')).toBe('1234');
+    expect(params.get('OrderBy')).toBe('UpdateDate');
+    expect(params.get('Direction')).toBe('DESC');
+    expect(params.get('PageNumber')).toBe('2');
+  });
+
+  it('reads a single record by its id', async () => {
+    const { calls, implementation } = fakeFetch(() => ({
+      body: {
+        RecordId: 'r1', RR: 'mail', Type: 'MX', Value: 'mail.example.com', Line: 'default',
+        TTL: 600, Priority: 10, Status: 'ENABLE',
+      },
+    }));
+    const provider = createAliyunProvider({ AccessKeyId: 'ak', AccessKeySecret: 'sk' }, implementation);
+    await expect(provider.recordInfo!(zone, 'r1')).resolves.toMatchObject({ name: 'mail', type: 'MX', mx: 10, status: 1 });
+    const params = new URL(calls[0]!.url).searchParams;
+    expect(params.get('Action')).toBe('DescribeDomainRecordInfo');
+    expect(params.get('RecordId')).toBe('r1');
   });
 });
 
@@ -343,6 +382,23 @@ describe('QingCloud drive', () => {
     expect(records.items[0]).toMatchObject({ id: '7_8', name: 'www', value: '1.1.1.1', ttl: 600 });
     expect(new URL(calls[1]!.url).searchParams.get('domain_name')).toBe('www.example.com.');
   });
+
+  it('deletes a whole host group and updates its remark', async () => {
+    const { calls, implementation } = fakeFetch(() => ({ body: { code: 0 } }));
+    const provider = createQingcloudProvider({ access_key_id: 'id', secret_access_key: 'secret' }, implementation);
+    await provider.deleteRecord(zone, 'www.example.com.');
+    expect(calls[0]!.init.method).toBe('DELETE');
+    expect(calls[0]!.url).toContain('/v1/domain/');
+    expect(JSON.parse(calls[0]!.body)).toMatchObject({
+      domain_names: JSON.stringify(['www.example.com.']), zone_name: 'zone-1',
+    });
+    await expect(provider.deleteRecord(zone, 'other.example.net.')).rejects.toBeInstanceOf(DnsError);
+
+    calls.length = 0;
+    await provider.setRecordRemark(zone, 'www.example.com.', 'memo');
+    expect(calls[0]!.url).toContain('/v1/dns/host/');
+    expect(JSON.parse(calls[0]!.body)).toMatchObject({ domain_name: 'www.example.com.', description: 'memo' });
+  });
 });
 
 describe('BT panel drive', () => {
@@ -464,6 +520,37 @@ describe('DNSPod alias drive', () => {
     expect(JSON.parse(calls[1]!.body)).toMatchObject({ Domain: 'example.com', DomainAlias: 'alias2.example.com' });
     expect((calls[2]!.init.headers as Record<string, string>)['X-TC-Action']).toBe('DeleteDomainAlias');
     expect(JSON.parse(calls[2]!.body)).toMatchObject({ DomainAliasId: 11 });
+  });
+});
+
+describe('DNSPod record filters', () => {
+  it('switches to the filter action for group, status and server sorting', async () => {
+    const { calls, implementation } = fakeFetch(() => ({ body: { Response: { RecordList: [], RecordCountInfo: { TotalCount: 0 } } } }));
+    const provider = createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, implementation);
+    await provider.listRecords(zone, {
+      page: 1, pageSize: 20, group: '42', status: '0', sort: { field: 'LineName', order: 'desc' },
+    });
+    expect((calls[0]!.init.headers as Record<string, string>)['X-TC-Action']).toBe('DescribeRecordFilterList');
+    expect(JSON.parse(calls[0]!.body)).toMatchObject({
+      GroupId: [42], RecordStatus: ['DISABLE'], SortField: 'line', SortType: 'DESC',
+    });
+  });
+
+  it('keeps the plain list action when no filter is applied', async () => {
+    const { calls, implementation } = fakeFetch(() => ({ body: { Response: { RecordList: [], RecordCountInfo: { TotalCount: 0 } } } }));
+    const provider = createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, implementation);
+    await provider.listRecords(zone, { page: 1, pageSize: 20, name: 'www', type: 'A' });
+    expect((calls[0]!.init.headers as Record<string, string>)['X-TC-Action']).toBe('DescribeRecordList');
+    expect(JSON.parse(calls[0]!.body)).toMatchObject({ Subdomain: 'www', RecordType: 'A' });
+  });
+});
+
+describe('unsupported domain creation', () => {
+  it('fails loudly for NameSilo and West like the legacy drivers', async () => {
+    const namesilo = createNamesiloProvider({ apikey: 'k' }, fakeFetch(() => ({ body: {} })).implementation);
+    await expect(namesilo.addDomain('example.com')).rejects.toMatchObject({ status: 501, code: 'DNS_OPERATION_UNSUPPORTED' });
+    const west = createWestProvider({ username: 'u', api_password: 'p' }, fakeFetch(() => ({ body: {} })).implementation);
+    await expect(west.addDomain('example.com')).rejects.toMatchObject({ status: 501, code: 'DNS_OPERATION_UNSUPPORTED' });
   });
 });
 

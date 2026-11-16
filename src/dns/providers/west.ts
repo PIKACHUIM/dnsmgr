@@ -84,9 +84,9 @@ export function createWestProvider(config: WestConfig, fetchImpl: typeof fetch =
       return { total: num(data.total, items.length), items };
     },
 
-    async addDomain(name) {
-      await execute({ act: 'adddomain', domain: name });
-      return { id: name, name, recordCount: 0 };
+    async addDomain() {
+      // 旧版驱动同样返回失败：西部数码不支持通过 API 添加域名。
+      unsupported('添加域名');
     },
 
     async listRecords(domain, query: RecordQuery): Promise<PageResult<DnsRecord>> {

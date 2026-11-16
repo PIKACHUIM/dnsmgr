@@ -17,6 +17,10 @@ interface Envelope {
 }
 
 const BASE = 'https://api.cloudflare.com/client/v4';
+/** 旧版列表的排序字段与 Cloudflare `order` 的对应关系；线路即代理状态。 */
+const SORT_COLUMNS: Record<string, string> = {
+  Name: 'name', Type: 'type', LineName: 'proxied', Value: 'content',
+};
 
 /** Cloudflare 没有“暂停”概念，沿用旧版实现：停用记录在名称后加 `_pause`，根域名用 `__root__` 占位。 */
 export function createCloudflareProvider(config: CloudflareConfig, fetchImpl: typeof fetch = fetch): DnsProvider {
@@ -170,6 +174,13 @@ export function createCloudflareProvider(config: CloudflareConfig, fetchImpl: ty
       if (query.value) params.set('search', query.value);
       if (query.name) params.set('name', encodeName(domain, query.name, true));
       if (query.line) params.set('proxied', query.line === '1' ? 'true' : 'false');
+      if (query.sort) {
+        const order = SORT_COLUMNS[query.sort.field];
+        if (order) {
+          params.set('order', order);
+          params.set('direction', query.sort.order);
+        }
+      }
       const envelope = await call('GET', `/zones/${zone(domain)}/dns_records?${params}`);
       const items = asArray(envelope.result).map((raw) => toRecord(domain, raw));
       return { total: num(envelope.result_info?.total_count, items.length), items };

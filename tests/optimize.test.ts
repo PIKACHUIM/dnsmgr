@@ -3,11 +3,18 @@ import { createApp } from '../src/app';
 import type { Bindings, RequestBudget } from '../src/core/types';
 import { environment } from '../src/platform/runtime';
 import { encrypt } from '../src/security/crypto';
+import { AUTO_LINE, taskTargets } from '../src/optimize';
 import { createTestDatabase } from './helpers/sqlite';
 
 const appKey = btoa('12345678901234567890123456789012');
 
-interface StoredRecord { id: string; type: string; name: string; content: string; proxied: boolean; ttl: number }
+interface Rrset {
+  name: string;
+  type: string;
+  ttl: number;
+  records: { content: string; disabled: boolean }[];
+  comments?: { content: string }[];
+}
 
 describe('Cloudflare IP optimization', () => {
   let testDb: ReturnType<typeof createTestDatabase>;
@@ -15,7 +22,7 @@ describe('Cloudflare IP optimization', () => {
   let bindings: Bindings;
   let cookie = '';
   let csrf = '';
-  let records: StoredRecord[] = [];
+  let rrsets: Rrset[] = [];
   let ips: string[] = [];
   let writes: string[] = [];
   let requests: string[] = [];
@@ -24,57 +31,44 @@ describe('Cloudflare IP optimization', () => {
   beforeEach(async () => {
     testDb = createTestDatabase();
     app = createApp({ database: testDb.db });
-    records = [];
+    rrsets = [];
     writes = [];
     requests = [];
     ips = ['104.16.0.1', '104.16.0.2', '104.16.0.3'];
-    let sequence = 0;
     const fetchMock = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = new URL(String(input));
       requests.push(url.href);
       const method = (init.method ?? 'GET').toUpperCase();
-      if (url.pathname.endsWith('/Cf.json')) {
-        return new Response(JSON.stringify({ Cf: { result: { dianxin: ips, liantong: [], yidong: [] } } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
-        });
-      }
-      const ok = (result: unknown) => new Response(JSON.stringify({ success: true, result, errors: [], result_info: { total_count: Array.isArray(result) ? result.length : 1 } }), {
+      const ok = (result: unknown) => new Response(JSON.stringify(result), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
-      const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-      const path = url.pathname.replace('/client/v4', '');
-      if (path === '/zones/zone-1/dns_records' && method === 'GET') {
-        const name = url.searchParams.get('name');
-        const type = url.searchParams.get('type');
-        return ok(records.filter((record) => (!name || record.name === name) && (!type || record.type === type)));
+      if (url.pathname.endsWith('/Cf.json')) {
+        return ok({ Cf: { result: { dianxin: ips, liantong: [], yidong: [] } } });
       }
-      if (path === '/zones/zone-1/dns_records' && method === 'POST') {
-        sequence += 1;
-        const created: StoredRecord = {
-          id: `rec-${sequence}`, type: String(body.type), name: String(body.name),
-          content: String(body.content), proxied: body.proxied === true, ttl: Number(body.ttl),
-        };
-        records.push(created);
-        writes.push(`POST ${created.name} ${created.content}`);
-        return ok(created);
-      }
-      if (path.startsWith('/zones/zone-1/dns_records/')) {
-        const id = path.split('/').pop()!;
-        const record = records.find((entry) => entry.id === id);
-        if (method === 'PATCH' && record) {
-          if (body.content !== undefined) record.content = String(body.content);
-          if (body.name !== undefined) record.name = String(body.name);
-          if (body.ttl !== undefined) record.ttl = Number(body.ttl);
-          writes.push(`PATCH ${record.name} ${record.content}`);
-          return ok(record);
-        }
-        if (method === 'DELETE') {
-          records = records.filter((entry) => entry.id !== id);
-          writes.push(`DELETE ${id}`);
-          return ok({ id });
+      if (url.pathname.startsWith('/api/v1/servers/localhost/zones/example.test')) {
+        if (method === 'GET') return ok({ rrsets });
+        if (method === 'PATCH') {
+          const body = JSON.parse(String(init.body)) as { rrsets: (Rrset & { changetype: string })[] };
+          for (const set of body.rrsets) {
+            const index = rrsets.findIndex((entry) => entry.name === set.name && entry.type === set.type);
+            if (set.changetype === 'DELETE') {
+              if (index >= 0) rrsets.splice(index, 1);
+              writes.push(`DELETE ${set.name} ${set.type}`);
+              continue;
+            }
+            const next: Rrset = {
+              name: set.name, type: set.type, ttl: set.ttl,
+              records: set.records.map((record) => ({ content: record.content, disabled: Boolean(record.disabled) })),
+              ...(set.comments ? { comments: set.comments } : {}),
+            };
+            if (index >= 0) rrsets[index] = next;
+            else rrsets.push(next);
+            writes.push(`REPLACE ${set.name} ${set.type} ${next.records.map((record) => record.content).join(',')}`);
+          }
+          return ok({});
         }
       }
-      return new Response(JSON.stringify({ success: false, errors: [{ message: 'not found' }] }), { status: 404 });
+      return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
     }) as unknown as typeof fetch;
     const budget: RequestBudget = { consume: () => {}, remainingMs: () => 30_000, fetch: fetchMock };
     bindings = {
@@ -92,14 +86,14 @@ describe('Cloudflare IP optimization', () => {
     cookie = login.headers.get('set-cookie')!.split(';')[0]!;
     csrf = ((await login.json()) as { csrfToken: string }).csrfToken;
     await testDb.db.execute(
-      "INSERT INTO dns_accounts (id,type,name,config_cipher,created_at,updated_at) VALUES (1,'cloudflare','cf','cipher',1,1)",
+      "INSERT INTO dns_accounts (id,type,name,config_cipher,created_at,updated_at) VALUES (1,'powerdns','pdns','cipher',1,1)",
     );
     await testDb.db.execute(
       'UPDATE dns_accounts SET config_cipher=? WHERE id=1',
-      [await encrypt(JSON.stringify({ apikey: 'cf-token' }), appKey, 'dns-account/1')],
+      [await encrypt(JSON.stringify({ ip: '10.0.0.1', port: '8081', apikey: 'pdns-key' }), appKey, 'dns-account/1')],
     );
     const inserted = await testDb.db.execute(
-      "INSERT INTO dns_domains (account_id,name,third_id,created_at,updated_at) VALUES (1,'example.test','zone-1',1,1) RETURNING id",
+      "INSERT INTO dns_domains (account_id,name,third_id,created_at,updated_at) VALUES (1,'example.test','example.test.',1,1) RETURNING id",
     );
     domainId = Number(inserted.rows[0]!.id);
   });
@@ -113,12 +107,11 @@ describe('Cloudflare IP optimization', () => {
       method, headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf }, body: JSON.stringify(body),
     });
   }
+  function aRecords() {
+    return rrsets.find((entry) => entry.type === 'A' && entry.name === 'cf.example.test')?.records.map((record) => record.content) ?? [];
+  }
 
   it('validates optimization settings and keeps provider lines discoverable', async () => {
-    const missingKey = await send('/api/v1/optimize/settings', 'PUT', { api: '0' });
-    expect(missingKey.status).toBe(400);
-    expect((await missingKey.json()).reason).toBe('OPTIMIZE_KEY_REQUIRED');
-
     const badInterval = await send('/api/v1/optimize/settings', 'PUT', { api: '2', minMinutes: 5 });
     expect(badInterval.status).toBe(400);
     expect((await badInterval.json()).reason).toBe('INVALID_OPTIMIZE_INTERVAL');
@@ -128,11 +121,12 @@ describe('Cloudflare IP optimization', () => {
 
     const lines = await request(`/api/v1/optimize/lines?domainId=${domainId}`, { headers: { cookie } });
     expect(await lines.json()).toMatchObject({
-      code: 0, lines: [{ id: '0', name: '仅 DNS' }, { id: '1', name: '已代理' }],
+      code: 0, lines: [{ id: 'default', name: '默认' }], autoLine: false,
     });
   });
 
   it('creates optimization tasks and reconciles A records against the preferred IP source', async () => {
+    await send('/api/v1/optimize/settings', 'PUT', { api: '2', minMinutes: 10 });
     const invalid = await send('/api/v1/optimize/tasks', 'POST', {
       domainId, rr: 'bad name', recordType: 'A', ipGroup: 'CT', recordCount: 2,
     });
@@ -140,21 +134,20 @@ describe('Cloudflare IP optimization', () => {
     expect((await invalid.json()).reason).toBe('INVALID_OPTIMIZE_RR');
 
     const task = await send('/api/v1/optimize/tasks', 'POST', {
-      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, ttl: 120, line: '0',
+      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, ttl: 120, line: 'default',
     });
     expect(task.status).toBe(200);
     const taskId = (await task.json() as { id: number }).id;
 
     const duplicate = await send('/api/v1/optimize/tasks', 'POST', {
-      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: '0',
+      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: 'default',
     });
     expect(duplicate.status).toBe(409);
     expect((await duplicate.json()).reason).toBe('OPTIMIZE_TASK_EXISTS');
 
     const first = await send(`/api/v1/optimize/tasks/${taskId}/run`, 'POST', {});
     expect(await first.json()).toMatchObject({ code: 0, ok: true });
-    expect(records.map((record) => record.content)).toEqual(['104.16.0.1', '104.16.0.2']);
-    expect(records.every((record) => record.name === 'cf.example.test' && record.type === 'A' && record.ttl === 120)).toBe(true);
+    expect(aRecords()).toEqual(['104.16.0.1', '104.16.0.2']);
 
     writes = [];
     const second = await send(`/api/v1/optimize/tasks/${taskId}/run`, 'POST', {});
@@ -165,14 +158,14 @@ describe('Cloudflare IP optimization', () => {
     writes = [];
     const updated = await send(`/api/v1/optimize/tasks/${taskId}/run`, 'POST', {});
     expect((await updated.json() as { detail: string }).detail).toContain('更新 1');
-    expect(writes).toEqual(['PATCH cf.example.test 104.16.0.9']);
+    expect(aRecords()).toEqual(['104.16.0.9', '104.16.0.2']);
 
     const patched = await send(`/api/v1/optimize/tasks/${taskId}`, 'PATCH', { recordCount: 1 });
     expect(patched.status).toBe(200);
     writes = [];
     const pruned = await send(`/api/v1/optimize/tasks/${taskId}/run`, 'POST', {});
     expect((await pruned.json() as { detail: string }).detail).toContain('删除 1');
-    expect(records).toHaveLength(1);
+    expect(aRecords()).toHaveLength(1);
 
     const listed = await request('/api/v1/optimize/tasks', { headers: { cookie } });
     expect(await listed.json()).toMatchObject({
@@ -187,7 +180,7 @@ describe('Cloudflare IP optimization', () => {
   it('runs at most one due task per schedule window', async () => {
     await send('/api/v1/optimize/settings', 'PUT', { api: '2', minMinutes: 10 });
     const task = await send('/api/v1/optimize/tasks', 'POST', {
-      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: '0',
+      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: 'default',
     });
     expect(task.status).toBe(200);
 
@@ -195,7 +188,7 @@ describe('Cloudflare IP optimization', () => {
     expect(await first.json()).toMatchObject({ code: 0, ran: 1 });
     const second = await send('/api/v1/optimize/run', 'POST', {});
     expect(await second.json()).toMatchObject({ code: 0, ran: 0 });
-    expect(records).toHaveLength(2);
+    expect(aRecords()).toHaveLength(2);
   });
 
   it('fetches the free source through a validated proxy', async () => {
@@ -210,7 +203,9 @@ describe('Cloudflare IP optimization', () => {
       code: 0, api: '2', minMinutes: 10, proxy: 'https://ghfast.top/https://raw.githubusercontent.com/',
     });
 
-    await send('/api/v1/optimize/tasks', 'POST', { domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 1, line: '0' });
+    await send('/api/v1/optimize/tasks', 'POST', {
+      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 1, line: 'default',
+    });
     const run = await send('/api/v1/optimize/run', 'POST', {});
     expect(await run.json()).toMatchObject({ code: 0, ran: 1 });
     expect(requests.some((url) => url === 'https://ghfast.top/https://raw.githubusercontent.com/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json')).toBe(true);
@@ -220,17 +215,57 @@ describe('Cloudflare IP optimization', () => {
   });
 
   it('removes CNAME records on the task line before writing A records', async () => {
-    records.push({
-      id: 'cname-1', type: 'CNAME', name: 'cf.example.test', content: 'target.example', proxied: false, ttl: 1,
+    await send('/api/v1/optimize/settings', 'PUT', { api: '2', minMinutes: 10 });
+    rrsets.push({
+      name: 'cf.example.test', type: 'CNAME', ttl: 600,
+      records: [{ content: 'target.example.', disabled: false }],
     });
     const task = await send('/api/v1/optimize/tasks', 'POST', {
-      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: '0',
+      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: 'default',
     });
     const taskId = (await task.json() as { id: number }).id;
     const run = await send(`/api/v1/optimize/tasks/${taskId}/run`, 'POST', {});
     expect(await run.json()).toMatchObject({ code: 0, ok: true });
-    expect(writes).toContain('DELETE cname-1');
-    expect(records.filter((record) => record.type === 'CNAME')).toHaveLength(0);
-    expect(records.map((record) => record.content).sort()).toEqual(['104.16.0.1', '104.16.0.2']);
+    expect(writes).toContain('DELETE cf.example.test CNAME');
+    expect(rrsets.filter((entry) => entry.type === 'CNAME')).toHaveLength(0);
+    expect(aRecords().sort()).toEqual(['104.16.0.1', '104.16.0.2']);
+  });
+
+  it('rejects Cloudflare-hosted domains like the legacy panel', async () => {
+    await testDb.db.execute(
+      "INSERT INTO dns_accounts (id,type,name,config_cipher,created_at,updated_at) VALUES (2,'cloudflare','cf','cipher',1,1)",
+    );
+    const inserted = await testDb.db.execute(
+      "INSERT INTO dns_domains (account_id,name,third_id,created_at,updated_at) VALUES (2,'cf-hosted.test','zone-9',1,1) RETURNING id",
+    );
+    const rejected = await send('/api/v1/optimize/tasks', 'POST', {
+      domainId: Number(inserted.rows[0]!.id), rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: '0',
+    });
+    expect(rejected.status).toBe(400);
+    expect((await rejected.json()).reason).toBe('OPTIMIZE_CLOUDFLARE_UNSUPPORTED');
+  });
+});
+
+describe('optimization line targets', () => {
+  const base = {
+    id: 1, domain_id: 1, rr: 'cf', record_type: 'A', ip_group: 'CT', cdn_type: 1, record_count: 2,
+    ttl: 600, enabled: 1, remark: null, last_run_at: null, last_status: null, last_error: null,
+    created_at: 0, updated_at: 0, zone_name: 'example.test', zone_third_id: 'zone-1',
+    account_id: 1, config_cipher: 'cipher',
+  } as const;
+
+  it('expands auto lines through the legacy group mapping', () => {
+    expect(taskTargets({ ...base, account_type: 'aliyun', line: AUTO_LINE })).toEqual([
+      { group: 'DEF', line: 'default' },
+      { group: 'CT', line: 'telecom' },
+      { group: 'CU', line: 'unicom' },
+      { group: 'CM', line: 'mobile' },
+    ]);
+    expect(taskTargets({ ...base, account_type: 'huawei', line: AUTO_LINE }).map((target) => target.line))
+      .toEqual(['default_view', 'Dianxin', 'Liantong', 'Yidong']);
+    expect(taskTargets({ ...base, account_type: 'powerdns', line: 'default' }))
+      .toEqual([{ group: 'CT', line: 'default' }]);
+    expect(() => taskTargets({ ...base, account_type: 'powerdns', line: AUTO_LINE }))
+      .toThrowError(/不支持自动线路/);
   });
 });

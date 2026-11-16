@@ -5,7 +5,7 @@ import { input, text } from '../core/request';
 import { requireSession, requireCsrf, requireAdmin, requireDomain, requireLegacyApi, requireLegacyApiDomain, nowSeconds, consumeRateLimit } from '../security/auth';
 import { md5 } from 'js-md5';
 import { decrypt, encrypt, randomToken, sha256 } from '../security/crypto';
-import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecord, type DnsRecordInput, type RecordQuery } from '../dns/types';
+import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecord, type DnsRecordInput, type RecordQuery, type RecordSortField } from '../dns/types';
 import { createProvider, providerCatalog, providerMeta, recordTypeSupported, recordTypesFor, validateProviderConfig } from '../dns/registry';
 import { lookupDomainExpiration } from '../dns/expiration';
 import { checkDnsRecordValue, isDnsCheckType, lookupPublicDnsRecords } from '../dns/record-check';
@@ -332,16 +332,29 @@ async function collectLegacyRecords(
   return { items, total };
 }
 
-function sortLegacyRecords(records: DnsRecord[], column: string, order: 'asc' | 'desc'): DnsRecord[] {
+function sortLegacyRecords(
+  records: DnsRecord[], column: string, order: 'asc' | 'desc', lineNames: Map<string, string> | null,
+): DnsRecord[] {
   const direction = order === 'desc' ? -1 : 1;
   const value = (record: DnsRecord) => column === 'Name' ? record.name
     : column === 'Type' ? record.type
-      : column === 'LineName' ? record.line
+      : column === 'LineName' ? lineNames?.get(record.line) ?? record.line
         : column === 'Value' ? record.value
           : record.updatedAt ?? '';
   return [...records].sort((first, second) => direction * String(value(first)).localeCompare(
     String(value(second)), 'zh-CN', { numeric: true, sensitivity: 'base' },
   ));
+}
+
+/** 旧版列表的 `LineName` 使用线路显示名；读取失败（含平台子请求上限）时退回线路代码。 */
+async function legacyLineNames(provider: DnsProvider, domain: DnsDomain): Promise<Map<string, string> | null> {
+  try {
+    const lines = await provider.recordLines(domain);
+    if (!lines || lines.length === 0) return null;
+    return new Map(lines.map((line) => [line.id, line.name]));
+  } catch {
+    return null;
+  }
 }
 
 export function dnsRoutes() {
@@ -1013,9 +1026,15 @@ export function dnsRoutes() {
     const type = legacyText(body, 'type', 16).toUpperCase();
     const line = legacyText(body, 'line', 64);
     const status = legacyText(body, 'status', 8);
+    const group = legacyText(body, 'groupid', 20);
     if (status && status !== '0' && status !== '1') {
       throw new AppError(400, 'status 格式无效', 'INVALID_LEGACY_API_PARAMETER');
     }
+    if (group && !/^\d{1,20}$/.test(group)) {
+      throw new AppError(400, 'groupid 格式无效', 'INVALID_LEGACY_API_PARAMETER');
+    }
+    // 旧版下拉用 0 表示「全部分组」（PHP 侧 `!empty($groupid)` 同样不过滤）。
+    const groupFilter = group && group !== '0' ? group : '';
     const clientPaged = LEGACY_CLIENT_PAGINATION_PROVIDERS.has(domain.owner_type);
     if (status === '0' && domain.owner_type === 'cloudflare') {
       return clientPaged ? c.json([]) : c.json({ total: 0, rows: [] });
@@ -1030,13 +1049,16 @@ export function dnsRoutes() {
     const target = toDnsDomain(domain);
     const query: Omit<RecordQuery, 'page' | 'pageSize'> = {
       ...(keyword ? { keyword } : {}), ...(name ? { name } : {}), ...(value ? { value } : {}),
-      ...(type ? { type } : {}), ...(line ? { line } : {}),
+      ...(type ? { type } : {}), ...(line ? { line } : {}), ...(groupFilter ? { group: groupFilter } : {}),
       ...(status && domain.owner_type !== 'cloudflare' ? { status: status as '0' | '1' } : {}),
     };
     let items: DnsRecord[] = [];
     let total = 0;
     let hostRows: Record<string, unknown>[] | null = null;
+    let collected: { items: DnsRecord[]; total: number } | null = null;
+    let lineNames: Map<string, string> | null = null;
     try {
+      const serverSort = Boolean(sortName && (providerMeta(domain.owner_type).sortFields ?? []).includes(sortName));
       if (!name && provider.listRecordHosts) {
         const result = await provider.listRecordHosts(target, { ...query, page: offset / pageSize + 1, pageSize });
         total = result.total;
@@ -1045,24 +1067,34 @@ export function dnsRoutes() {
           Line: null, LineName: null, TTL: null, MX: null, Weight: null,
           Remark: host.remark, Status: host.status, UpdateTime: host.updatedAt, Count: host.count,
         }));
+      } else if (serverSort) {
+        const result = await provider.listRecords(target, {
+          ...query, page: offset / pageSize + 1, pageSize,
+          sort: { field: sortName as RecordSortField, order: sortOrder },
+        });
+        items = result.items;
+        total = result.total;
       } else if (sortName) {
-        const collected = await collectLegacyRecords(
+        collected = await collectLegacyRecords(
           provider, target, query,
           c.env.RUNTIME.platform === 'esa' ? LEGACY_RECORD_SORT_MAX_ESA : LEGACY_RECORD_SORT_MAX,
         );
-        items = sortLegacyRecords(collected.items, sortName, sortOrder).slice(offset, offset + pageSize);
         total = collected.total;
       } else {
         const result = await provider.listRecords(target, { ...query, page: offset / pageSize + 1, pageSize });
         items = result.items;
         total = result.total;
       }
+      if (!hostRows) lineNames = await legacyLineNames(provider, target);
     } catch (error) { providerError(error); }
 
+    if (collected) {
+      items = sortLegacyRecords(collected.items, sortName, sortOrder, lineNames).slice(offset, offset + pageSize);
+    }
     const rows = hostRows ?? items.map((record) => ({
       RecordId: record.id, Domain: domain.name, Name: record.name, Type: record.type, Value: record.value,
-      Line: record.line, LineName: record.line, TTL: record.ttl, MX: record.mx, Weight: record.weight,
-      Remark: record.remark, Status: record.status, UpdateTime: record.updatedAt,
+      Line: record.line, LineName: lineNames?.get(record.line) ?? record.line, TTL: record.ttl, MX: record.mx,
+      Weight: record.weight, Remark: record.remark, Status: record.status, UpdateTime: record.updatedAt,
     }));
     return clientPaged ? c.json(rows) : c.json({ total: Number(total), rows });
   });
@@ -1370,6 +1402,8 @@ export function dnsRoutes() {
     const { page, pageSize } = pageParams(c);
     const status = c.req.query('status');
     if (status !== undefined && status !== '0' && status !== '1') throw new AppError(400, '状态参数无效', 'INVALID_STATUS');
+    const group = c.req.query('group');
+    if (group !== undefined && !/^\d{1,20}$/.test(group)) throw new AppError(400, '分组编号无效', 'INVALID_GROUP_ID');
     try {
       const result = await provider.listRecords(toDnsDomain(domain), {
         page, pageSize,
@@ -1378,9 +1412,26 @@ export function dnsRoutes() {
         value: c.req.query('value')?.slice(0, 255),
         type: c.req.query('type')?.toUpperCase().slice(0, 16),
         line: c.req.query('line')?.slice(0, 64),
+        group: group && group !== '0' ? group : undefined,
         status: status as '0' | '1' | undefined,
       });
       return c.json({ code: 0, page, pageSize, ...result });
+    } catch (error) { providerError(error); }
+  });
+
+  routes.get('/api/v1/dns/domains/:id/records/:recordId', requireSession, async (c) => {
+    requireSql(c);
+    const domainId = id(c.req.param('id'));
+    await requireDomain(c, domainId);
+    const recordId = c.req.param('recordId');
+    if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
+    const { domain, account: owner } = await domainRow(c, domainId);
+    const provider = await providerFor(c, owner);
+    if (typeof provider.recordInfo !== 'function') {
+      throw new AppError(501, '当前服务商不支持按编号读取单条记录', 'RECORD_INFO_UNSUPPORTED');
+    }
+    try {
+      return c.json({ code: 0, record: await provider.recordInfo(toDnsDomain(domain), recordId) });
     } catch (error) { providerError(error); }
   });
 
