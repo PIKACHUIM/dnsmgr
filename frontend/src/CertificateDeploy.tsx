@@ -4,14 +4,28 @@ import { Icon } from './icons';
 import { InfoTip } from './InfoTip';
 import { Modal } from './Modal';
 
+type DeployFieldType = 'input' | 'password' | 'textarea' | 'select' | 'radio' | 'checkbox';
+
+interface DeployFieldOption { value: string; label: string }
+interface DeployShow { key: string; in?: string[]; notIn?: string[] }
+type DeployShowWhen = DeployShow | { all: DeployShowWhen[] } | { any: DeployShowWhen[] };
+interface DeployField {
+  key: string; label: string; type?: DeployFieldType; required?: boolean; secret?: boolean;
+  placeholder?: string; note?: string; options?: DeployFieldOption[]; defaultValue?: string;
+  maxLength?: number; showWhen?: DeployShowWhen;
+}
+interface DeployProvider {
+  type: string; name: string; category: 'panel' | 'cloud' | 'storage'; description?: string;
+  note?: string; taskNote?: string; fields: DeployField[]; taskFields: DeployField[];
+}
 interface DeployAccount {
-  id: number; name: string; type: 'webhook' | 'executor'; remark: string | null;
-  url: string; headersConfigured: boolean; tokenConfigured: boolean;
-  label: string; path: string; command: string; createdAt: number; updatedAt: number;
+  id: number; name: string; type: string; remark: string | null;
+  fields: Record<string, string>; secrets: string[]; createdAt: number; updatedAt: number;
 }
 interface DeployTask {
-  id: number; name: string; accountId: number; accountName: string; accountType: 'webhook' | 'executor';
-  certificateOrderId: number; domains: string[]; enabled: boolean; autoDeploy: boolean; target: string | null;
+  id: number; name: string; accountId: number; accountName: string; accountType: string;
+  certificateOrderId: number; domains: string[]; enabled: boolean; autoDeploy: boolean;
+  target: string | null; config: Record<string, string>;
   lastRunAt: number | null; lastStatus: string | null; lastError: string | null;
 }
 interface DeployRun {
@@ -33,18 +47,92 @@ function useSessionError(onExpired: (message: string) => void) {
   }, [onExpired]);
 }
 
+function showVisible(values: Record<string, string>, show?: DeployShowWhen): boolean {
+  if (!show) return true;
+  if ('all' in show) return show.all.every((item) => showVisible(values, item));
+  if ('any' in show) return show.any.some((item) => showVisible(values, item));
+  const value = values[show.key] ?? '';
+  if (show.in) return show.in.includes(value);
+  if (show.notIn) return !show.notIn.includes(value);
+  return true;
+}
+
+function visible(field: DeployField, values: Record<string, string>): boolean {
+  return showVisible(values, field.showWhen);
+}
+
+function defaults(fields: DeployField[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const field of fields) {
+    if (field.defaultValue !== undefined) values[field.key] = field.defaultValue;
+    else if (field.type === 'checkbox') values[field.key] = '0';
+  }
+  return values;
+}
+
+function DeployFieldInput({ field, value, secretConfigured, onChange }: {
+  field: DeployField; value: string; secretConfigured?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const label = <span>{field.label}{field.required ? '' : '（选填）'}</span>;
+  const required = field.required && !(field.secret && secretConfigured);
+  if (field.type === 'checkbox') {
+    return <label className="certificate-confirm">
+      <input type="checkbox" checked={value === '1'} onChange={(event) => onChange(event.target.checked ? '1' : '0')} />
+      {field.label}
+    </label>;
+  }
+  if (field.type === 'select' || field.type === 'radio') {
+    const options = field.options ?? [];
+    return <label className="form-field">{label}
+      <select value={value || field.defaultValue || ''} onChange={(event) => onChange(event.target.value)} required={field.required}>
+        {field.type === 'radio' && <option value="">请选择</option>}
+        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      {field.note && <span className="form-hint">{field.note}</span>}
+    </label>;
+  }
+  const placeholder = field.secret && secretConfigured ? '已配置，留空保持不变' : field.placeholder;
+  if (field.type === 'textarea') {
+    return <label className="form-field">{label}
+      <textarea value={value} onChange={(event) => onChange(event.target.value)} required={required}
+        maxLength={field.maxLength ?? 2000} placeholder={placeholder} spellCheck={false} />
+      {field.note && <span className="form-hint">{field.note}</span>}
+    </label>;
+  }
+  return <label className="form-field">{label}
+    <input type={field.secret ? 'password' : 'text'} value={value} onChange={(event) => onChange(event.target.value)}
+      required={required} maxLength={field.maxLength ?? 500} placeholder={placeholder}
+      autoComplete={field.secret ? 'new-password' : 'off'} />
+    {field.note && <span className="form-hint">{field.note}</span>}
+  </label>;
+}
+
+function configSummary(fields: DeployField[], config: Record<string, string>): string {
+  const parts: string[] = [];
+  for (const field of fields) {
+    if (!visible(field, config)) continue;
+    const value = config[field.key];
+    if (!value) continue;
+    if (field.type === 'select' || field.type === 'radio') {
+      parts.push(field.options?.find((option) => option.value === value)?.label ?? value);
+    } else if (field.type === 'textarea') {
+      parts.push(value.split('\n').map((item) => item.trim()).filter(Boolean).join('、'));
+    } else if (field.type !== 'checkbox') {
+      parts.push(value);
+    }
+  }
+  return parts.join(' · ');
+}
+
 export function DeployAccounts({ session, onExpired }: Props) {
+  const [providers, setProviders] = useState<DeployProvider[]>([]);
   const [items, setItems] = useState<DeployAccount[]>([]);
   const [name, setName] = useState('');
-  const [type, setType] = useState<'webhook' | 'executor'>('webhook');
-  const [url, setUrl] = useState('');
-  const [token, setToken] = useState('');
-  const [headers, setHeaders] = useState('');
-  const [label, setLabel] = useState('');
-  const [path, setPath] = useState('');
-  const [command, setCommand] = useState('');
+  const [type, setType] = useState('');
+  const [values, setValues] = useState<Record<string, string>>({});
   const [remark, setRemark] = useState('');
-  const [editing, setEditing] = useState<number | null>(null);
+  const [editing, setEditing] = useState<DeployAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -60,8 +148,14 @@ export function DeployAccounts({ session, onExpired }: Props) {
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     try {
-      const result = await request<{ code: 0; items: DeployAccount[] }>('/api/v1/cert/deploy/accounts', { signal });
-      if (!signal.aborted) setItems(result.items);
+      const [catalog, list] = await Promise.all([
+        request<{ code: 0; providers: DeployProvider[] }>('/api/v1/cert/deploy/providers', { signal }),
+        request<{ code: 0; items: DeployAccount[] }>('/api/v1/cert/deploy/accounts', { signal }),
+      ]);
+      if (signal.aborted) return;
+      setProviders(catalog.providers);
+      setItems(list.items);
+      setType((current) => current || catalog.providers[0]?.type || '');
     } catch (failure) { if (!signal.aborted) handle(failure); }
     finally { if (!signal.aborted) setLoading(false); }
   }, [handle]);
@@ -72,36 +166,43 @@ export function DeployAccounts({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [load]);
 
-  function reset() {
-    setName(''); setUrl(''); setToken(''); setHeaders(''); setLabel(''); setPath(''); setCommand(''); setRemark(''); setEditing(null);
+  const selected = providers.find((provider) => provider.type === type);
+
+  function openForm(account: DeployAccount | null = null) {
+    const nextType = account?.type ?? providers[0]?.type ?? '';
+    const meta = providers.find((provider) => provider.type === nextType);
+    setEditing(account);
+    setName(account?.name ?? '');
+    setType(nextType);
+    setValues({ ...defaults(meta?.fields ?? []), ...(account?.fields ?? {}) });
+    setRemark(account?.remark ?? '');
+    setError('');
+    setNotice('');
+    setFormOpen(true);
   }
 
-  function edit(account: DeployAccount) {
-    setEditing(account.id);
-    setName(account.name); setType(account.type); setUrl(account.url); setToken(''); setHeaders('');
-    setLabel(account.label); setPath(account.path); setCommand(account.command); setRemark(account.remark ?? '');
-    setError(''); setNotice('');
-    setFormOpen(true);
+  function changeType(next: string) {
+    setType(next);
+    const meta = providers.find((provider) => provider.type === next);
+    setValues(defaults(meta?.fields ?? []));
   }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || !selected) return;
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
     const payload: Record<string, unknown> = { name: name.trim(), type, remark: remark.trim() };
-    if (type === 'webhook') {
-      payload.url = url.trim();
-      if (token.trim()) payload.token = token.trim();
-      if (headers.trim()) payload.headers = headers.trim();
-    } else {
-      payload.label = label.trim(); payload.path = path.trim(); payload.command = command.trim();
+    for (const field of selected.fields) {
+      const value = values[field.key] ?? '';
+      if (field.secret && editing && !value) continue;
+      payload[field.key] = field.type === 'checkbox' ? value === '1' : value;
     }
     try {
-      if (editing === null) await send('/api/v1/cert/deploy/accounts', 'POST', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
-      else await send(`/api/v1/cert/deploy/accounts/${editing}`, 'PATCH', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
-      setNotice(editing === null ? '部署账户已创建。' : '部署账户已更新。');
-      reset();
+      if (!editing) await send('/api/v1/cert/deploy/accounts', 'POST', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      else await send(`/api/v1/cert/deploy/accounts/${editing.id}`, 'PATCH', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      setNotice(editing ? '部署账户已更新。' : '部署账户已创建。');
+      setEditing(null);
       setFormOpen(false);
       await load(controller.signal);
     } catch (failure) { handle(failure); }
@@ -120,46 +221,43 @@ export function DeployAccounts({ session, onExpired }: Props) {
     finally { setBusy(false); }
   }
 
+  const providerName = (value: string) => providers.find((provider) => provider.type === value)?.name ?? value;
+
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="deploy-account-list-title">
-      <div className="panel-heading"><div><h2 id="deploy-account-list-title">部署账户</h2><InfoTip label="部署账户说明" text="Webhook 账户把完整证书链与私钥以 JSON POST 到 HTTPS 地址；执行器账户把证书交给轮询式执行器，由执行器负责落盘与重载服务。凭据使用 AES-GCM 加密，保存后不回显。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { reset(); setError(''); setNotice(''); setFormOpen(true); }}><Icon name="plus" />添加账户</button></div></div>
+      <div className="panel-heading"><div><h2 id="deploy-account-list-title">部署账户</h2><InfoTip label="部署账户说明" text="按驱动保存面板地址或云厂商密钥，可直接把证书部署到宝塔站点、腾讯云 CDN/CLB 等资源；Webhook 与执行器账户保留原有行为。凭据使用 AES-GCM 加密，保存后不回显。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {items.length} 条</span><button className="button button-primary" type="button" disabled={loading} onClick={() => { setError(''); setNotice(''); openForm(); }}><Icon name="plus" />添加账户</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取部署账户…</div>
         : items.length === 0 ? <div className="panel-empty">还没有部署账户。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">
-            <thead><tr><th>账户</th><th>类型</th><th>目标</th><th>凭据</th><th>更新时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>账户</th><th>类型</th><th>配置</th><th>凭据</th><th>更新时间</th><th>操作</th></tr></thead>
             <tbody>{items.map((account) => <tr key={account.id}>
               <td><strong>{account.name}</strong><span className="value-detail">{account.remark ?? '—'}</span></td>
-              <td>{account.type === 'webhook' ? 'Webhook' : '执行器'}</td>
-              <td className="mono">{account.type === 'webhook' ? account.url : [account.label, account.path, account.command].filter(Boolean).join(' · ') || '—'}</td>
-              <td>{account.type === 'webhook' ? <>{account.tokenConfigured ? 'Bearer 已配置' : '无 Token'} {account.headersConfigured && <span className="value-detail">附加请求头已配置</span>}</> : '由执行器令牌保护'}</td>
+              <td>{providerName(account.type)}</td>
+              <td className="mono">{Object.entries(account.fields).map(([key, value]) => `${key}=${value}`).join(' · ') || '—'}</td>
+              <td>{account.secrets.length > 0 ? `已配置 ${account.secrets.length} 项密钥` : '无密钥'}</td>
               <td>{date(account.updatedAt)}</td>
               <td className="certificate-order-actions">
-                <button className="button button-secondary" type="button" disabled={busy} onClick={() => edit(account)}>编辑</button>
+                <button className="button button-secondary" type="button" disabled={busy} onClick={() => openForm(account)}>编辑</button>
                 <button className="button button-quiet" type="button" disabled={busy} onClick={() => void remove(account)}>删除</button>
               </td>
             </tr>)}</tbody>
           </table></div>}
     </section>
-    {formOpen && <Modal title={editing === null ? '添加部署账户' : '编辑部署账户'} wide onClose={() => { if (!busy) setFormOpen(false); }}>
+    {formOpen && <Modal title={editing ? '编辑部署账户' : '添加部署账户'} wide onClose={() => { if (!busy) setFormOpen(false); }}>
       <form className="dns-form certificate-setup-form" onSubmit={save}>
         <label className="form-field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
-        <label className="form-field"><span>类型</span><select value={type} onChange={(event) => setType(event.target.value as 'webhook' | 'executor')} disabled={editing !== null}>
-          <option value="webhook">Webhook（推送证书）</option><option value="executor">执行器（轮询领取）</option>
-        </select></label>
-        {type === 'webhook' ? <>
-          <label className="form-field"><span>Webhook 地址</span><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} required maxLength={2000} placeholder="https://deploy.example/hook" /></label>
-          <label className="form-field"><span>Bearer Token（选填）</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} maxLength={500} autoComplete="new-password" placeholder={editing === null ? '用于 Authorization 头' : '留空保留原值'} /></label>
-          <label className="form-field"><span>附加请求头 JSON（选填）</span><input value={headers} onChange={(event) => setHeaders(event.target.value)} maxLength={2000} placeholder='{"X-Source":"dnsmgr"}' /></label>
-        </> : <>
-          <label className="form-field"><span>执行器标签（选填）</span><input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={100} placeholder="node-1" /></label>
-          <label className="form-field"><span>证书路径（选填）</span><input value={path} onChange={(event) => setPath(event.target.value)} maxLength={500} placeholder="/etc/ssl/dnsmgr" /></label>
-          <label className="form-field"><span>部署后命令（选填）</span><input value={command} onChange={(event) => setCommand(event.target.value)} maxLength={500} placeholder="systemctl reload nginx" /></label>
-        </>}
+        <label className="form-field"><span>类型</span><select value={type} onChange={(event) => changeType(event.target.value)} disabled={Boolean(editing)} required>
+          {providers.map((provider) => <option key={provider.type} value={provider.type}>{provider.name}</option>)}
+        </select>{selected?.description && <span className="form-hint">{selected.description}</span>}{selected?.note && <span className="form-hint">{selected.note}</span>}</label>
+        {selected?.fields.filter((field) => visible(field, values)).map((field) => <DeployFieldInput key={`${selected.type}-${field.key}`} field={field}
+          value={values[field.key] ?? field.defaultValue ?? ''}
+          secretConfigured={editing ? editing.secrets.includes(field.key) : false}
+          onChange={(value) => setValues((current) => ({ ...current, [field.key]: value }))} />)}
         <label className="form-field"><span>备注（选填）</span><input value={remark} onChange={(event) => setRemark(event.target.value)} maxLength={200} /></label>
         <div className="form-actions">
-          <button className="button button-primary" type="submit" disabled={busy || !name.trim() || (type === 'webhook' && !url.trim())}>{busy ? '正在保存…' : editing === null ? '创建部署账户' : '保存修改'}</button>
+          <button className="button button-primary" type="submit" disabled={busy || !name.trim() || !type}>{busy ? '正在验证…' : editing ? '保存修改' : '创建部署账户'}</button>
           <button className="button button-quiet" type="button" disabled={busy} onClick={() => setFormOpen(false)}>取消</button>
         </div>
       </form>
@@ -168,6 +266,7 @@ export function DeployAccounts({ session, onExpired }: Props) {
 }
 
 export function DeployTasks({ session, onExpired }: Props) {
+  const [providers, setProviders] = useState<DeployProvider[]>([]);
   const [accounts, setAccounts] = useState<DeployAccount[]>([]);
   const [orders, setOrders] = useState<CertificateOrder[]>([]);
   const [tasks, setTasks] = useState<DeployTask[]>([]);
@@ -177,6 +276,8 @@ export function DeployTasks({ session, onExpired }: Props) {
   const [accountId, setAccountId] = useState('');
   const [orderId, setOrderId] = useState('');
   const [target, setTarget] = useState('');
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<DeployTask | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -192,13 +293,15 @@ export function DeployTasks({ session, onExpired }: Props) {
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     try {
-      const [accountResult, orderResult, taskResult, runResult] = await Promise.all([
+      const [catalog, accountResult, orderResult, taskResult, runResult] = await Promise.all([
+        request<{ code: 0; providers: DeployProvider[] }>('/api/v1/cert/deploy/providers', { signal }),
         request<{ code: 0; items: DeployAccount[] }>('/api/v1/cert/deploy/accounts', { signal }),
         request<{ code: 0; items: CertificateOrder[] }>('/api/v1/cert/orders?limit=100&offset=0', { signal }),
         request<{ code: 0; items: DeployTask[] }>('/api/v1/cert/deploy/tasks', { signal }),
         request<{ code: 0; items: DeployRun[] }>('/api/v1/cert/deploy/runs', { signal }),
       ]);
       if (signal.aborted) return;
+      setProviders(catalog.providers);
       setAccounts(accountResult.items);
       setOrders(orderResult.items.filter((order) => order.revokedAt === null));
       setTasks(taskResult.items);
@@ -228,18 +331,47 @@ export function DeployTasks({ session, onExpired }: Props) {
     return () => controller.abort();
   }, [loadExecutor]);
 
-  async function create(event: React.FormEvent) {
+  const account = accounts.find((item) => String(item.id) === accountId);
+  const provider = providers.find((item) => item.type === account?.type);
+  const taskFields = provider?.taskFields ?? [];
+
+  function openTask(task: DeployTask | null = null) {
+    const nextAccountId = task ? String(task.accountId) : (accountId || String(accounts[0]?.id ?? ''));
+    const nextAccount = accounts.find((item) => String(item.id) === nextAccountId);
+    const nextProvider = providers.find((item) => item.type === nextAccount?.type);
+    setEditing(task);
+    setName(task?.name ?? '');
+    setAccountId(nextAccountId);
+    setOrderId(task ? String(task.certificateOrderId) : (orderId || String(orders[0]?.id ?? '')));
+    setTarget(task?.target ?? '');
+    setConfig({ ...defaults(nextProvider?.taskFields ?? []), ...(task?.config ?? {}) });
+    setError('');
+    setNotice('');
+    setTaskOpen(true);
+  }
+
+  function changeAccount(next: string) {
+    setAccountId(next);
+    const nextAccount = accounts.find((item) => String(item.id) === next);
+    const nextProvider = providers.find((item) => item.type === nextAccount?.type);
+    setConfig(defaults(nextProvider?.taskFields ?? []));
+  }
+
+  async function saveTask(event: React.FormEvent) {
     event.preventDefault();
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
+    const payload: Record<string, unknown> = {
+      name: name.trim(), accountId, certificateOrderId: orderId, target: target.trim() || undefined,
+      config: Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined)),
+    };
     try {
-      await send('/api/v1/cert/deploy/tasks', 'POST', {
-        name: name.trim(), accountId, certificateOrderId: orderId, target: target.trim() || undefined,
-      }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
-      setName(''); setTarget('');
+      if (!editing) await send('/api/v1/cert/deploy/tasks', 'POST', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      else await send(`/api/v1/cert/deploy/tasks/${editing.id}`, 'PATCH', payload, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setTaskOpen(false);
-      setNotice('部署任务已创建；证书更新后由 cron 自动部署。');
+      setEditing(null);
+      setNotice(editing ? '部署任务已更新。' : '部署任务已创建；证书更新后由 cron 自动部署。');
       await load(controller.signal);
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }
@@ -293,26 +425,33 @@ export function DeployTasks({ session, onExpired }: Props) {
   }
 
   const orderLabel = (order: CertificateOrder) => `#${order.id} · ${order.domains.join(', ')}`;
+  const providerName = (value: string) => providers.find((item) => item.type === value)?.name ?? value;
+  const summaryOf = (task: DeployTask) => {
+    const meta = providers.find((item) => item.type === task.accountType);
+    const summary = configSummary(meta?.taskFields ?? [], task.config ?? {});
+    return summary || task.target || '未设置目标';
+  };
 
   return <>
     {error && <div className="notice notice-error" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     <section className="panel" aria-labelledby="deploy-task-list-title">
-      <div className="panel-heading"><div><h2 id="deploy-task-list-title">部署任务</h2><InfoTip label="部署任务说明" text="证书签发或续签后 updated_at 变化，cron 会按任务自动部署一次；手动“立即部署”不受证书更新时间限制。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {tasks.length} 条</span><button className="button button-primary" type="button" disabled={loading || accounts.length === 0 || orders.length === 0} onClick={() => { setError(''); setNotice(''); setTaskOpen(true); }}><Icon name="plus" />新建任务</button></div></div>
+      <div className="panel-heading"><div><h2 id="deploy-task-list-title">部署任务</h2><InfoTip label="部署任务说明" text="证书签发或续签后 updated_at 变化，cron 会按任务自动部署一次；手动“立即部署”不受证书更新时间限制。任务配置由所选驱动决定，例如宝塔的部署类型与站点列表、腾讯云的产品与实例。" /></div><div className="panel-heading-actions"><span className="panel-meta">共 {tasks.length} 条</span><button className="button button-primary" type="button" disabled={loading || accounts.length === 0 || orders.length === 0} onClick={() => { setError(''); setNotice(''); openTask(); }}><Icon name="plus" />新建任务</button></div></div>
       {loading ? <div className="panel-loading" role="status"><span className="spinner" />正在读取部署任务…</div>
         : tasks.length === 0 ? <div className="panel-empty">还没有部署任务。</div>
           : <div className="table-wrap"><table className="data-table certificate-table">
             <thead><tr><th>任务</th><th>证书</th><th>账户</th><th>自动</th><th>最近运行</th><th>操作</th></tr></thead>
             <tbody>{tasks.map((task) => <tr key={task.id}>
-              <td><strong>{task.name}</strong><span className="value-detail">{task.target ?? '未设置目标'}</span></td>
+              <td><strong>{task.name}</strong><span className="value-detail">{summaryOf(task)}</span></td>
               <td className="mono">#{task.certificateOrderId}<span className="value-detail">{task.domains.join(', ')}</span></td>
-              <td>{task.accountName}<span className="value-detail">{task.accountType === 'webhook' ? 'Webhook' : '执行器'}</span></td>
+              <td>{task.accountName}<span className="value-detail">{providerName(task.accountType)}</span></td>
               <td>
                 <label className="certificate-confirm"><input type="checkbox" checked={task.enabled} disabled={busy} onChange={(event) => void patch(task, { enabled: event.target.checked })} />启用</label>
                 <label className="certificate-confirm"><input type="checkbox" checked={task.autoDeploy} disabled={busy} onChange={(event) => void patch(task, { autoDeploy: event.target.checked })} />自动</label>
               </td>
               <td><span>{task.lastStatus ?? '未运行'}</span><span className="value-detail">{date(task.lastRunAt)}</span>{task.lastError && <span className="value-detail certificate-order-error">{task.lastError}</span>}</td>
               <td className="certificate-order-actions">
+                <button className="button button-secondary" type="button" disabled={busy} onClick={() => openTask(task)}>编辑</button>
                 <button className="button button-secondary" type="button" disabled={busy} onClick={() => void run(task)}>立即部署</button>
                 <button className="button button-quiet" type="button" disabled={busy} onClick={() => void remove(task)}>删除</button>
               </td>
@@ -341,17 +480,21 @@ export function DeployTasks({ session, onExpired }: Props) {
         <button className="button button-secondary" type="button" disabled={busy} onClick={() => void rotate()}>轮换令牌</button>
       </div>
     </section>
-    {taskOpen && <Modal title="新建部署任务" onClose={() => { if (!busy) setTaskOpen(false); }}>
-      <form className="dns-form certificate-setup-form" onSubmit={create}>
+    {taskOpen && <Modal title={editing ? '编辑部署任务' : '新建部署任务'} wide onClose={() => { if (!busy) { setTaskOpen(false); setEditing(null); } }}>
+      <form className="dns-form certificate-setup-form" onSubmit={saveTask}>
         <label className="form-field"><span>任务名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
-        <label className="form-field"><span>部署账户</span><select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
-          {accounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.type === 'webhook' ? 'Webhook' : '执行器'}</option>)}
+        <label className="form-field"><span>部署账户</span><select value={accountId} onChange={(event) => changeAccount(event.target.value)} required disabled={Boolean(editing)}>
+          {accounts.map((item) => <option key={item.id} value={item.id}>{item.name} · {providerName(item.type)}</option>)}
         </select></label>
-        <label className="form-field"><span>证书订单</span><select value={orderId} onChange={(event) => setOrderId(event.target.value)} required>
+        <label className="form-field"><span>证书订单</span><select value={orderId} onChange={(event) => setOrderId(event.target.value)} required disabled={Boolean(editing)}>
           <option value="">选择未吊销的证书</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}
         </select></label>
         <label className="form-field"><span>目标标记（选填）</span><input value={target} onChange={(event) => setTarget(event.target.value)} maxLength={500} placeholder="web-1 / 站点名称" /></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !name.trim() || !accountId || !orderId}>{busy ? '正在保存…' : '创建部署任务'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setTaskOpen(false)}>取消</button></div>
+        {provider?.taskNote && <span className="form-hint">{provider.taskNote}</span>}
+        {taskFields.filter((field) => visible(field, config)).map((field) => <DeployFieldInput key={`${account?.type}-${field.key}`} field={field}
+          value={config[field.key] ?? field.defaultValue ?? ''}
+          onChange={(value) => setConfig((current) => ({ ...current, [field.key]: value }))} />)}
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !name.trim() || !accountId || !orderId}>{busy ? '正在保存…' : editing ? '保存修改' : '创建部署任务'}</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => { setTaskOpen(false); setEditing(null); }}>取消</button></div>
       </form>
     </Modal>}
   </>;

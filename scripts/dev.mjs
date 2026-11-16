@@ -29,7 +29,8 @@ const migrations = [
   '0005_failover.sql', '0006_domain_expiration_queue.sql', '0007_domain_periodic_expiration_queue.sql',
   '0008_domain_expiration_notices.sql', '0009_login_captcha.sql', '0010_certificates.sql', '0011_certificate_acme.sql',
   '0012_certificate_lifecycle.sql', '0013_certificate_ca.sql', '0014_notification_outbox.sql', '0015_certificate_cname.sql',
-  '0016_certificate_deploy.sql', '0017_optimize_ip.sql',
+  '0016_certificate_deploy.sql', '0017_optimize_ip.sql', '0018_certificate_zone_map.sql',
+  '0019_certificate_order_remark.sql', '0020_certificate_deploy_drivers.sql',
 ];
 if (version > migrations.length) throw new Error('Local schema version is newer than this application');
 for (const [index, migration] of migrations.entries()) {

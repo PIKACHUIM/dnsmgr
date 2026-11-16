@@ -4,21 +4,16 @@ import { AppError } from './core/errors';
 import { decrypt, encrypt } from './security/crypto';
 import { nowSeconds } from './security/auth';
 import { queueNotification } from './notify/certificate';
+import { deployProvider } from './deploy/registry';
+import type { DeployTaskConfig } from './deploy/types';
 
 export const EXECUTOR_TOKEN_SETTING = 'executor_token_cipher';
 const EXECUTOR_TOKEN_PURPOSE = 'executor-token/v1';
 const STALE_PENDING_SECONDS = 3600;
 
-export type DeployAccountType = 'webhook' | 'executor';
+export type DeployAccountType = string;
 
-export interface DeployAccountConfig {
-  url?: string;
-  token?: string;
-  headers?: string;
-  label?: string;
-  path?: string;
-  command?: string;
-}
+export type DeployAccountConfig = DeployTaskConfig;
 
 export interface DeployAccountRow extends Record<string, unknown> {
   id: number;
@@ -38,6 +33,8 @@ export interface DeployTaskRow extends Record<string, unknown> {
   enabled: number;
   auto_deploy: number;
   target: string | null;
+  config_json: string;
+  info_json: string;
   created_by: number;
   created_at: number;
   updated_at: number;
@@ -72,20 +69,47 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 export function parseDeployConfig(value: string): DeployAccountConfig {
-  let parsed: unknown;
-  try { parsed = JSON.parse(value); } catch { throw new AppError(503, '部署账户配置损坏，请重新保存', 'DEPLOY_CONFIG_CORRUPTED'); }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new AppError(503, '部署账户配置损坏，请重新保存', 'DEPLOY_CONFIG_CORRUPTED');
-  }
-  const source = parsed as Record<string, unknown>;
+  const source = parseConfigObject(value);
   const config: DeployAccountConfig = {};
-  for (const key of ['url', 'token', 'headers', 'label', 'path', 'command'] as const) {
-    if (source[key] !== undefined && typeof source[key] !== 'string') {
-      throw new AppError(503, '部署账户配置损坏，请重新保存', 'DEPLOY_CONFIG_CORRUPTED');
+  for (const [key, entry] of Object.entries(source)) config[key] = entry;
+  return config;
+}
+
+/** 部署账户与部署任务共用同一套字符串键值配置；键数量与长度都有上限，避免把大对象塞进密文。 */
+function parseConfigObject(value: string): Record<string, string> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new AppError(503, '部署配置损坏，请重新保存', 'DEPLOY_CONFIG_CORRUPTED'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new AppError(503, '部署配置损坏，请重新保存', 'DEPLOY_CONFIG_CORRUPTED');
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  if (entries.length > 40) throw new AppError(503, '部署配置损坏，请重新保存', 'DEPLOY_CONFIG_CORRUPTED');
+  const config: Record<string, string> = {};
+  for (const [key, entry] of entries) {
+    if (!/^[A-Za-z0-9_]{1,64}$/.test(key) || typeof entry !== 'string' || entry.length > 8192) {
+      throw new AppError(503, '部署配置损坏，请重新保存', 'DEPLOY_CONFIG_CORRUPTED');
     }
-    if (typeof source[key] === 'string') config[key] = source[key] as string;
+    config[key] = entry;
   }
   return config;
+}
+
+export function parseTaskConfig(value: string | null | undefined): DeployTaskConfig {
+  if (!value) return {};
+  return parseConfigObject(value);
+}
+
+function parseDeployState(value: string | null | undefined): Record<string, string> {
+  if (!value) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+  } catch {
+    return {};
+  }
 }
 
 export async function decryptDeployConfig(c: Context<AppEnv>, row: { id: number; config_cipher: string }): Promise<DeployAccountConfig> {
@@ -198,6 +222,38 @@ export async function runDeployTask(
     }
     const config = await decryptDeployConfig(c, { id: task.account_id, config_cipher: task.config_cipher });
     const material = await loadCertificateMaterial(c, task);
+    if (task.account_type !== 'webhook') {
+      const provider = deployProvider(task.account_type);
+      if (!provider) throw new Error(`未支持的部署驱动：${task.account_type}`);
+      const taskConfig = parseTaskConfig(task.config_json);
+      const state = parseDeployState(task.info_json);
+      const logs: string[] = [];
+      const configPatch: DeployTaskConfig = {};
+      try {
+        await provider.deploy(taskConfig, config, {
+          ...material, commonName: (material.domains[0] ?? '').replace(/^\*\./, ''),
+        }, {
+          fetch: c.env.BUDGET.fetch,
+          log: (message: string) => logs.push(message),
+          state,
+          saveConfig: (patch: Record<string, string>) => { Object.assign(configPatch, patch); },
+        });
+      } finally {
+        const statements = [
+          { sql: 'UPDATE cert_deploy_tasks SET info_json=? WHERE id=?', args: [JSON.stringify(state), task.id] },
+        ];
+        if (Object.keys(configPatch).length > 0) {
+          statements.push({
+            sql: 'UPDATE cert_deploy_tasks SET config_json=? WHERE id=?',
+            args: [JSON.stringify({ ...taskConfig, ...configPatch }), task.id],
+          });
+        }
+        await c.get('db').batch(statements).catch(() => undefined);
+      }
+      const detail = logs.length ? logs.slice(-6).join('；').slice(0, 500) : `${task.account_type} 部署成功`;
+      await finishRun(c, runId, true, detail, task.id);
+      return { ok: true, detail, runId };
+    }
     const status = await postWebhook(c, config, {
       task: { id: task.id, name: task.name, target: task.target },
       certificate: {

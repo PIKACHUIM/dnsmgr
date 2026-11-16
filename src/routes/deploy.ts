@@ -5,9 +5,12 @@ import { input } from '../core/request';
 import { nowSeconds, requireAdmin, requireCertificateSession, requireCsrf } from '../security/auth';
 import {
   claimExecutorJob, decryptDeployConfig, encryptDeployConfig, executeDeployDue, loadDeployTask,
-  readExecutorToken, reportExecutorJob, requireExecutor, rotateExecutorToken, runDeployTask,
+  parseTaskConfig, readExecutorToken, reportExecutorJob, requireExecutor, rotateExecutorToken, runDeployTask,
   type DeployAccountConfig, type DeployAccountRow, type DeployAccountType, type DeployRunRow, type DeployTaskRow,
 } from '../deploy';
+import { deployCatalog, deployProvider, deployProviderMeta, WEBHOOK_DEPLOY_TYPE } from '../deploy/registry';
+import type { DeployField, DeployProviderMeta, DeployTaskConfig } from '../deploy/types';
+import { deployShowVisible } from '../deploy/types';
 import { executorProxy, loadProxySettings } from '../proxy';
 
 function requireSql(c: Context<AppEnv>): void {
@@ -32,8 +35,9 @@ function accountName(value: unknown): string {
 }
 
 function deployAccountType(value: unknown): DeployAccountType {
-  if (value === 'webhook' || value === 'executor') return value;
-  throw new AppError(400, '不支持的部署账户类型', 'INVALID_DEPLOY_TYPE');
+  const type = typeof value === 'string' ? value.trim() : '';
+  if (!type || !deployProviderMeta(type)) throw new AppError(400, '不支持的部署账户类型', 'INVALID_DEPLOY_TYPE');
+  return type;
 }
 
 function webhookUrl(value: unknown): string {
@@ -69,19 +73,55 @@ function optionalText(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
 
-function buildConfig(type: DeployAccountType, body: Record<string, unknown>, current?: DeployAccountConfig): DeployAccountConfig {
-  if (type === 'webhook') {
-    return {
-      url: body.url === undefined && current?.url ? current.url : webhookUrl(body.url ?? current?.url),
-      token: body.token === undefined ? current?.token ?? '' : optionalText(body.token, 500),
-      headers: body.headers === undefined ? current?.headers ?? '' : webhookHeaders(body.headers),
-    };
+function readFieldValue(field: DeployField, body: Record<string, unknown>, current?: DeployAccountConfig): string | undefined {
+  const provided = body[field.key];
+  if (field.type === 'checkbox') {
+    const value = provided === undefined ? current?.[field.key] : provided;
+    if (value === undefined) return field.defaultValue ?? '0';
+    return value === true || value === '1' || value === 'true' || value === 'on' ? '1' : '0';
   }
-  return {
-    label: body.label === undefined ? current?.label ?? '' : optionalText(body.label, 100),
-    path: body.path === undefined ? current?.path ?? '' : optionalText(body.path, 500),
-    command: body.command === undefined ? current?.command ?? '' : optionalText(body.command, 500),
-  };
+  const value = provided === undefined || (field.secret && provided === '') ? current?.[field.key] : provided;
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new AppError(400, `${field.label}格式无效`, 'INVALID_DEPLOY_CONFIG');
+  const trimmed = value.trim();
+  if (field.maxLength && trimmed.length > field.maxLength) throw new AppError(400, `${field.label}过长`, 'INVALID_DEPLOY_CONFIG');
+  return trimmed;
+}
+
+function fieldVisible(field: DeployField, values: Record<string, string | undefined>): boolean {
+  return deployShowVisible(values, field.showWhen);
+}
+
+function buildConfig(type: DeployAccountType, body: Record<string, unknown>, current?: DeployAccountConfig): DeployAccountConfig {
+  const meta = deployProviderMeta(type);
+  if (!meta) throw new AppError(400, '不支持的部署账户类型', 'INVALID_DEPLOY_TYPE');
+  const config: DeployAccountConfig = {};
+  for (const field of meta.fields) {
+    const value = readFieldValue(field, body, current);
+    if (value !== undefined && value !== '') config[field.key] = value;
+  }
+  for (const field of meta.fields) {
+    if (!fieldVisible(field, config)) continue;
+    if (field.required && !config[field.key]) throw new AppError(400, `请填写${field.label}`, 'INVALID_DEPLOY_CONFIG');
+  }
+  if (type === WEBHOOK_DEPLOY_TYPE) {
+    config.url = webhookUrl(config.url);
+    if (config.headers) config.headers = webhookHeaders(config.headers);
+  }
+  return config;
+}
+
+function buildTaskConfig(meta: DeployProviderMeta, body: Record<string, unknown>, current?: DeployTaskConfig): DeployTaskConfig {
+  const config: DeployTaskConfig = {};
+  for (const field of meta.taskFields) {
+    const value = readFieldValue(field, body, current);
+    if (value !== undefined) config[field.key] = value;
+  }
+  for (const field of meta.taskFields) {
+    if (!fieldVisible(field, config)) continue;
+    if (field.required && !config[field.key]) throw new AppError(400, `请填写${field.label}`, 'INVALID_DEPLOY_CONFIG');
+  }
+  return config;
 }
 
 const ACCOUNT_SELECT = 'SELECT id,name,type,config_cipher,remark,created_at,updated_at FROM cert_deploy_accounts';
@@ -92,12 +132,32 @@ async function loadAccount(c: Context<AppEnv>, accountId: number): Promise<Deplo
   return rows[0];
 }
 
+/** 与 PHP 面板一致：保存前调用驱动 check() 验证凭据；内置的 webhook/执行器没有远端校验。 */
+async function checkAccount(c: Context<AppEnv>, type: DeployAccountType, config: DeployAccountConfig): Promise<void> {
+  const provider = deployProvider(type);
+  if (!provider) return;
+  try {
+    await provider.check(config, { fetch: c.env.BUDGET.fetch, log: () => undefined, state: {}, saveConfig: () => undefined });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '部署账户验证失败';
+    throw new AppError(400, `验证部署账户失败：${detail}`, 'DEPLOY_ACCOUNT_CHECK_FAILED');
+  }
+}
+
 function accountView(row: DeployAccountRow, config: DeployAccountConfig) {
+  const meta = deployProviderMeta(row.type);
+  const fields: Record<string, string> = {};
+  const secrets: string[] = [];
+  for (const field of meta?.fields ?? []) {
+    const value = config[field.key] ?? '';
+    if (field.secret) {
+      if (value) secrets.push(field.key);
+      continue;
+    }
+    if (value) fields[field.key] = value;
+  }
   return {
-    id: row.id, name: row.name, type: row.type, remark: row.remark,
-    url: row.type === 'webhook' ? (config.url ?? '') : '',
-    headersConfigured: Boolean(config.headers), tokenConfigured: Boolean(config.token),
-    label: config.label ?? '', path: config.path ?? '', command: config.command ?? '',
+    id: row.id, name: row.name, type: row.type, remark: row.remark, fields, secrets,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -109,14 +169,24 @@ interface TaskListRow extends DeployTaskRow {
 }
 
 function taskView(row: DeployTaskRow & { domains?: string | null }) {
+  let config: DeployTaskConfig = {};
+  try { config = parseTaskConfig(row.config_json); } catch { config = {}; }
   return {
     id: row.id, name: row.name, accountId: row.account_id, accountName: row.account_name,
     accountType: row.account_type, certificateOrderId: row.certificate_order_id,
     domains: row.domains ? row.domains.split(',') : [],
-    enabled: row.enabled === 1, autoDeploy: row.auto_deploy === 1, target: row.target,
+    enabled: row.enabled === 1, autoDeploy: row.auto_deploy === 1, target: row.target, config,
     lastRunAt: row.last_run_at, lastStatus: row.last_status, lastError: row.last_error,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
+}
+
+function objectInput(value: unknown): Record<string, unknown> {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new AppError(400, '部署配置格式无效', 'INVALID_DEPLOY_CONFIG');
+  }
+  return value as Record<string, unknown>;
 }
 
 function runView(row: DeployRunRow) {
@@ -148,6 +218,11 @@ export function certificateDeployRoutes() {
     await next();
   });
 
+  routes.get('/api/v1/cert/deploy/providers', requireCertificateSession, async (c) => {
+    requireAdmin(c);
+    return c.json({ code: 0, providers: deployCatalog() });
+  });
+
   routes.get('/api/v1/cert/deploy/accounts', requireCertificateSession, async (c) => {
     requireAdmin(c);
     const rows = await c.get('db').query<DeployAccountRow>(`${ACCOUNT_SELECT} ORDER BY id DESC`);
@@ -166,6 +241,7 @@ export function certificateDeployRoutes() {
     const type = deployAccountType(body.type);
     const name = accountName(body.name);
     const config = buildConfig(type, body);
+    await checkAccount(c, type, config);
     const existing = await c.get('db').query<{ id: number }>('SELECT id FROM cert_deploy_accounts WHERE name=?', [name]);
     if (existing[0]) throw new AppError(409, '部署账户名称已存在', 'DEPLOY_ACCOUNT_EXISTS');
     const now = nowSeconds();
@@ -196,6 +272,7 @@ export function certificateDeployRoutes() {
     let current: DeployAccountConfig | undefined;
     try { current = await decryptDeployConfig(c, account); } catch { current = undefined; }
     const config = buildConfig(type, body, current);
+    await checkAccount(c, type, config);
     await c.get('db').execute(
       'UPDATE cert_deploy_accounts SET name=?,type=?,config_cipher=?,remark=?,updated_at=? WHERE id=?',
       [name, type, await encryptDeployConfig(c, accountId, config),
@@ -234,7 +311,10 @@ export function certificateDeployRoutes() {
     const name = accountName(body.name);
     const accountId = recordId(body.accountId, '部署账户');
     const certificateOrderId = recordId(body.certificateOrderId, '证书订单');
-    await loadAccount(c, accountId);
+    const account = await loadAccount(c, accountId);
+    const meta = deployProviderMeta(account.type);
+    if (!meta) throw new AppError(400, '部署账户类型无效', 'INVALID_DEPLOY_TYPE');
+    const config = buildTaskConfig(meta, objectInput(body.config));
     const orders = await c.get('db').query<{ id: number; revoked_at: number | null }>(
       'SELECT id,revoked_at FROM cert_orders WHERE id=?', [certificateOrderId],
     );
@@ -245,10 +325,10 @@ export function certificateDeployRoutes() {
     const now = nowSeconds();
     const created = await c.get('db').execute(
       `INSERT INTO cert_deploy_tasks
-        (name,account_id,certificate_order_id,enabled,auto_deploy,target,created_by,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?) RETURNING id`,
+        (name,account_id,certificate_order_id,enabled,auto_deploy,target,config_json,created_by,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
       [name, accountId, certificateOrderId, body.enabled === false ? 0 : 1, body.autoDeploy === false ? 0 : 1,
-        optionalText(body.target, 500) || null, c.get('principal').user.id, now, now],
+        optionalText(body.target, 500) || null, JSON.stringify(config), c.get('principal').user.id, now, now],
     );
     const taskId = Number(created.rows[0]?.id ?? 0);
     await c.get('db').execute(
@@ -269,9 +349,17 @@ export function certificateDeployRoutes() {
     const enabled = body.enabled === undefined ? task.enabled : body.enabled ? 1 : 0;
     const autoDeploy = body.autoDeploy === undefined ? task.auto_deploy : body.autoDeploy ? 1 : 0;
     const target = body.target === undefined ? task.target : optionalText(body.target, 500) || null;
+    let configJson = task.config_json;
+    if (body.config !== undefined) {
+      const meta = deployProviderMeta(task.account_type);
+      if (!meta) throw new AppError(400, '部署账户类型无效', 'INVALID_DEPLOY_TYPE');
+      let current: DeployTaskConfig = {};
+      try { current = parseTaskConfig(task.config_json); } catch { current = {}; }
+      configJson = JSON.stringify(buildTaskConfig(meta, objectInput(body.config), current));
+    }
     await c.get('db').execute(
-      'UPDATE cert_deploy_tasks SET name=?,enabled=?,auto_deploy=?,target=?,updated_at=? WHERE id=?',
-      [name, enabled, autoDeploy, target, nowSeconds(), taskId],
+      'UPDATE cert_deploy_tasks SET name=?,enabled=?,auto_deploy=?,target=?,config_json=?,updated_at=? WHERE id=?',
+      [name, enabled, autoDeploy, target, configJson, nowSeconds(), taskId],
     );
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
