@@ -302,6 +302,8 @@ export const fr: Record<string, string> = {
   '添加域名': 'Ajouter un domaine',
   '按域名搜索': 'Rechercher par domaine',
   '按分类筛选': 'Filtrer par catégorie',
+  '按账户筛选': 'Filtrer par compte',
+  '全部账户': 'Tous les comptes',
   '全部分类': 'Toutes les catégories',
   '未分类': 'Non classé',
   '按隐藏状态筛选': 'Filtrer par visibilité',

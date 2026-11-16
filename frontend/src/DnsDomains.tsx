@@ -45,6 +45,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
   const [keyword, setKeyword] = useState('');
   const [applied, setApplied] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [accountFilter, setAccountFilter] = useState('');
   const [hiddenFilter, setHiddenFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -73,6 +74,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
     const query = new URLSearchParams({ page: String(currentPage), pageSize: String(PAGE_SIZE) });
     if (applied) query.set('keyword', applied);
     if (categoryFilter) query.set('categoryId', categoryFilter);
+    if (accountFilter) query.set('accountId', accountFilter);
     if (hiddenFilter) query.set('hidden', hiddenFilter);
     try {
       const [list, categoryList, accountList] = await Promise.all([
@@ -92,7 +94,7 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [admin, applied, categoryFilter, hiddenFilter, handle]);
+  }, [admin, applied, categoryFilter, accountFilter, hiddenFilter, handle]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -216,6 +218,10 @@ export function DnsDomains({ session, navigate, onExpired }: Props) {
           <option value="0">{t('未分类')}</option>
           {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
         </select>
+        {admin && <select value={accountFilter} onChange={(event) => { setAccountFilter(event.target.value); setPage(1); }} aria-label={t('按账户筛选')}>
+          <option value="">{t('全部账户')}</option>
+          {accounts.map((account) => <option key={account.id} value={account.id}>{account.name} ({account.type})</option>)}
+        </select>}
         {admin && <select value={hiddenFilter} onChange={(event) => { setHiddenFilter(event.target.value); setPage(1); }} aria-label={t('按隐藏状态筛选')}>
           <option value="">{t('全部状态')}</option>
           <option value="0">{t('正常')}</option>

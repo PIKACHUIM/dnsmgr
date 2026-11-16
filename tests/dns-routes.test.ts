@@ -1280,6 +1280,73 @@ describe('DNS account, domain and record API', () => {
     expect(await (await request('/api/v1/dns/domains', { headers: { cookie } })).json()).toMatchObject({ total: 0 });
   });
 
+  it('filters the domain list by account and rejects malformed account filters', async () => {
+    const { cookie, csrf } = await session();
+    await seedDomain(cookie, csrf, ['one.example.com']);
+    await seedDomain(cookie, csrf, ['two.example.com', 'three.example.com']);
+    const accounts = await (await request('/api/v1/dns/accounts', { headers: { cookie } })).json() as { items: { id: number; name: string }[] };
+    const first = accounts.items.find((item) => item.name === 'acc-one.example.com')!.id;
+    const second = accounts.items.find((item) => item.name === 'acc-two.example.com')!.id;
+
+    const one = await (await request(`/api/v1/dns/domains?accountId=${first}`, { headers: { cookie } })).json() as { total: number; items: { name: string; accountId: number }[] };
+    expect(one.total).toBe(1);
+    expect(one.items).toEqual([expect.objectContaining({ name: 'one.example.com', accountId: first })]);
+
+    const two = await (await request(`/api/v1/dns/domains?accountId=${second}`, { headers: { cookie } })).json() as { total: number; items: { name: string }[] };
+    expect(two.total).toBe(2);
+    expect(two.items.map((item) => item.name).sort()).toEqual(['three.example.com', 'two.example.com']);
+
+    const invalid = await request('/api/v1/dns/domains?accountId=0', { headers: { cookie } });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ reason: 'INVALID_ID' });
+  });
+
+  it('blocks domain removal while a certificate job is unfinished and cleans certificate references', async () => {
+    const { cookie, csrf } = await session();
+    const domains = await seedDomain(cookie, csrf, ['a.example.com', 'b.example.com']);
+    const headers = { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrf };
+    const [user] = await testDb.db.query<{ id: number }>('SELECT id FROM users ORDER BY id LIMIT 1');
+    const [domainAccount] = await testDb.db.query<{ account_id: number }>('SELECT account_id FROM dns_domains WHERE id=?', [domains[0]!.id]);
+    const now = Math.floor(Date.now() / 1000);
+
+    await testDb.db.execute(
+      `INSERT INTO cert_acme_accounts (directory,directory_url,email,account_key_cipher,status,created_by,created_at,updated_at)
+       VALUES ('staging','https://acme-staging.invalid/directory','ops@example.com','cipher','ready',?,?,?)`,
+      [user!.id, now, now],
+    );
+    const [acmeAccount] = await testDb.db.query<{ id: number }>('SELECT id FROM cert_acme_accounts ORDER BY id DESC LIMIT 1');
+    const insertOrder = (domainId: number, status: string) => testDb.db.execute(
+      `INSERT INTO cert_acme_orders (account_id,dns_domain_id,dns_account_id,dns_config_cipher,dns_zone_name,dns_zone_remote_id,
+        created_by,directory,directory_json,account_kid,account_key_cipher,domains_json,status,csr_der,private_key_cipher,created_at,updated_at)
+       VALUES (?,?,?,'cipher','example.com','zone-1',?,'staging','{"url":"https://acme-staging.invalid/directory"}','kid','cipher','["a.example.com"]',?,'csr','key',?,?)`,
+      [acmeAccount!.id, domainId, domainAccount!.account_id, user!.id, status, now, now],
+    );
+    await insertOrder(domains[0]!.id, 'authorizing');
+    await testDb.db.execute(
+      "INSERT INTO cert_cname_proxies (domain,target,dns_domain_id,enabled,created_by,created_at,updated_at) VALUES ('proxy.example.net','target.example.com',?,1,?,?,?)",
+      [domains[1]!.id, user!.id, now, now],
+    );
+
+    const blocked = await post('/api/v1/dns/domains/batch', { ids: domains.map((domain) => domain.id), action: 'delete' }, headers);
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ reason: 'DOMAIN_IN_USE' });
+    expect((await request(`/api/v1/dns/domains/${domains[0]!.id}`, { method: 'DELETE', headers })).status).toBe(409);
+    expect((await testDb.db.query<{ n: number }>('SELECT COUNT(*) AS n FROM dns_domains'))[0]!.n).toBe(2);
+    expect((await testDb.db.query<{ n: number }>("SELECT COUNT(*) AS n FROM cert_acme_orders"))[0]!.n).toBe(1);
+
+    await testDb.db.execute("UPDATE cert_acme_orders SET status='failed'");
+    const single = await request(`/api/v1/dns/domains/${domains[0]!.id}`, { method: 'DELETE', headers });
+    expect(single.status).toBe(200);
+    expect((await testDb.db.query<{ n: number }>("SELECT COUNT(*) AS n FROM cert_acme_orders WHERE dns_domain_id=?", [domains[0]!.id]))[0]!.n).toBe(0);
+
+    const removed = await post('/api/v1/dns/domains/batch', { ids: [domains[1]!.id], action: 'delete' }, headers);
+    expect(await removed.json()).toMatchObject({ code: 0, affected: 1, requested: 1 });
+    expect((await testDb.db.query<{ n: number }>("SELECT COUNT(*) AS n FROM cert_cname_proxies"))[0]!.n).toBe(0);
+    expect(await (await request('/api/v1/dns/domains', { headers: { cookie } })).json()).toMatchObject({ total: 0 });
+    expect((await testDb.db.query<{ action: string }>("SELECT action FROM audit_logs WHERE action IN ('domain.delete','domain.batch.delete') ORDER BY id"))
+      .map((row) => row.action)).toEqual(['domain.delete', 'domain.batch.delete']);
+  });
+
   it('batch edits, adds and logs records through the provider', async () => {
     const { cookie, csrf } = await session();
     const [domain] = await seedDomain(cookie, csrf);

@@ -238,6 +238,26 @@ function idsFrom(body: Record<string, unknown>, max: number): number[] {
   return ids;
 }
 
+/** 删除域名：先清理其证书配置，仍有未结束的签发任务时拒绝，避免留下失去 Zone 的任务。 */
+async function removeDomains(c: Context<AppEnv>, ids: number[]): Promise<number> {
+  const placeholders = ids.map(() => '?').join(',');
+  const active = await db(c).query<{ name: string }>(
+    `SELECT DISTINCT d.name FROM cert_acme_orders o JOIN dns_domains d ON d.id = o.dns_domain_id
+     WHERE o.dns_domain_id IN (${placeholders}) AND o.status NOT IN ('issued','failed','cancelled')
+     ORDER BY d.id`, ids,
+  );
+  if (active.length > 0) {
+    const names = active.slice(0, 3).map((row) => row.name).join('、');
+    throw new AppError(409, `域名 ${names} 仍有未结束的证书签发任务，请先完成或取消后再移除`, 'DOMAIN_IN_USE');
+  }
+  const results = await db(c).batch([
+    { sql: `DELETE FROM cert_cname_proxies WHERE dns_domain_id IN (${placeholders})`, args: ids },
+    { sql: `DELETE FROM cert_acme_orders WHERE dns_domain_id IN (${placeholders}) AND status IN ('issued','failed','cancelled')`, args: ids },
+    { sql: `DELETE FROM dns_domains WHERE id IN (${placeholders})`, args: ids },
+  ]);
+  return Number(results[2]?.changes) || 0;
+}
+
 function categoryIdOf(value: unknown): number | null {
   if (value === null || value === undefined || value === '' || value === 0 || value === '0') return null;
   const parsed = Number(value);
@@ -1274,7 +1294,7 @@ export function dnsRoutes() {
     requireAdmin(c);
     const domainId = id(c.req.param('id'));
     const { domain } = await domainRow(c, domainId);
-    await db(c).execute('DELETE FROM dns_domains WHERE id = ?', [domainId]);
+    await removeDomains(c, [domainId]);
     await audit(c, 'domain.delete', domain.name, `id=${domainId}`);
     return c.json({ code: 0 });
   });
@@ -1288,8 +1308,7 @@ export function dnsRoutes() {
     const placeholders = ids.map(() => '?').join(',');
     let affected = 0;
     if (action === 'delete') {
-      const result = await db(c).execute(`DELETE FROM dns_domains WHERE id IN (${placeholders})`, ids);
-      affected = Number(result.changes) || 0;
+      affected = await removeDomains(c, ids);
     } else if (action === 'remark') {
       const remark = typeof body.remark === 'string' ? body.remark.trim().slice(0, 100) : '';
       const result = await db(c).execute(
