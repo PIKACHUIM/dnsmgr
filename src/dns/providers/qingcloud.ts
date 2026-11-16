@@ -183,7 +183,10 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
       let value = input.value;
       if (input.type === 'MX') value = `${input.mx ?? 10} ${value}`;
       else if (input.type === 'TXT' && !value.startsWith('"')) value = `"${value}"`;
-      const record = [{ weight: 0, values: value.split(',').map((item) => ({ value: item.trim(), status: 1 })) }];
+      // 旧版仅在 A/CNAME 且填写权重时使用权重模式（mode=3）。
+      const weighted = (input.type === 'A' || input.type === 'CNAME') && input.weight !== null
+        && Number.isSafeInteger(input.weight) && input.weight > 0 ? input.weight : 0;
+      const record = [{ weight: weighted, values: value.split(',').map((item) => ({ value: item.trim(), status: 1 })) }];
       const data = await execute('POST', '/v1/record/', {
         zone_name: domain.id,
         domain_name: input.name,
@@ -191,7 +194,7 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
         type: input.type,
         ttl: input.ttl,
         record: JSON.stringify(record),
-        mode: 1,
+        mode: weighted > 0 ? 3 : 1,
         auto_merge: 2,
       });
       const id = String(data.domain_record_id ?? '');
@@ -206,14 +209,18 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
       let value = input.value;
       if (input.type === 'MX') value = `${input.mx ?? 10} ${value}`;
       else if (input.type === 'TXT' && !value.startsWith('"')) value = `"${value}"`;
+      const weighted = (input.type === 'A' || input.type === 'CNAME') && input.weight !== null
+        && Number.isSafeInteger(input.weight) && input.weight > 0 ? input.weight : 0;
       const record = asArray(detail.record).map((rawGroup) => {
         const group = asRecord(rawGroup);
+        let edited = false;
         const values = asArray(group.data).map((rawValue) => {
           const row = asRecord(rawValue);
           const id = String(row.record_value_id ?? '');
+          if (id === valueId) edited = true;
           return { value: id === valueId ? value : String(row.value ?? ''), status: num(row.status, 1) };
         });
-        return { weight: num(group.weight), values };
+        return { weight: edited && weighted > 0 ? weighted : num(group.weight), values };
       });
       await execute('POST', `/v1/dr_id/${encodeURIComponent(domainRecordId)}`, {
         zone_name: String(detail.zone_name ?? ''),
@@ -222,7 +229,7 @@ export function createQingcloudProvider(config: QingcloudConfig, fetchImpl: type
         type: String(detail.rd_type ?? input.type),
         ttl: input.ttl,
         record: JSON.stringify(record),
-        mode: num(detail.mode, 1),
+        mode: weighted > 0 ? 3 : num(detail.mode, 1),
       });
     },
 

@@ -1,5 +1,6 @@
 import { asArray, asRecord, num, sendJson } from '../http';
 import { bceEscape, hmacSha256Hex, sha256Hex } from '../sign';
+import { HUAWEI_LINES } from './huawei-lines';
 import {
   DnsError, type DnsDomain, type DnsLine, type DnsProvider, type DnsRecord,
   type DnsRecordInput, type PageResult, type RecordQuery,
@@ -56,6 +57,13 @@ export function createHuaweiProvider(config: HuaweiConfig, fetchImpl: typeof fet
     return `"${value}"`;
   };
 
+  /** 华为云一条记录可含多个值，旧版按逗号拆分并反转后提交；TXT 值整体作为单条记录。 */
+  function recordValues(input: DnsRecordInput): string[] {
+    if (input.type === 'TXT') return [recordValue('TXT', input.value)];
+    const values = input.value.split(',').map((item) => item.trim()).filter(Boolean);
+    return values.length > 1 ? values.reverse() : values;
+  }
+
   function toRecord(raw: unknown, domain: DnsDomain): DnsRecord {
     const row = asRecord(raw);
     const type = String(row.type ?? 'A').toUpperCase();
@@ -81,7 +89,7 @@ export function createHuaweiProvider(config: HuaweiConfig, fetchImpl: typeof fet
     return {
       name: hostName(input.name, domain),
       type: input.type,
-      records: [recordValue(input.type, input.value)],
+      records: recordValues(input),
       line: input.line === 'default' ? undefined : input.line,
       ttl: input.ttl,
       ...(input.remark ? { description: input.remark } : {}),
@@ -157,7 +165,7 @@ export function createHuaweiProvider(config: HuaweiConfig, fetchImpl: typeof fet
     },
 
     async recordLines(): Promise<DnsLine[] | null> {
-      return null;
+      return Object.entries(HUAWEI_LINES).map(([id, line]) => ({ id, name: line.name, parent: line.parent }));
     },
 
     async minTtl(): Promise<number | null> {

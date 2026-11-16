@@ -79,6 +79,10 @@ export function createTechnitiumProvider(config: TechnitiumConfig, fetchImpl: ty
         return { value: `${text('flags', '0')} ${text('tag')} "${text('value')}"`, mx: null };
       case 'ANAME': return { value: text('aname'), mx: null };
       case 'DNAME': return { value: text('dname'), mx: null };
+      case 'APP': return {
+        value: [text('appName'), text('classPath'), text('recordData')].filter(Boolean).join(' '),
+        mx: null,
+      };
       default: return { value: '', mx: null };
     }
   }
@@ -119,6 +123,14 @@ export function createTechnitiumProvider(config: TechnitiumConfig, fetchImpl: ty
       }
       case 'ANAME': return { [key('AName')]: value };
       case 'DNAME': return { [key('DName')]: value };
+      case 'APP': {
+        const [appName = '', classPath = '', ...rest] = value.trim().split(/\s+/);
+        return {
+          appName,
+          ...(classPath ? { classPath } : {}),
+          ...(rest.length > 0 ? { recordData: rest.join(' ') } : {}),
+        };
+      }
       default: throw new DnsError(`Technitium 不支持记录类型 ${type}`, 400, 'DNS_UNSUPPORTED_RECORD_TYPE');
     }
   }
@@ -227,6 +239,24 @@ export function createTechnitiumProvider(config: TechnitiumConfig, fetchImpl: ty
 
     async updateRecord(domain, recordId, input) {
       const { record } = await locate(domain, recordId);
+      // APP 记录的字段无法通过 new* 参数更新，旧版改为先删除再新增。
+      if (record.type === 'APP') {
+        await request('POST', '/zones/records/delete', {
+          domain: record.name,
+          zone: domain.name,
+          type: record.type,
+          ...oldParams(record),
+        });
+        await request('POST', '/zones/records/add', {
+          domain: fqdn(input.name, domain.name),
+          zone: domain.name,
+          type: 'APP',
+          ttl: input.ttl,
+          ...(input.remark ? { comments: input.remark } : {}),
+          ...recordParams('APP', input.value, input.mx),
+        });
+        return;
+      }
       await request('POST', '/zones/records/update', {
         domain: record.name,
         zone: domain.name,

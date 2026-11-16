@@ -18,6 +18,7 @@ describe('Cloudflare IP optimization', () => {
   let records: StoredRecord[] = [];
   let ips: string[] = [];
   let writes: string[] = [];
+  let requests: string[] = [];
   let domainId = 0;
 
   beforeEach(async () => {
@@ -25,12 +26,14 @@ describe('Cloudflare IP optimization', () => {
     app = createApp({ database: testDb.db });
     records = [];
     writes = [];
+    requests = [];
     ips = ['104.16.0.1', '104.16.0.2', '104.16.0.3'];
     let sequence = 0;
     const fetchMock = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = new URL(String(input));
+      requests.push(url.href);
       const method = (init.method ?? 'GET').toUpperCase();
-      if (url.hostname === 'raw.githubusercontent.com') {
+      if (url.pathname.endsWith('/Cf.json')) {
         return new Response(JSON.stringify({ Cf: { result: { dianxin: ips, liantong: [], yidong: [] } } }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
@@ -193,5 +196,41 @@ describe('Cloudflare IP optimization', () => {
     const second = await send('/api/v1/optimize/run', 'POST', {});
     expect(await second.json()).toMatchObject({ code: 0, ran: 0 });
     expect(records).toHaveLength(2);
+  });
+
+  it('fetches the free source through a validated proxy', async () => {
+    const invalid = await send('/api/v1/optimize/settings', 'PUT', { api: '2', proxy: 'ftp://mirror.example' });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).reason).toBe('INVALID_OPTIMIZE_PROXY');
+
+    const saved = await send('/api/v1/optimize/settings', 'PUT', {
+      api: '2', minMinutes: 10, proxy: 'https://ghfast.top/https://raw.githubusercontent.com/',
+    });
+    expect(await saved.json()).toMatchObject({
+      code: 0, api: '2', minMinutes: 10, proxy: 'https://ghfast.top/https://raw.githubusercontent.com/',
+    });
+
+    await send('/api/v1/optimize/tasks', 'POST', { domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 1, line: '0' });
+    const run = await send('/api/v1/optimize/run', 'POST', {});
+    expect(await run.json()).toMatchObject({ code: 0, ran: 1 });
+    expect(requests.some((url) => url === 'https://ghfast.top/https://raw.githubusercontent.com/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json')).toBe(true);
+
+    const cleared = await send('/api/v1/optimize/settings', 'PUT', { proxy: '' });
+    expect(await cleared.json()).toMatchObject({ code: 0, proxy: '' });
+  });
+
+  it('removes CNAME records on the task line before writing A records', async () => {
+    records.push({
+      id: 'cname-1', type: 'CNAME', name: 'cf.example.test', content: 'target.example', proxied: false, ttl: 1,
+    });
+    const task = await send('/api/v1/optimize/tasks', 'POST', {
+      domainId, rr: 'cf', recordType: 'A', ipGroup: 'CT', recordCount: 2, line: '0',
+    });
+    const taskId = (await task.json() as { id: number }).id;
+    const run = await send(`/api/v1/optimize/tasks/${taskId}/run`, 'POST', {});
+    expect(await run.json()).toMatchObject({ code: 0, ok: true });
+    expect(writes).toContain('DELETE cname-1');
+    expect(records.filter((record) => record.type === 'CNAME')).toHaveLength(0);
+    expect(records.map((record) => record.content).sort()).toEqual(['104.16.0.1', '104.16.0.2']);
   });
 });

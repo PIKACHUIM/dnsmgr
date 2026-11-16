@@ -10,6 +10,7 @@ import type { DnsDomain } from './dns/types';
 export const OPTIMIZE_API = 'optimize_ip_api';
 export const OPTIMIZE_KEY = 'optimize_ip_key';
 export const OPTIMIZE_MIN = 'optimize_ip_min';
+export const OPTIMIZE_PROXY = 'optimize_ip_proxy';
 export const OPTIMIZE_LAST = 'optimize_ip_time';
 
 export type IpGroup = 'DEF' | 'CT' | 'CU' | 'CM';
@@ -19,6 +20,8 @@ export interface OptimizeSettings {
   api: '0' | '1' | '2';
   key: string;
   minMinutes: number;
+  /** xingpingcn 数据源可选的 http(s) 代理前缀，用于访问 raw.githubusercontent.com。 */
+  proxy: string;
 }
 
 export interface OptimizeTaskRow extends Record<string, unknown> {
@@ -54,17 +57,18 @@ export function isIpAddress(value: string, version: IpVersion): boolean {
 
 export function normalizeOptimizeSettings(values: Map<string, string>): OptimizeSettings {
   const api = values.get(OPTIMIZE_API);
-  const rawMin = Number(values.get(OPTIMIZE_MIN) ?? 60);
+  const rawMin = Number(values.get(OPTIMIZE_MIN) ?? 30);
   return {
     api: api === '0' || api === '1' ? api : '2',
     key: values.get(OPTIMIZE_KEY) ?? '',
-    minMinutes: Number.isInteger(rawMin) && rawMin >= 10 && rawMin <= 1440 ? rawMin : 60,
+    minMinutes: Number.isInteger(rawMin) && rawMin >= 10 && rawMin <= 1440 ? rawMin : 30,
+    proxy: values.get(OPTIMIZE_PROXY) ?? '',
   };
 }
 
 export async function readOptimizeSettings(db: SqlDatabase): Promise<OptimizeSettings> {
   const rows = await db.query<{ key: string; value: string }>(
-    'SELECT key,value FROM app_settings WHERE key IN (?,?,?)', [OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN],
+    'SELECT key,value FROM app_settings WHERE key IN (?,?,?,?)', [OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN, OPTIMIZE_PROXY],
   );
   return normalizeOptimizeSettings(new Map(rows.map((row) => [row.key, row.value])));
 }
@@ -93,6 +97,18 @@ const CDN_SLUG: Record<number, string> = {
   1: 'get_cloudflare_ip', 2: 'get_cloudfront_ip', 3: 'get_gcore_ip', 4: 'get_edgeone_ip',
 };
 
+/** 校验并归一化代理前缀：只接受 http/https，且只能作为路径前缀使用。 */
+export function optimizeProxyPrefix(proxy: string): string {
+  const value = proxy.trim();
+  if (!value) return '';
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new AppError(400, '代理地址格式无效', 'INVALID_OPTIMIZE_PROXY'); }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new AppError(400, '代理地址只支持 http/https', 'INVALID_OPTIMIZE_PROXY');
+  }
+  return value.replace(/\/+$/, '');
+}
+
 /** 从公开优选接口读取各线路 IP，返回值已去重并限制数量。 */
 export async function fetchOptimizedIps(
   fetcher: typeof fetch, settings: OptimizeSettings, cdnType: number, version: IpVersion,
@@ -100,7 +116,11 @@ export async function fetchOptimizedIps(
   const empty: Record<IpGroup, string[]> = { DEF: [], CT: [], CU: [], CM: [] };
   if (settings.api === '2') {
     if (version === 'v6') throw new AppError(400, '当前 IP 源不支持 IPv6', 'OPTIMIZE_SOURCE_UNSUPPORTED');
-    const response = await fetcher('https://raw.githubusercontent.com/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json', {
+    const prefix = optimizeProxyPrefix(settings.proxy);
+    const target = prefix
+      ? `${prefix}/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json`
+      : 'https://raw.githubusercontent.com/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json';
+    const response = await fetcher(target, {
       signal: AbortSignal.timeout(20_000), redirect: 'error',
     });
     if (!response.ok) throw new AppError(502, `IP 优选接口返回 HTTP ${response.status}`, 'OPTIMIZE_SOURCE_FAILED');
@@ -197,14 +217,26 @@ export async function executeOptimizeTask(c: Context<AppEnv>, task: OptimizeTask
   const version: IpVersion = task.record_type === 'AAAA' ? 'v6' : 'v4';
   const groups = await fetchOptimizedIps(c.env.BUDGET.fetch, settings, task.cdn_type, version);
   const source = groups[task.ip_group].length > 0 ? groups[task.ip_group] : groups.CT;
-  const desired = source.slice(0, task.record_count);
+  // 华为云一条记录可承载多个 IP，旧版把本线路的 IP 合并成单条记录。
+  const merged = task.account_type === 'huawei';
+  const desired = (merged
+    ? [[...source.slice(0, task.record_count)].sort().join(',')]
+    : source.slice(0, task.record_count)).filter(Boolean);
   if (desired.length === 0) throw new AppError(502, 'IP 优选接口未返回可用地址', 'OPTIMIZE_SOURCE_EMPTY');
 
-  const existing = (await provider.listRecords(zone, { page: 1, pageSize: 100, name: task.rr, type: task.record_type }))
-    .items.filter((record) => record.line === task.line && record.type === task.record_type)
-    .slice(0, 100);
+  const listed = await provider.listRecords(zone, { page: 1, pageSize: 100, name: task.rr });
+  const onLine = listed.items.filter((record) => record.line === task.line);
+  const cnames = onLine.filter((record) => record.type === 'CNAME');
+  const existing = onLine.filter((record) => record.type === task.record_type).slice(0, 100);
   const result: OptimizeRunResult = { added: 0, updated: 0, removed: 0, unchanged: 0, partial: false, desired: desired.length };
   const writes: (() => Promise<void>)[] = [];
+  // 同一线路存在 CNAME 时无法再写入 A/AAAA，旧版会先删除这些 CNAME 记录。
+  for (const record of cnames) {
+    writes.push(async () => { await provider.deleteRecord(zone, record.id); });
+  }
+  const sameValue = (value: string) => merged
+    ? value.split(',').map((item) => item.trim()).filter(Boolean).sort().join(',')
+    : value;
   for (let index = 0; index < desired.length; index += 1) {
     const ip = desired[index]!;
     const record = existing[index];
@@ -218,7 +250,7 @@ export async function executeOptimizeTask(c: Context<AppEnv>, task: OptimizeTask
       });
       continue;
     }
-    if (record.value === ip) {
+    if (sameValue(record.value) === ip) {
       result.unchanged += 1;
       continue;
     }

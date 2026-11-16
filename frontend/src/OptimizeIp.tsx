@@ -4,8 +4,8 @@ import { Icon } from './icons';
 import { InfoTip } from './InfoTip';
 import { Modal } from './Modal';
 
-interface OptimizeConfig { api: '0' | '1' | '2'; minMinutes: number; keyConfigured: boolean }
-interface DnsZone { id: number; name: string; thirdId: string | null }
+interface OptimizeConfig { api: '0' | '1' | '2'; minMinutes: number; keyConfigured: boolean; proxy: string }
+interface DnsZone { id: number; name: string; thirdId: string | null; accountType: string }
 interface DnsLine { id: string; name: string }
 interface OptimizeTask {
   id: number; domainId: number; domainName: string; rr: string; recordType: 'A' | 'AAAA';
@@ -25,7 +25,8 @@ function date(value: number | null): string {
 export function OptimizeIpSettings({ session, onExpired, onSaved }: SettingsProps) {
   const [api, setApi] = useState<'0' | '1' | '2'>('2');
   const [key, setKey] = useState('');
-  const [minMinutes, setMinMinutes] = useState('60');
+  const [proxy, setProxy] = useState('');
+  const [minMinutes, setMinMinutes] = useState('30');
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -43,6 +44,7 @@ export function OptimizeIpSettings({ session, onExpired, onSaved }: SettingsProp
       .then((result) => {
         if (controller.signal.aborted) return;
         setApi(result.api); setMinMinutes(String(result.minMinutes)); setKeyConfigured(result.keyConfigured);
+        setProxy(result.proxy ?? '');
       })
       .catch((failure) => { if (!controller.signal.aborted) handle(failure); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -56,9 +58,10 @@ export function OptimizeIpSettings({ session, onExpired, onSaved }: SettingsProp
     const controller = new AbortController();
     try {
       const result = await send<{ code: 0 } & OptimizeConfig>('/api/v1/optimize/settings', 'PUT', {
-        api, minMinutes: Number(minMinutes), key: key.trim() || undefined,
+        api, minMinutes: Number(minMinutes), key: key.trim() || undefined, proxy: proxy.trim(),
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setKey(''); setKeyConfigured(result.keyConfigured); setApi(result.api); setMinMinutes(String(result.minMinutes));
+      setProxy(result.proxy ?? '');
       if (onSaved) onSaved();
       else setNotice('优选设置已保存');
     } catch (failure) { handle(failure); }
@@ -87,6 +90,7 @@ export function OptimizeIpSettings({ session, onExpired, onSaved }: SettingsProp
           {(Object.keys(apiNames) as ('0' | '1' | '2')[]).map((value) => <option key={value} value={value}>{apiNames[value]}</option>)}
         </select></label>
         <label className="form-field"><span>接口密钥</span><input type="password" value={key} onChange={(event) => setKey(event.target.value)} maxLength={200} autoComplete="new-password" placeholder={keyConfigured ? '已配置，留空保留' : api === '2' ? '当前数据源无需密钥' : '填写接口密钥'} /></label>
+        {api === '2' && <label className="form-field"><span>代理地址（可选）</span><input value={proxy} onChange={(event) => setProxy(event.target.value)} maxLength={300} placeholder="留空则直接访问 GitHub，例如 https://ghfast.top/https://raw.githubusercontent.com/" /></label>}
         <div className="form-field"><div className="form-label"><label htmlFor="optimize-interval">执行间隔（分钟）</label><InfoTip label="执行间隔说明" text="cron 每次只执行一个到期任务，两次执行至少间隔设定分钟数。写入操作单次最多 5 个，超出部分会在下一次继续。" /></div>
           <input id="optimize-interval" type="number" inputMode="numeric" min={10} max={1440} value={minMinutes} onChange={(event) => setMinMinutes(event.target.value)} required />
         </div>
@@ -128,8 +132,8 @@ export function OptimizeIpTasks({ session, onExpired }: Props) {
       ]);
       if (signal.aborted) return;
       setTasks(taskResult.items);
-      setZones(zoneResult.items.filter((zone) => zone.thirdId));
-      setDomainId((current) => current || String(zoneResult.items.find((zone) => zone.thirdId)?.id ?? ''));
+      setZones(zoneResult.items.filter((zone) => zone.thirdId && zone.accountType !== 'cloudflare'));
+      setDomainId((current) => current || String(zoneResult.items.find((zone) => zone.thirdId && zone.accountType !== 'cloudflare')?.id ?? ''));
     } catch (failure) { if (!signal.aborted) handle(failure); }
     finally { if (!signal.aborted) setLoading(false); }
   }, [handle]);

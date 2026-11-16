@@ -6,7 +6,7 @@ import { requireSession, requireCsrf, requireAdmin, requireDomain, requireLegacy
 import { md5 } from 'js-md5';
 import { decrypt, encrypt, randomToken, sha256 } from '../security/crypto';
 import { DnsError, isRecordType, type DnsDomain, type DnsProvider, type DnsRecord, type DnsRecordInput, type RecordQuery } from '../dns/types';
-import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../dns/registry';
+import { createProvider, providerCatalog, providerMeta, recordTypeSupported, recordTypesFor, validateProviderConfig } from '../dns/registry';
 import { lookupDomainExpiration } from '../dns/expiration';
 import { checkDnsRecordValue, isDnsCheckType, lookupPublicDnsRecords } from '../dns/record-check';
 import type { SqlDatabase } from '../storage/sql';
@@ -263,11 +263,14 @@ function pageParams(c: Context<AppEnv>): { page: number; pageSize: number } {
   return parsed;
 }
 
-function recordInput(body: Record<string, unknown>): DnsRecordInput {
+function recordInput(body: Record<string, unknown>, providerType?: string): DnsRecordInput {
   const name = text(body, 'name', 128).trim();
   if (!RECORD_NAME.test(name)) throw new AppError(400, '主机记录格式无效', 'INVALID_RECORD_NAME');
   const type = text(body, 'type', 16).trim().toUpperCase();
   if (!isRecordType(type)) throw new AppError(400, '不支持的记录类型', 'INVALID_RECORD_TYPE');
+  if (providerType && !recordTypeSupported(providerType, type)) {
+    throw new AppError(400, `当前服务商不支持 ${type} 记录`, 'INVALID_RECORD_TYPE');
+  }
   const value = text(body, 'value', 2048).trim();
   if (!value) throw new AppError(400, '记录值不能为空', 'INVALID_RECORD_VALUE');
   const line = typeof body.line === 'string' && body.line.trim() ? body.line.trim().slice(0, 64) : 'default';
@@ -826,7 +829,7 @@ export function dnsRoutes() {
       ttl: body.ttl === undefined ? 600 : body.ttl,
       mx: body.mx === undefined || body.mx === '' ? 1 : body.mx,
       weight: body.weight === undefined || body.weight === '' ? 0 : body.weight,
-    });
+    }, domain.owner_type);
     const owner: AccountRow = {
       id: domain.owner_id, type: domain.owner_type, name: domain.owner_name,
       config_cipher: domain.owner_config_cipher, remark: domain.owner_remark,
@@ -861,7 +864,7 @@ export function dnsRoutes() {
       ttl: body.ttl === undefined || body.ttl === '' ? 600 : body.ttl,
       mx: body.mx === undefined || body.mx === '' ? 1 : body.mx,
       weight: body.weight === undefined || body.weight === '' ? 0 : body.weight,
-    });
+    }, domain.owner_type);
     const provider = await providerFor(c, legacyOwner(domain));
     let recordId: string;
     try {
@@ -1394,6 +1397,7 @@ export function dnsRoutes() {
       ]);
       return c.json({
         code: 0, lines, minTtl,
+        types: recordTypesFor(owner.type),
         groups: typeof provider.listRecordGroups === 'function',
         weightConfig: typeof provider.listWeightSubdomains === 'function',
       });
@@ -1406,7 +1410,7 @@ export function dnsRoutes() {
     await requireDomain(c, domainId, true);
     await consumeRateLimit(c, `dns:write:${c.get('principal').user.id}`, 120, 60);
     const { domain, account: owner } = await domainRow(c, domainId);
-    const inputData = recordInput(await input(c));
+    const inputData = recordInput(await input(c), owner.type);
     const provider = await providerFor(c, owner);
     let recordId: string;
     try { recordId = await provider.addRecord(toDnsDomain(domain), inputData); } catch (error) { providerError(error); }
@@ -1422,7 +1426,7 @@ export function dnsRoutes() {
     const { domain, account: owner } = await domainRow(c, domainId);
     const recordId = c.req.param('recordId');
     if (!/^[A-Za-z0-9_.|@:*\-]{1,255}$/.test(recordId)) throw new AppError(400, '记录编号无效', 'INVALID_RECORD_ID');
-    const inputData = recordInput(await input(c));
+    const inputData = recordInput(await input(c), owner.type);
     const provider = await providerFor(c, owner);
     try { await provider.updateRecord(toDnsDomain(domain), recordId, inputData); } catch (error) { providerError(error); }
     await audit(c, 'record.update', domain.name, `${recordId} ${inputData.type} ${inputData.name}`);
@@ -1555,7 +1559,7 @@ export function dnsRoutes() {
       if (candidate.ttl === undefined) candidate.ttl = body.ttl ?? 600;
       let data: DnsRecordInput;
       try {
-        data = recordInput(candidate);
+        data = recordInput(candidate, owner.type);
       } catch (error) {
         const message = error instanceof Error ? error.message.slice(0, 200) : '未知错误';
         failed++;
@@ -1626,7 +1630,7 @@ export function dnsRoutes() {
           mx: row.MX ?? null,
           weight: row.Weight ?? null,
           remark: row.Remark ?? null,
-        });
+        }, owner.type);
       } catch (error) {
         failed++;
         if (errors.length < 5) errors.push(error instanceof Error ? error.message.slice(0, 200) : '记录格式无效');

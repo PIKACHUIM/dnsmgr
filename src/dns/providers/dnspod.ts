@@ -16,6 +16,7 @@ const VERSION = '2021-03-23';
 
 export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fetch = fetch): DnsProvider {
   let grade: string | null = null;
+  let infoPromise: Promise<Record<string, unknown>> | null = null;
 
   async function request(action: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     const payload = JSON.stringify(params);
@@ -98,6 +99,13 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
     };
   }
 
+  /** 域名详情用于读取套餐等级与最小 TTL，同一实例内复用一次请求。 */
+  async function domainInfo(domain: DnsDomain): Promise<Record<string, unknown>> {
+    infoPromise ??= request('DescribeDomain', { Domain: domainName(domain) })
+      .then((data) => asRecord(data.DomainInfo ?? {}));
+    return infoPromise;
+  }
+
   return {
     type: 'dnspod',
 
@@ -169,21 +177,53 @@ export function createDnspodProvider(config: DnspodConfig, fetchImpl: typeof fet
     },
 
     async recordLines(domain): Promise<DnsLine[] | null> {
-      if (grade === null) {
-        const info = await request('DescribeDomain', { Domain: domainName(domain) });
-        grade = String(asRecord(info.DomainInfo ?? {}).Grade ?? 'DP_FREE');
+      // 新版分类接口在低版本套餐不可用，失败时退回按套餐读取平铺线路。
+      let data: Record<string, unknown> | null = null;
+      try {
+        data = await request('DescribeRecordLineCategoryList', { Domain: domainName(domain) });
+      } catch {
+        data = null;
       }
-      const data = await request('DescribeRecordLineList', { Domain: domainName(domain), DomainGrade: grade });
-      const lines = asArray(data.LineList);
-      if (lines.length === 0) return null;
-      return lines.map((raw) => {
+      const lines: DnsLine[] = [];
+      const walk = (raw: unknown, parent: string | null) => {
+        for (const item of asArray(raw)) {
+          const row = asRecord(item);
+          if (!row.Useful) continue;
+          const name = String(row.LineName ?? '');
+          const id = row.LineId === undefined || row.LineId === null || row.LineId === ''
+            ? `N.${name}` : String(row.LineId);
+          if (lines.some((line) => line.id === id)) continue;
+          lines.push({ id, name, parent });
+          if (row.SubGroup) walk(row.SubGroup, id);
+        }
+      };
+      walk(data?.LineList, null);
+      if (lines.length > 0) return lines;
+
+      if (grade === null) grade = String((await domainInfo(domain)).Grade ?? 'DP_FREE');
+      const fallback = await request('DescribeRecordLineList', { Domain: domainName(domain), DomainGrade: grade });
+      const rows = asArray(fallback.LineList);
+      if (rows.length === 0) return null;
+      return rows.map((raw) => {
         const row = asRecord(raw);
         return { id: String(row.LineId ?? '0'), name: String(row.LineName ?? '默认'), parent: null };
       });
     },
 
-    async minTtl(): Promise<number | null> {
-      return 600;
+    async minTtl(domain): Promise<number | null> {
+      const ttl = num((await domainInfo(domain)).TTL, 0);
+      if (ttl > 0) return ttl;
+      // 部分套餐不返回 DomainInfo.TTL，退回读取域名权限列表中的最低 TTL。
+      const data = await request('DescribeDomainPurview', { Domain: domainName(domain) });
+      for (const raw of asArray(data.PurviewList)) {
+        const row = asRecord(raw);
+        const name = String(row.Name ?? '');
+        if (name === '记录 TTL 最低' || name === 'Min TTL value') {
+          const value = num(row.Value, 0);
+          if (value > 0) return value;
+        }
+      }
+      return null;
     },
 
     async listDomainAliases(domain): Promise<DnsDomainAlias[]> {

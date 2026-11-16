@@ -1,4 +1,4 @@
-import { DnsError, type DnsProvider } from './types';
+import { DnsError, RECORD_TYPES, type DnsProvider } from './types';
 import { createAliyunProvider } from './providers/aliyun';
 import { createAliyunEsaProvider } from './providers/aliyunesa';
 import { createAwsProvider } from './providers/aws';
@@ -35,7 +35,12 @@ export interface ProviderMeta {
   supported: boolean;
   fields: ProviderField[];
   capabilities: { status: boolean; remark: boolean; weight: boolean; lines: boolean; addDomain: boolean };
+  /** 仅在部分服务商可用的记录类型，例如阿里云的 ALIAS、PowerDNS 的 LOC/LUA。 */
+  recordTypes?: string[];
 }
+
+/** 多数服务商通用的记录类型；ALIAS/LOC/LUA/APP 需要服务商单独声明。 */
+const BASE_RECORD_TYPES = RECORD_TYPES.filter((type) => !['ALIAS', 'LOC', 'LUA', 'APP'].includes(type));
 
 const akSk = (idLabel: string, secretLabel: string): ProviderField[] => [
   { key: 'AccessKeyId', label: idLabel, required: true },
@@ -58,6 +63,7 @@ const catalog: ProviderMeta[] = [
       { key: 'AccessKeySecret', label: 'AccessKeySecret', required: true, secret: true },
     ],
     capabilities: { status: true, remark: true, weight: true, lines: true, addDomain: true },
+    recordTypes: ['ALIAS'],
   },
   {
     type: 'dnspod', name: '腾讯云 DNSPod', supported: true,
@@ -98,7 +104,7 @@ const catalog: ProviderMeta[] = [
   {
     type: 'huawei', name: '华为云 DNS', supported: true,
     fields: akSk('AccessKeyId', 'SecretAccessKey'),
-    capabilities: { status: true, remark: false, weight: true, lines: false, addDomain: true },
+    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true },
   },
   {
     type: 'huoshan', name: '火山引擎 DNS', supported: true,
@@ -119,7 +125,7 @@ const catalog: ProviderMeta[] = [
       { key: 'access_key_id', label: 'access_key_id', required: true },
       { key: 'secret_access_key', label: 'secret_access_key', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: false, weight: false, lines: true, addDomain: true },
+    capabilities: { status: true, remark: false, weight: true, lines: true, addDomain: true },
   },
   {
     type: 'namesilo', name: 'NameSilo', supported: true,
@@ -133,6 +139,7 @@ const catalog: ProviderMeta[] = [
       { key: 'apisecret', label: 'API Secret', required: true, secret: true },
     ],
     capabilities: { status: false, remark: false, weight: false, lines: true, addDomain: false },
+    recordTypes: ['ALIAS'],
   },
   {
     type: 'west', name: '西部数码', supported: true,
@@ -192,6 +199,7 @@ const catalog: ProviderMeta[] = [
       { key: 'password', label: '密码', required: true, secret: true },
     ],
     capabilities: { status: false, remark: false, weight: false, lines: true, addDomain: false },
+    recordTypes: ['ALIAS'],
   },
   {
     type: 'powerdns', name: 'PowerDNS', supported: true,
@@ -201,6 +209,7 @@ const catalog: ProviderMeta[] = [
       { key: 'apikey', label: 'API Key', required: true, secret: true },
     ],
     capabilities: { status: true, remark: true, weight: false, lines: true, addDomain: true },
+    recordTypes: ['ALIAS', 'LOC', 'LUA'],
   },
   {
     type: 'technitium', name: 'Technitium DNS', supported: true,
@@ -209,6 +218,7 @@ const catalog: ProviderMeta[] = [
       { key: 'token', label: 'API Token', required: true, secret: true },
     ],
     capabilities: { status: true, remark: true, weight: false, lines: true, addDomain: true },
+    recordTypes: ['APP'],
   },
 ];
 
@@ -225,6 +235,15 @@ export function providerMeta(type: string): ProviderMeta {
     throw new DnsError('未知的 DNS 驱动', 400, 'INVALID_DNS_PROVIDER');
   }
   return meta;
+}
+
+/** 某个服务商可用的记录类型：通用类型加上服务商单独声明的类型。 */
+export function recordTypesFor(type: string): string[] {
+  return [...BASE_RECORD_TYPES, ...(providerMeta(type).recordTypes ?? [])];
+}
+
+export function recordTypeSupported(type: string, recordType: string): boolean {
+  return recordTypesFor(type).includes(recordType);
 }
 
 export function validateProviderConfig(type: string, config: unknown): Record<string, string> {

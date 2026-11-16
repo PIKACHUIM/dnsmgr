@@ -34,6 +34,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired, embedded = 
   const [recordChecks, setRecordChecks] = useState<{ [id: string]: RecordCheck }>({});
   const [checkingRecordId, setCheckingRecordId] = useState<string | null>(null);
   const [lines, setLines] = useState<DnsLine[] | null>(null);
+  const [types, setTypes] = useState<string[] | null>(null);
   const [capabilities, setCapabilities] = useState({ groups: false, weight: false });
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -68,13 +69,14 @@ export function DnsRecords({ session, domainId, navigate, onExpired, embedded = 
       const [info, list, lineInfo] = await Promise.all([
         request<{ code: 0; domain: DomainInfo }>(`/api/v1/dns/domains/${domainId}`, { signal }),
         request<{ code: 0; total: number; items: Record[] }>(`/api/v1/dns/domains/${domainId}/records?${params}`, { signal }),
-        request<{ code: 0; lines: DnsLine[] | null; minTtl: number | null; groups?: boolean; weightConfig?: boolean }>(`/api/v1/dns/domains/${domainId}/lines`, { signal }),
+        request<{ code: 0; lines: DnsLine[] | null; minTtl: number | null; types?: string[]; groups?: boolean; weightConfig?: boolean }>(`/api/v1/dns/domains/${domainId}/lines`, { signal }),
       ]);
       if (signal.aborted) return;
       setDomain(info.domain);
       setRecords(list.items);
       setTotal(list.total);
       setLines(lineInfo.lines);
+      setTypes(lineInfo.types ?? null);
       setCapabilities({ groups: lineInfo.groups === true, weight: lineInfo.weightConfig === true });
       setForm((current) => current.line === 'default' && lineInfo.lines?.[0]
         ? { ...current, line: lineInfo.lines[0].id }
@@ -237,6 +239,9 @@ export function DnsRecords({ session, domainId, navigate, onExpired, embedded = 
     setFormOpen(true);
   }
 
+  const typeOptions = types ?? TYPES;
+  const formTypes = form.type && !typeOptions.includes(form.type) ? [form.type, ...typeOptions] : typeOptions;
+
   return <>
     <div className="page-tools">
       {!embedded && <a className="button button-secondary" href="/domain" onClick={(event) => { event.preventDefault(); navigate('/domain'); }}>返回域名列表</a>}
@@ -315,7 +320,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired, embedded = 
     {formOpen && <Modal title={editing ? '修改解析记录' : '添加解析记录'} wide onClose={() => { if (!busy) { setFormOpen(false); setEditing(null); } }}>
       <form className="dns-form" onSubmit={submit}>
         <label className="form-field"><span>主机记录</span><input value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="@ 或 www" required maxLength={128} /></label>
-        <label className="form-field"><span>类型</span><select value={form.type} onChange={(event) => update('type', event.target.value)}>{TYPES.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}</select></label>
+        <label className="form-field"><span>类型</span><select value={form.type} onChange={(event) => update('type', event.target.value)}>{formTypes.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}</select></label>
         <label className="form-field"><span>记录值</span><input value={form.value} onChange={(event) => update('value', event.target.value)} required maxLength={2048} placeholder="IP、目标域名或文本" /></label>
         <label className="form-field"><span>线路</span><select value={form.line} onChange={(event) => update('line', event.target.value)}>
           {lines === null
@@ -337,7 +342,7 @@ export function DnsRecords({ session, domainId, navigate, onExpired, embedded = 
         <label className="form-field"><span>默认类型（留空自动判断）</span>
           <select value={batchType} onChange={(event) => setBatchType(event.target.value)}>
             <option value="">自动判断</option>
-            {TYPES.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}
+            {typeOptions.map((type) => <option key={type} value={type}>{TYPE_LABELS[type] ?? type}</option>)}
           </select>
         </label>
         <label className="form-field" style={{ gridColumn: '1 / -1' }}><span>记录行</span>

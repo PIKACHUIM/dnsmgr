@@ -212,7 +212,7 @@ export function createHenetProvider(config: HenetConfig, fetchImpl: typeof fetch
     async listRecords(domain, query: RecordQuery): Promise<PageResult<DnsRecord>> {
       const zone = await zoneId(domain);
       const html = await authorized('GET', `index.cgi?hosted_dns_zoneid=${zone}&menu=edit_zone&hosted_dns_editzone=`);
-      let items = parseRecords(html, domain).filter((record) => {
+      const items = parseRecords(html, domain).filter((record) => {
         if (query.name && record.name.toLowerCase() !== query.name.toLowerCase()) return false;
         if (query.type && record.type !== query.type) return false;
         if (query.value && record.value !== query.value) return false;
@@ -224,8 +224,7 @@ export function createHenetProvider(config: HenetConfig, fetchImpl: typeof fetch
         return true;
       });
       const start = (query.page - 1) * query.pageSize;
-      items = items.slice(start, start + query.pageSize);
-      return { total: items.length, items };
+      return { total: items.length, items: items.slice(start, start + query.pageSize) };
     },
 
     async addRecord(domain, input: DnsRecordInput) {

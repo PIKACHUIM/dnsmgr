@@ -7,7 +7,7 @@ import { checkDnsRecordValue, lookupPublicDnsRecords } from '../src/dns/record-c
 import { createCloudflareProvider } from '../src/dns/providers/cloudflare';
 import { createAliyunProvider } from '../src/dns/providers/aliyun';
 import { createDnspodProvider } from '../src/dns/providers/dnspod';
-import { createProvider, providerCatalog, providerMeta, validateProviderConfig } from '../src/dns/registry';
+import { createProvider, providerCatalog, providerMeta, recordTypeSupported, recordTypesFor, validateProviderConfig } from '../src/dns/registry';
 
 interface Call { url: string; init: RequestInit }
 
@@ -325,5 +325,20 @@ describe('provider registry', () => {
     expect(() => validateProviderConfig('goedge', { base_url: 'https://x' })).toThrow(/AccessKey ID/);
     expect(() => validateProviderConfig('powerdns', { ip: '127.0.0.1', port: '8081' })).toThrow(/API Key/);
     expect(validateProviderConfig('dynv6', { token: 't' })).toEqual({ token: 't' });
+  });
+
+  it('gates provider-only record types', () => {
+    expect(recordTypesFor('aliyun')).toContain('ALIAS');
+    expect(recordTypeSupported('aliyun', 'ALIAS')).toBe(true);
+    expect(recordTypeSupported('henet', 'ALIAS')).toBe(true);
+    expect(recordTypeSupported('powerdns', 'ALIAS')).toBe(true);
+    expect(recordTypeSupported('spaceship', 'ALIAS')).toBe(true);
+    expect(recordTypeSupported('cloudflare', 'ALIAS')).toBe(false);
+    expect(recordTypeSupported('powerdns', 'LOC')).toBe(true);
+    expect(recordTypeSupported('powerdns', 'LUA')).toBe(true);
+    expect(recordTypeSupported('aliyun', 'LOC')).toBe(false);
+    expect(recordTypeSupported('technitium', 'APP')).toBe(true);
+    expect(recordTypeSupported('dnspod', 'APP')).toBe(false);
+    expect(recordTypeSupported('dnspod', 'A')).toBe(true);
   });
 });

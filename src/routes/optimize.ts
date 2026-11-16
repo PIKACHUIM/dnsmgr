@@ -7,8 +7,8 @@ import { decrypt } from '../security/crypto';
 import { createProvider } from '../dns/registry';
 import type { DnsDomain } from '../dns/types';
 import {
-  OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN, executeOptimizeDue, fetchOptimizeCredit, loadOptimizeTask, readOptimizeSettings,
-  runOptimizeTask, type IpGroup, type OptimizeTaskRow,
+  OPTIMIZE_API, OPTIMIZE_KEY, OPTIMIZE_MIN, OPTIMIZE_PROXY, executeOptimizeDue, fetchOptimizeCredit, loadOptimizeTask,
+  optimizeProxyPrefix, readOptimizeSettings, runOptimizeTask, type IpGroup, type OptimizeTaskRow,
 } from '../optimize';
 
 function requireSql(c: Context<AppEnv>): void {
@@ -86,7 +86,10 @@ export function optimizeRoutes() {
   routes.get('/api/v1/optimize/settings', requireSession, async (c) => {
     requireAdmin(c);
     const settings = await readOptimizeSettings(c.get('db'));
-    return c.json({ code: 0, api: settings.api, minMinutes: settings.minMinutes, keyConfigured: Boolean(settings.key) });
+    return c.json({
+      code: 0, api: settings.api, minMinutes: settings.minMinutes,
+      keyConfigured: Boolean(settings.key), proxy: settings.proxy,
+    });
   });
 
   routes.put('/api/v1/optimize/settings', requireSession, requireCsrf, async (c) => {
@@ -99,16 +102,22 @@ export function optimizeRoutes() {
       const key = typeof body.key === 'string' ? body.key.trim() : '';
       if (!key && !current.key) throw new AppError(400, 'wetest.vip 接口需要填写密钥', 'OPTIMIZE_KEY_REQUIRED');
     }
-    const minMinutes = body.minMinutes === undefined ? null : boundedInteger(body.minMinutes, 60, 10, 1440, 'INVALID_OPTIMIZE_INTERVAL');
+    const minMinutes = body.minMinutes === undefined ? null : boundedInteger(body.minMinutes, 30, 10, 1440, 'INVALID_OPTIMIZE_INTERVAL');
+    const proxy = typeof body.proxy === 'string' ? body.proxy.trim().slice(0, 300) : null;
+    if (proxy) optimizeProxyPrefix(proxy);
     if (api) await putSetting(c, OPTIMIZE_API, api);
     if (typeof body.key === 'string' && body.key.trim()) await putSetting(c, OPTIMIZE_KEY, body.key.trim().slice(0, 200));
     if (minMinutes !== null) await putSetting(c, OPTIMIZE_MIN, String(minMinutes));
+    if (proxy !== null) await putSetting(c, OPTIMIZE_PROXY, proxy);
     const settings = await readOptimizeSettings(c.get('db'));
     await c.get('db').execute(
       'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
       [c.get('principal').user.id, 'optimize.settings', 'system', `api=${settings.api} min=${settings.minMinutes}`, nowSeconds()],
     );
-    return c.json({ code: 0, api: settings.api, minMinutes: settings.minMinutes, keyConfigured: Boolean(settings.key) });
+    return c.json({
+      code: 0, api: settings.api, minMinutes: settings.minMinutes,
+      keyConfigured: Boolean(settings.key), proxy: settings.proxy,
+    });
   });
 
   routes.post('/api/v1/optimize/credit', requireSession, requireCsrf, async (c) => {

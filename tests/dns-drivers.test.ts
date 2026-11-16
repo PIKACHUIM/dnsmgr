@@ -98,6 +98,25 @@ describe('Huawei drive', () => {
     expect(headers.Authorization).toMatch(/^SDK-HMAC-SHA256 Access=AK, SignedHeaders=/);
     expect(calls[0]!.url).toContain('name=www.example.com.');
   });
+
+  it('offers the fixed line table and submits comma values as one record set', async () => {
+    const { calls, implementation } = fakeFetch(() => ({ body: { id: 'r9' } }));
+    const provider = createHuaweiProvider({ AccessKeyId: 'AK', SecretAccessKey: 'SK' }, implementation);
+    const lines = await provider.recordLines(zone);
+    expect(lines).toHaveLength(442);
+    expect(lines).toContainEqual({ id: 'default_view', name: '全网默认', parent: null });
+    expect(lines).toContainEqual({ id: 'Dianxin', name: '电信', parent: null });
+    expect(lines).toContainEqual({ id: 'Dianxin_Beijing', name: '电信_北京', parent: 'Dianxin_Huabei' });
+
+    await provider.addRecord(zone, { ...input, line: 'Dianxin', value: '1.1.1.1,2.2.2.2' });
+    expect(JSON.parse(calls[0]!.body)).toMatchObject({
+      type: 'A', records: ['2.2.2.2', '1.1.1.1'], line: 'Dianxin',
+    });
+    await provider.addRecord(zone, { ...input, type: 'TXT', value: 'v=spf1 include:a.com,include:b.com' });
+    expect(JSON.parse(calls[1]!.body)).toMatchObject({
+      records: ['"v=spf1 include:a.com,include:b.com"'],
+    });
+  });
 });
 
 describe('Volcengine drive', () => {
@@ -163,6 +182,26 @@ describe('Technitium drive', () => {
     expect(form.get('domain')).toBe('www.example.com');
     expect(form.get('ipAddress')).toBe('1.1.1.1');
     expect(form.get('newIpAddress')).toBe('2.2.2.2');
+  });
+
+  it('reads and recreates APP records', async () => {
+    const records = [{
+      name: 'app.example.com', type: 'APP', ttl: 300, disabled: false,
+      rData: { appName: 'app', classPath: 'Class', recordData: 'x=1' },
+    }];
+    const { calls, implementation } = fakeFetch(() => ({ body: { status: 'ok', response: { records } } }));
+    const provider = createTechnitiumProvider({ url: 'https://dns.local', token: 't' }, implementation);
+    const page = await provider.listRecords(zone, { page: 1, pageSize: 20 });
+    expect(page.items[0]).toMatchObject({ type: 'APP', value: 'app Class x=1' });
+
+    calls.length = 0;
+    await provider.updateRecord(zone, '0', { ...input, name: 'app', type: 'APP', value: 'app Class y=2' });
+    const removed = new URLSearchParams(calls[1]!.body);
+    expect(removed.get('appName')).toBe('app');
+    const added = new URLSearchParams(calls[2]!.body);
+    expect(added.get('appName')).toBe('app');
+    expect(added.get('classPath')).toBe('Class');
+    expect(added.get('recordData')).toBe('y=2');
   });
 });
 
@@ -375,6 +414,18 @@ describe('HE.net drive', () => {
     expect(page.items[0]).toMatchObject({ id: 'r-1', name: 'www', type: 'A', value: '1.1.1.1', ttl: 600 });
     await expect(provider.setRecordStatus(zone, 'r-1', false)).rejects.toBeInstanceOf(DnsError);
   });
+
+  it('reports the filtered total before slicing the page', async () => {
+    const rows = ['www', 'mail', 'ftp'].map((host, index) => `<tr class="dns_tr" id="row${index + 1}"><td>${index + 1}</td>`
+      + `<td>r-${index + 1}</td><td>${host}.example.com</td><td>A</td><td>600</td><td></td><td>1.1.1.${index + 1}</td></tr>`).join('');
+    const { implementation } = fakeFetch((call) => (call.body.includes('email=')
+      ? { body: '<a href="?hosted_dns_zoneid=55">example.com</a>', text: true }
+      : { body: `<table>${rows}</table>`, text: true }));
+    const provider = createHenetProvider({ username: 'u', password: 'p' }, implementation);
+    const page = await provider.listRecords({ ...zone, id: '55' }, { page: 1, pageSize: 1 });
+    expect(page.total).toBe(3);
+    expect(page.items).toHaveLength(1);
+  });
 });
 
 describe('URL forwarding types', () => {
@@ -413,5 +464,35 @@ describe('DNSPod alias drive', () => {
     expect(JSON.parse(calls[1]!.body)).toMatchObject({ Domain: 'example.com', DomainAlias: 'alias2.example.com' });
     expect((calls[2]!.init.headers as Record<string, string>)['X-TC-Action']).toBe('DeleteDomainAlias');
     expect(JSON.parse(calls[2]!.body)).toMatchObject({ DomainAliasId: 11 });
+  });
+});
+
+describe('DNSPod line drive', () => {
+  it('builds the line tree from the category API and reads the zone TTL', async () => {
+    const { calls, implementation } = fakeFetch((call) => {
+      const action = (call.init.headers as Record<string, string>)['X-TC-Action'];
+      if (action === 'DescribeRecordLineCategoryList') {
+        return { body: { Response: { LineList: [
+          { LineId: '10', LineName: '电信', Useful: true, SubGroup: [
+            { LineId: '10=0', LineName: '电信_北京', Useful: true },
+          ] },
+          { LineId: '0', LineName: '默认', Useful: true },
+          { LineId: '99', LineName: '不可用', Useful: false },
+        ] } } };
+      }
+      if (action === 'DescribeDomain') {
+        return { body: { Response: { DomainInfo: { TTL: 120, Grade: 'DP_FREE' } } } };
+      }
+      return { body: { Response: {} } };
+    });
+    const provider = createDnspodProvider({ SecretId: 'id', SecretKey: 'key' }, implementation);
+    expect(await provider.recordLines(zone)).toEqual([
+      { id: '10', name: '电信', parent: null },
+      { id: '10=0', name: '电信_北京', parent: '10' },
+      { id: '0', name: '默认', parent: null },
+    ]);
+    expect(await provider.minTtl(zone)).toBe(120);
+    expect(calls.filter((call) => (call.init.headers as Record<string, string>)['X-TC-Action'] === 'DescribeDomain'))
+      .toHaveLength(1);
   });
 });
