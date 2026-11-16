@@ -43,6 +43,7 @@ interface SourceIssuanceRow extends Record<string, unknown> {
   updated_at: number;
   renewal_of: number | null;
   challenge_map_json: string;
+  zone_map_json: string;
 }
 
 interface AccountRow extends Record<string, unknown> {
@@ -166,12 +167,13 @@ async function createRenewalOrder(
         (id,account_id,dns_domain_id,dns_account_id,dns_config_cipher,dns_zone_name,dns_zone_remote_id,created_by,
          directory,directory_json,account_kid,account_key_cipher,replay_nonce,claimed_nonce,claimed_at,domains_json,
          authorization_state_json,authorization_index,status,remote_order_url,finalize_url,certificate_url,csr_der,
-         private_key_cipher,cert_order_id,last_error,created_at,updated_at,renewal_of,challenge_map_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,NULL,?,?,?,?,?)`,
+         private_key_cipher,cert_order_id,last_error,created_at,updated_at,renewal_of,challenge_map_json,zone_map_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,NULL,?,?,?,?,?,?)`,
       args: [orderId, issuance.account_id, issuance.dns_domain_id, issuance.dns_account_id, issuance.dns_config_cipher,
         issuance.dns_zone_name, issuance.dns_zone_remote_id, source.created_by, issuance.directory, issuance.directory_json,
         issuance.account_kid, issuance.account_key_cipher, nonce, null, null, JSON.stringify(domains), '[]', 0, 'draft',
-        generated.csrDer, privateKeyCipher, null, now, now, source.id, issuance.challenge_map_json ?? '{}'],
+        generated.csrDer, privateKeyCipher, null, now, now, source.id, issuance.challenge_map_json ?? '{}',
+        issuance.zone_map_json ?? '{}'],
     },
     {
       sql: 'INSERT INTO audit_logs (user_id,action,target,detail,created_at) VALUES (?,?,?,?,?)',
@@ -189,7 +191,7 @@ export async function executeCertificateRenewal(
 
   const active = await db.query<SourceIssuanceRow>(
     `SELECT id,account_id,dns_domain_id,dns_account_id,directory,directory_json,account_kid,account_key_cipher,
-       dns_config_cipher,dns_zone_name,dns_zone_remote_id,status,updated_at,renewal_of,challenge_map_json
+       dns_config_cipher,dns_zone_name,dns_zone_remote_id,status,updated_at,renewal_of,challenge_map_json,zone_map_json
      FROM cert_acme_orders
      WHERE renewal_of IS NOT NULL AND status NOT IN ('issued','failed','cancelled','outcome_unknown')
      ORDER BY updated_at ASC,id ASC LIMIT 1`,
@@ -221,7 +223,7 @@ export async function executeCertificateRenewal(
 
   const issuances = await db.query<SourceIssuanceRow>(
     `SELECT id,account_id,dns_domain_id,dns_account_id,directory,directory_json,account_kid,account_key_cipher,
-       dns_config_cipher,dns_zone_name,dns_zone_remote_id,status,updated_at,renewal_of,challenge_map_json
+       dns_config_cipher,dns_zone_name,dns_zone_remote_id,status,updated_at,renewal_of,challenge_map_json,zone_map_json
      FROM cert_acme_orders WHERE cert_order_id=? ORDER BY id DESC LIMIT 1`, [source.id],
   );
   const issuance = issuances[0];
@@ -231,7 +233,7 @@ export async function executeCertificateRenewal(
     const orderId = await createRenewalOrder(env, db, source, issuance);
     const rows = await db.query<SourceIssuanceRow>(
       `SELECT id,account_id,dns_domain_id,dns_account_id,directory,directory_json,account_kid,account_key_cipher,
-         dns_config_cipher,dns_zone_name,dns_zone_remote_id,status,updated_at,renewal_of,challenge_map_json
+         dns_config_cipher,dns_zone_name,dns_zone_remote_id,status,updated_at,renewal_of,challenge_map_json,zone_map_json
        FROM cert_acme_orders WHERE id=?`, [orderId],
     );
     const status = rows[0] ? await advance(env, db, rows[0], source.created_by) : 'draft';

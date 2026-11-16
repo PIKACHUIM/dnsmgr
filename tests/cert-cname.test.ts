@@ -12,7 +12,6 @@ describe('CNAME proxy API', () => {
   let bindings: Bindings;
   let cookie = '';
   let csrf = '';
-  let zoneId = 0;
   let proxyZoneId = 0;
 
   beforeEach(async () => {
@@ -36,10 +35,9 @@ describe('CNAME proxy API', () => {
     await testDb.db.execute(
       "INSERT INTO dns_accounts (id,type,name,config_cipher,created_at,updated_at) VALUES (1,'cloudflare','main','cipher',1,1)",
     );
-    const main = await testDb.db.execute(
-      "INSERT INTO dns_domains (account_id,name,third_id,created_at,updated_at) VALUES (1,'example.test','main-zone',1,1) RETURNING id",
+    await testDb.db.execute(
+      "INSERT INTO dns_domains (account_id,name,third_id,created_at,updated_at) VALUES (1,'example.test','main-zone',1,1)",
     );
-    zoneId = Number(main.rows[0]!.id);
     const proxy = await testDb.db.execute(
       "INSERT INTO dns_domains (account_id,name,third_id,created_at,updated_at) VALUES (1,'proxy.test','proxy-zone',1,1) RETURNING id",
     );
@@ -96,7 +94,7 @@ describe('CNAME proxy API', () => {
     expect(await testDb.db.query('SELECT id FROM cert_cname_proxies')).toEqual([]);
   });
 
-  it('routes ACME challenge TXT records through a proxy zone and rejects dispersed zones', async () => {
+  it('routes ACME challenge TXT records through a proxy zone and across dispersed zones', async () => {
     await send('/api/v1/cert/cname', 'POST', { domain: 'customer.test', target: '_acme-challenge.customer.test.proxy.test' });
     await send('/api/v1/cert/cname', 'POST', { domain: 'other.test', target: '_acme-challenge.other.test.example.test' });
     await testDb.db.execute(
@@ -107,7 +105,7 @@ describe('CNAME proxy API', () => {
     );
 
     const proxied = await send('/api/v1/cert/acme/orders', 'POST', {
-      accountId: 1, dnsDomainId: zoneId, domains: ['customer.test'],
+      accountId: 1, domains: ['customer.test'],
     });
     expect(proxied.status, JSON.stringify(await proxied.clone().json())).toBe(200);
     const order = await proxied.json() as { id: number };
@@ -123,19 +121,26 @@ describe('CNAME proxy API', () => {
       `UPDATE cert_acme_accounts SET replay_nonce='nonce-value',claimed_nonce=NULL,claimed_at=NULL WHERE id=1`,
     );
     const dispersed = await send('/api/v1/cert/acme/orders', 'POST', {
-      accountId: 1, dnsDomainId: zoneId, domains: ['customer.test', 'other.test'],
+      accountId: 1, domains: ['customer.test', 'other.test'],
     });
-    expect(dispersed.status).toBe(400);
-    expect((await dispersed.json()).reason).toBe('ACME_MULTI_ZONE_UNSUPPORTED');
+    expect(dispersed.status, JSON.stringify(await dispersed.clone().json())).toBe(200);
+    const dispersedOrder = await dispersed.json() as { id: number };
+    const dispersedStored = await testDb.db.query<{ challenge_map_json: string }>(
+      'SELECT challenge_map_json FROM cert_acme_orders WHERE id=?', [dispersedOrder.id],
+    );
+    expect(JSON.parse(dispersedStored[0]!.challenge_map_json)).toEqual({
+      'customer.test': '_acme-challenge.customer.test.proxy.test',
+      'other.test': '_acme-challenge.other.test.example.test',
+    });
 
     await testDb.db.execute('UPDATE cert_cname_proxies SET enabled=0');
     await testDb.db.execute(
       `UPDATE cert_acme_accounts SET replay_nonce='nonce-value',claimed_nonce=NULL,claimed_at=NULL WHERE id=1`,
     );
     const disabled = await send('/api/v1/cert/acme/orders', 'POST', {
-      accountId: 1, dnsDomainId: zoneId, domains: ['customer.test'],
+      accountId: 1, domains: ['customer.test'],
     });
     expect(disabled.status).toBe(400);
-    expect((await disabled.json()).reason).toBe('ACME_DNS_ZONE_MISMATCH');
+    expect((await disabled.json()).reason).toBe('ACME_DNS_ZONE_MISSING');
   });
 });

@@ -36,6 +36,25 @@ interface AccountRow extends Record<string, unknown> {
   updated_at: number;
 }
 
+interface AccountZoneRow extends Record<string, unknown> {
+  account_id: number;
+  directory: AcmeEnvironment;
+  directory_json: string | null;
+  email: string;
+  kid: string | null;
+  replay_nonce: string | null;
+  claimed_nonce: string | null;
+  account_key_cipher: string;
+  status: string;
+  ca: string;
+  zone_id: number | null;
+  zone_name: string | null;
+  zone_third_id: string | null;
+  zone_account_id: number | null;
+  zone_type: string | null;
+  zone_config_cipher: string | null;
+}
+
 interface IssuanceRow extends Record<string, unknown> {
   id: number;
   account_id: number;
@@ -62,6 +81,13 @@ interface IssuanceRow extends Record<string, unknown> {
   renewal_of: number | null;
   ca: string;
   challenge_map_json: string;
+  zone_map_json: string;
+  challenge_zone_id: number | null;
+  challenge_zone_name: string | null;
+  challenge_zone_remote_id: string | null;
+  challenge_zone_account_id: number | null;
+  challenge_zone_type: string | null;
+  challenge_zone_config_cipher: string | null;
   dns_config_cipher: string;
   dns_type: string;
   dns_zone_name: string;
@@ -80,6 +106,7 @@ interface AuthorizationState {
   txtName?: string;
   txtValue?: string;
   dnsRecordId?: string;
+  zone?: { id: number; name: string };
   challengeStatus?: 'ready' | 'adding' | 'present' | 'unknown' | 'triggering' | 'submitted' | 'valid' | 'cleaning';
 }
 
@@ -175,10 +202,16 @@ async function accountById(c: Context<AppEnv>, accountId: number): Promise<Accou
 }
 
 const ISSUANCE_SELECT = `SELECT o.*, a.config_cipher AS dns_config_cipher, a.type AS dns_type,
-      d.name AS dns_zone_name, d.third_id AS dns_zone_remote_id
+      d.name AS dns_zone_name, d.third_id AS dns_zone_remote_id,
+      z.id AS challenge_zone_id, z.name AS challenge_zone_name, z.third_id AS challenge_zone_remote_id,
+      z.account_id AS challenge_zone_account_id,
+      za.type AS challenge_zone_type, za.config_cipher AS challenge_zone_config_cipher
      FROM cert_acme_orders o
      JOIN dns_accounts a ON a.id=o.dns_account_id
-     JOIN dns_domains d ON d.id=o.dns_domain_id`;
+     JOIN dns_domains d ON d.id=o.dns_domain_id
+     LEFT JOIN dns_domains z
+       ON z.id=COALESCE(json_extract(o.authorization_state_json,'$['||o.authorization_index||'].zone.id'),o.dns_domain_id)
+     LEFT JOIN dns_accounts za ON za.id=z.account_id`;
 
 async function issuanceById(c: Context<AppEnv>, orderId: number): Promise<IssuanceRow> {
   const rows = await c.get('db').query<IssuanceRow>(`${ISSUANCE_SELECT} WHERE o.id=?`, [orderId]);
@@ -290,8 +323,22 @@ function challengeMapFrom(row: { challenge_map_json: string | null }): Record<st
   }
 }
 
-interface ChallengeZone {
+interface ChallengeZone extends Record<string, unknown> {
   id: number; name: string; remoteId: string; accountId: number; type: string; configCipher: string;
+}
+
+function zoneMapFrom(row: { zone_map_json: string | null }): Record<string, { id: number; name: string }> {
+  if (!row.zone_map_json) return {};
+  try {
+    const parsed: unknown = JSON.parse(row.zone_map_json);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed as Record<string, unknown>).filter((entry): entry is [string, { id: number; name: string }] => {
+      const value = entry[1] as { id?: unknown; name?: unknown } | null | undefined;
+      return Boolean(value) && typeof value!.id === 'number' && typeof value!.name === 'string';
+    }));
+  } catch {
+    return {};
+  }
 }
 
 interface ProxyRow extends Record<string, unknown> {
@@ -305,36 +352,93 @@ interface ProxyRow extends Record<string, unknown> {
   config_cipher: string;
 }
 
+async function syncedZones(c: Context<AppEnv>): Promise<ChallengeZone[]> {
+  const rows = await c.get('db').query<ChallengeZone>(
+    `SELECT d.id,d.name,d.third_id AS remoteId,d.account_id AS accountId,da.type AS type,da.config_cipher AS configCipher
+     FROM dns_domains d JOIN dns_accounts da ON da.id=d.account_id
+     WHERE d.third_id IS NOT NULL AND length(trim(d.third_id))>0
+     ORDER BY length(d.name) DESC, d.id`,
+  );
+  return rows;
+}
+
+function zoneForName(zones: ChallengeZone[], name: string): ChallengeZone | undefined {
+  return zones.find((zone) => coversZone(name, zone.name));
+}
+
+interface ChallengeTarget {
+  provider: ReturnType<typeof createProvider>;
+  zone: DnsDomain;
+  zoneName: string;
+}
+
+/** 按 challenge 所属 Zone 取 DNS 凭据；行查询已一并带出，老订单没有记录 zone 时退回订单上的主 Zone。 */
+async function challengeTarget(c: Context<AppEnv>, row: IssuanceRow, state: AuthorizationState): Promise<ChallengeTarget> {
+  const remoteId = row.challenge_zone_remote_id;
+  const type = row.challenge_zone_type;
+  const configCipher = row.challenge_zone_config_cipher;
+  const zoneName = row.challenge_zone_name;
+  if (remoteId && type && configCipher && zoneName) {
+    let config: Record<string, string>;
+    try { config = JSON.parse(await decrypt(configCipher, c.env.APP_KEY, `dns-account/${row.challenge_zone_account_id ?? row.dns_account_id}`)) as Record<string, string>; }
+    catch { throw new AppError(503, 'DNS 账户凭据不可用', 'DNS_ACCOUNT_CONFIG_UNAVAILABLE'); }
+    return { provider: createProvider(type, config, c.env.BUDGET.fetch), zone: { id: remoteId, name: zoneName, recordCount: 0 }, zoneName };
+  }
+  const domainId = state.zone?.id ?? row.dns_domain_id;
+  const rows = await c.get('db').query<{
+    id: number; name: string; third_id: string | null; account_id: number; type: string; config_cipher: string;
+  }>(
+    `SELECT d.id,d.name,d.third_id,d.account_id,da.type AS type,da.config_cipher AS config_cipher
+     FROM dns_domains d JOIN dns_accounts da ON da.id=d.account_id WHERE d.id=?`, [domainId],
+  );
+  const target = rows[0];
+  if (!target || !target.third_id) throw new AppError(503, 'challenge 关联的 DNS Zone 已不可用', 'ACME_DNS_ZONE_UNAVAILABLE');
+  let config: Record<string, string>;
+  try { config = JSON.parse(await decrypt(target.config_cipher, c.env.APP_KEY, `dns-account/${target.account_id}`)) as Record<string, string>; }
+  catch { throw new AppError(503, 'DNS 账户凭据不可用', 'DNS_ACCOUNT_CONFIG_UNAVAILABLE'); }
+  return {
+    provider: createProvider(target.type, config, c.env.BUDGET.fetch),
+    zone: { id: target.third_id, name: target.name, recordCount: 0 },
+    zoneName: target.name,
+  };
+}
+
 /**
- * 计算每个域名对应的 challenge FQDN。
- * 不在所选 Zone 内的域名必须有启用的 CNAME 代理，且所有域名最终写入同一个 Zone。
+ * 计算每个域名对应的 challenge FQDN 以及它所在的已同步 Zone。
+ * 域名按最长后缀匹配已同步 Zone；匹配不到时使用启用的 CNAME 代理，允许跨 Zone 签发。
  */
 async function resolveChallengeZone(
-  c: Context<AppEnv>, selected: ChallengeZone, domains: string[],
-): Promise<{ map: Record<string, string>; zone: ChallengeZone }> {
+  c: Context<AppEnv>, domains: string[], knownZones?: ChallengeZone[],
+): Promise<{ map: Record<string, string>; zones: Record<string, ChallengeZone>; primary: ChallengeZone }> {
   const identifiers = [...new Set(domains.map((domain) => domain.replace(/^\*\./, '')))];
-  const missing = identifiers.filter((identifier) => !coversZone(`_acme-challenge.${identifier}`, selected.name));
-  const proxies = missing.length === 0 ? [] : await c.get('db').query<ProxyRow>(
+  const zones = knownZones ?? await syncedZones(c);
+  if (zones.length === 0) throw new AppError(400, '还没有同步到本系统的 DNS Zone', 'ACME_DNS_ZONE_MISSING');
+  const pending = identifiers
+    .map((identifier) => ({ identifier, challenge: `_acme-challenge.${identifier}` }))
+    .filter((entry) => !zoneForName(zones, entry.challenge));
+  const proxies = pending.length === 0 ? [] : await c.get('db').query<ProxyRow>(
     `SELECT p.domain,p.target,d.id AS zone_id,d.name AS zone_name,d.third_id AS zone_third_id,
        d.account_id,a.type AS account_type,a.config_cipher
      FROM cert_cname_proxies p
      JOIN dns_domains d ON d.id=p.dns_domain_id
      JOIN dns_accounts a ON a.id=d.account_id
-     WHERE p.enabled=1 AND p.domain IN (${missing.map(() => '?').join(',')})`, [...missing],
+     WHERE p.enabled=1 AND p.domain IN (${pending.map(() => '?').join(',')})`,
+    pending.map((entry) => entry.identifier),
   );
   const byDomain = new Map(proxies.map((row) => [row.domain, row]));
   const map: Record<string, string> = {};
-  const zones = new Map<number, ChallengeZone>();
+  const assignments: Record<string, ChallengeZone> = {};
   for (const identifier of identifiers) {
     const challenge = `_acme-challenge.${identifier}`;
-    if (coversZone(challenge, selected.name)) {
+    const direct = zoneForName(zones, challenge);
+    if (direct) {
       map[identifier] = challenge;
-      zones.set(selected.id, selected);
+      assignments[identifier] = direct;
       continue;
     }
     const proxy = byDomain.get(identifier);
     if (!proxy) {
-      throw new AppError(400, `${identifier} 未在所选 DNS Zone 内，也没有启用的 CNAME 代理`, 'ACME_DNS_ZONE_MISMATCH');
+      throw new AppError(400, `${identifier} 没有匹配的已同步 DNS Zone，也没有启用的 CNAME 代理`, 'ACME_DNS_ZONE_MISSING');
     }
     if (!proxy.zone_third_id) {
       throw new AppError(400, 'CNAME 代理 Zone 尚未同步到本系统', 'ACME_DNS_ZONE_UNSYNCED');
@@ -344,16 +448,13 @@ async function resolveChallengeZone(
       throw new AppError(400, 'CNAME 代理目标不在其 DNS Zone 内', 'CNAME_TARGET_ZONE_NOT_FOUND');
     }
     map[identifier] = target;
-    zones.set(proxy.zone_id, {
+    assignments[identifier] = {
       id: proxy.zone_id, name: proxy.zone_name, remoteId: proxy.zone_third_id,
       accountId: proxy.account_id, type: proxy.account_type, configCipher: proxy.config_cipher,
-    });
+    };
   }
-  if (zones.size > 1) {
-    throw new AppError(400, '证书域名分散在多个 DNS Zone，请为它们配置同一个 CNAME 代理 Zone', 'ACME_MULTI_ZONE_UNSUPPORTED');
-  }
-  const [zone] = [...zones.values()];
-  return { map, zone: zone ?? selected };
+  const primary = assignments[identifiers[0]!]!;
+  return { map, zones: assignments, primary };
 }
 
 function certificateCovers(requested: string, certificateNames: string[]): boolean {
@@ -653,36 +754,35 @@ export function certificateAcmeRoutes() {
     requireAdmin(c);
     const body = await input(c);
     const accountId = id(body.accountId, 'ACME 账户');
-    const dnsDomainId = id(body.dnsDomainId, 'DNS 域名');
     const domains = normalizeCertificateDomains(body.domains);
-    const matches = await c.get('db').query<AccountRow & {
-      acme_id: number; acme_directory: AcmeEnvironment; acme_directory_json: string; acme_kid: string;
-      acme_key_cipher: string; acme_status: string; acme_replay_nonce: string | null; acme_claimed_nonce: string | null;
-      acme_ca: string;
-      dns_id: number; dns_name: string; dns_third_id: string; dns_account_id: number; dns_type: string; dns_config_cipher: string;
-    }>(
-      `SELECT ca.id AS acme_id,ca.directory AS acme_directory,ca.directory_json AS acme_directory_json,
-        ca.kid AS acme_kid,ca.account_key_cipher AS acme_key_cipher,ca.status AS acme_status,
-        ca.replay_nonce AS acme_replay_nonce,ca.claimed_nonce AS acme_claimed_nonce,ca.ca AS acme_ca,
-        d.id AS dns_id,d.name AS dns_name,d.third_id AS dns_third_id,d.account_id AS dns_account_id,
-        da.type AS dns_type,da.config_cipher AS dns_config_cipher
-       FROM cert_acme_accounts ca JOIN dns_domains d ON d.id=? JOIN dns_accounts da ON da.id=d.account_id
-       WHERE ca.id=?`, [dnsDomainId, accountId],
+    // 账户和已同步 Zone 一次查出，保持 ESA 单请求 4 次数据操作的上限。
+    const joined = await c.get('db').query<AccountZoneRow>(
+      `SELECT ca.id AS account_id,ca.directory,ca.directory_json,ca.email,ca.kid,ca.replay_nonce,
+        ca.claimed_nonce,ca.account_key_cipher,ca.status,ca.ca,
+        d.id AS zone_id,d.name AS zone_name,d.third_id AS zone_third_id,d.account_id AS zone_account_id,
+        da.type AS zone_type,da.config_cipher AS zone_config_cipher
+       FROM cert_acme_accounts ca
+       LEFT JOIN dns_domains d ON d.third_id IS NOT NULL AND length(trim(d.third_id))>0
+       LEFT JOIN dns_accounts da ON da.id=d.account_id
+       WHERE ca.id=?
+       ORDER BY length(d.name) DESC,d.id`, [accountId],
     );
-    const source = matches[0];
-    if (!source || source.acme_status !== 'ready' || !source.acme_directory_json || !source.acme_kid) {
-      throw new AppError(404, '已注册的 ACME 账户或 DNS 域名不存在', 'ACME_SOURCE_NOT_FOUND');
+    const source = joined[0];
+    if (!source || source.status !== 'ready' || !source.directory_json || !source.kid) {
+      throw new AppError(404, '已注册的 ACME 账户不存在', 'ACME_SOURCE_NOT_FOUND');
     }
-    if (source.acme_claimed_nonce !== null || source.acme_replay_nonce === null) {
+    if (source.claimed_nonce !== null || source.replay_nonce === null) {
       throw new AppError(409, '请先为 ACME 账户准备新的 nonce', 'ACME_NONCE_REQUIRED');
     }
-    if (!source.dns_third_id) {
-      throw new AppError(400, '请选择已同步到本系统的 DNS 域名', 'ACME_DNS_ZONE_UNSYNCED');
-    }
-    const challenge = await resolveChallengeZone(c, {
-      id: source.dns_id, name: source.dns_name, remoteId: source.dns_third_id,
-      accountId: source.dns_account_id, type: source.dns_type, configCipher: source.dns_config_cipher,
-    }, domains);
+    const zones: ChallengeZone[] = joined
+      .filter((row) => row.zone_id !== null && row.zone_third_id)
+      .map((row) => ({
+        id: row.zone_id!, name: row.zone_name!, remoteId: row.zone_third_id!,
+        accountId: row.zone_account_id!, type: row.zone_type!, configCipher: row.zone_config_cipher!,
+      }));
+    const challenge = await resolveChallengeZone(c, domains, zones);
+    const zoneNames = [...new Set(Object.values(challenge.zones).map((zone) => zone.name))];
+    const zoneMap = Object.fromEntries(Object.entries(challenge.zones).map(([domain, zone]) => [domain, { id: zone.id, name: zone.name }]));
     const idValue = randomId();
     const claimed = await c.get('db').execute(
       `UPDATE cert_acme_accounts SET claimed_nonce=replay_nonce,replay_nonce=NULL,claimed_at=?,updated_at=?
@@ -708,17 +808,17 @@ export function certificateAcmeRoutes() {
         sql: `INSERT INTO cert_acme_orders
           (id,account_id,dns_domain_id,dns_account_id,dns_config_cipher,dns_zone_name,dns_zone_remote_id,
            created_by,directory,directory_json,account_kid,account_key_cipher,replay_nonce,claimed_nonce,claimed_at,domains_json,
-           challenge_map_json,authorization_state_json,authorization_index,status,csr_der,private_key_cipher,created_at,updated_at,ca)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',0,'draft',?,?,?,?,?)`,
-        args: [idValue, source.acme_id, challenge.zone.id, challenge.zone.accountId, challenge.zone.configCipher,
-          challenge.zone.name, challenge.zone.remoteId, c.get('principal').user.id, source.acme_directory,
-          source.acme_directory_json, source.acme_kid, source.acme_key_cipher, accountNonce.claimed_nonce, null, null, JSON.stringify(domains),
-          JSON.stringify(challenge.map), generated.csrDer, privateKeyCipher, now, now, source.acme_ca],
+           challenge_map_json,zone_map_json,authorization_state_json,authorization_index,status,csr_der,private_key_cipher,created_at,updated_at,ca)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',0,'draft',?,?,?,?,?)`,
+        args: [idValue, accountId, challenge.primary.id, challenge.primary.accountId, challenge.primary.configCipher,
+          challenge.primary.name, challenge.primary.remoteId, c.get('principal').user.id, source.directory,
+          source.directory_json, source.kid, source.account_key_cipher, accountNonce.claimed_nonce, null, null, JSON.stringify(domains),
+          JSON.stringify(challenge.map), JSON.stringify(zoneMap), generated.csrDer, privateKeyCipher, now, now, source.ca],
       },
       {
         sql: 'INSERT INTO audit_logs (user_id,action,target,detail,created_at) SELECT ?,?,?,?,? WHERE changes()=1',
         args: [c.get('principal').user.id, 'cert.acme.order.create', String(idValue),
-          `${source.acme_directory} DNS-01 order · ${domains.length} identifiers · zone ${challenge.zone.name}`, now],
+          `${source.directory} DNS-01 order · ${domains.length} identifiers · zones ${zoneNames.join(',')}`.slice(0, 255), now],
       },
       {
         sql: `UPDATE cert_acme_accounts SET claimed_nonce=NULL,claimed_at=NULL,updated_at=?
@@ -768,12 +868,10 @@ export function certificateAcmeRoutes() {
     const { states, state } = activeAuthorization(row);
     const cleanupUnknown = row.status === 'dns_cleaning' || row.last_error === 'DNS_CHALLENGE_DELETE_OUTCOME_UNKNOWN';
     if (!state.txtName || !state.txtValue) throw new AppError(503, 'DNS challenge 状态损坏', 'ACME_STATE_CORRUPT');
-    let config: Record<string, string>;
-    try { config = JSON.parse(await decrypt(row.dns_config_cipher, c.env.APP_KEY, `dns-account/${row.dns_account_id}`)) as Record<string, string>; }
-    catch { throw new AppError(503, 'DNS 账户凭据不可用', 'DNS_ACCOUNT_CONFIG_UNAVAILABLE'); }
-    const provider = createProvider(row.dns_type, config, c.env.BUDGET.fetch);
-    const zone: DnsDomain = { id: row.dns_zone_remote_id, name: row.dns_zone_name, recordCount: 0 };
-    const records = await provider.listRecords(zone, { page: 1, pageSize: 100, type: 'TXT', name: relativeTxtName(state.txtName, row.dns_zone_name) });
+    const target = await challengeTarget(c, row, state);
+    const records = await target.provider.listRecords(target.zone, {
+      page: 1, pageSize: 100, type: 'TXT', name: relativeTxtName(state.txtName, target.zoneName),
+    });
     const found = records.items.find((record) => record.type === 'TXT' && normalizeTxtValue(record.value) === state.txtValue);
     const allowedStatuses = "('dns_outcome_unknown','dns_adding','dns_cleaning')";
     if (cleanupUnknown) {
@@ -989,15 +1087,16 @@ export async function stepAuthorize(c: Context<AppEnv>): Promise<Response> {
   }
   const domain = String(identifier.value).toLowerCase().replace(/\.$/, '');
   const txtName = challengeMapFrom(reserved)[domain] ?? `_acme-challenge.${domain}`;
-  if (!coversZone(txtName, reserved.dns_zone_name)) {
+  const zone = zoneMapFrom(reserved)[domain] ?? zoneForName(await syncedZones(c), txtName);
+  if (!zone) {
     await updateOrder(c, orderId, 'authorize',
       `UPDATE cert_acme_orders SET status='failed',replay_nonce=?,claimed_nonce=NULL,claimed_at=NULL,last_error=?,updated_at=? WHERE id=? AND status='authorizing'`,
-      [validateRemoteNonce(response), 'ACME_DNS_ZONE_MISMATCH', nowSeconds(), orderId]);
-    throw new AppError(400, 'DNS challenge 超出关联的 DNS Zone', 'ACME_DNS_ZONE_MISMATCH');
+      [validateRemoteNonce(response), 'ACME_DNS_ZONE_MISSING', nowSeconds(), orderId]);
+    throw new AppError(400, `${domain} 没有匹配的已同步 DNS Zone`, 'ACME_DNS_ZONE_MISSING');
   }
   const txtValue = await dns01Value(await decrypt(reserved.account_key_cipher, c.env.APP_KEY, `cert-acme-account/${reserved.account_id}/key`), challenge.token);
   states[reserved.authorization_index] = {
-    ...state, status: 'pending', identifier: authorizedName, wildcard,
+    ...state, status: 'pending', identifier: authorizedName, wildcard, zone: { id: zone.id, name: zone.name },
     challengeUrl: validateAcmeUrlFrom(acmeOrigin(reserved), challenge.url), txtName, txtValue, challengeStatus: 'ready',
   };
   await updateOrder(c, orderId, 'authorize',
@@ -1017,16 +1116,20 @@ export async function stepAddDns(c: Context<AppEnv>): Promise<Response> {
   );
   const { states, state } = activeAuthorization(row);
   if (!state.txtName || !state.txtValue || !state.challengeUrl) throw new AppError(503, 'DNS challenge 状态损坏', 'ACME_STATE_CORRUPT');
-  let config: Record<string, string>;
-  try { config = JSON.parse(await decrypt(row.dns_config_cipher, c.env.APP_KEY, `dns-account/${row.dns_account_id}`)) as Record<string, string>; }
-  catch { await c.get('db').execute('UPDATE cert_acme_orders SET status=\'failed\',last_error=?,updated_at=? WHERE id=?', ['DNS_ACCOUNT_CONFIG_UNAVAILABLE', nowSeconds(), orderId]); throw new AppError(503, 'DNS 账户凭据不可用', 'DNS_ACCOUNT_CONFIG_UNAVAILABLE'); }
-  const provider = createProvider(row.dns_type, config, c.env.BUDGET.fetch);
-  const zone: DnsDomain = { id: row.dns_zone_remote_id, name: row.dns_zone_name, recordCount: 0 };
-  const name = relativeTxtName(state.txtName, row.dns_zone_name);
+  let target: ChallengeTarget;
+  try { target = await challengeTarget(c, row, state); }
+  catch (error) {
+    if (error instanceof AppError && error.reason === 'DNS_ACCOUNT_CONFIG_UNAVAILABLE') {
+      await c.get('db').execute('UPDATE cert_acme_orders SET status=\'failed\',last_error=?,updated_at=? WHERE id=?', ['DNS_ACCOUNT_CONFIG_UNAVAILABLE', nowSeconds(), orderId]);
+    }
+    throw error;
+  }
+  const provider = target.provider;
+  const name = relativeTxtName(state.txtName, target.zoneName);
   const record: DnsRecordInput = { name, type: 'TXT', value: state.txtValue, line: '0', ttl: 120, mx: null, weight: null, remark: null };
   let recordId: string;
   try {
-    recordId = await provider.addRecord(zone, record);
+    recordId = await provider.addRecord(target.zone, record);
     if (!recordId.trim()) throw new Error('Missing remote record ID');
   } catch {
     states[row.authorization_index] = { ...state, challengeStatus: 'unknown' };
@@ -1114,12 +1217,8 @@ export async function stepCleanupDns(c: Context<AppEnv>): Promise<Response> {
     await c.get('db').execute(`UPDATE cert_acme_orders SET status='failed',last_error=COALESCE(last_error,'DNS_RECORD_ID_MISSING'),updated_at=? WHERE id=? AND status='dns_cleaning'`, [nowSeconds(), orderId]);
     throw new AppError(409, 'challenge 缺少 DNS 记录编号，需人工检查记录', 'ACME_DNS_RECORD_ID_MISSING');
   }
-  let config: Record<string, string>;
-  try { config = JSON.parse(await decrypt(row.dns_config_cipher, c.env.APP_KEY, `dns-account/${row.dns_account_id}`)) as Record<string, string>; }
-  catch { throw new AppError(503, 'DNS 账户凭据不可用', 'DNS_ACCOUNT_CONFIG_UNAVAILABLE'); }
-  const provider = createProvider(row.dns_type, config, c.env.BUDGET.fetch);
-  const zone: DnsDomain = { id: row.dns_zone_remote_id, name: row.dns_zone_name, recordCount: 0 };
-  try { await provider.deleteRecord(zone, state.dnsRecordId); }
+  const target = await challengeTarget(c, row, state);
+  try { await target.provider.deleteRecord(target.zone, state.dnsRecordId); }
   catch (error) {
     if (!(error instanceof Error && 'status' in error && error.status === 404)) {
       await c.get('db').execute(

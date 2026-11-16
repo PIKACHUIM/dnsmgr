@@ -27,13 +27,11 @@ interface AcmeAccount {
   id: number; environment: 'staging' | 'production'; ca: string; email: string; status: string;
   termsOfService: string | null; nonceReady: boolean; requestInFlight: boolean; createdAt: number; updatedAt: number;
 }
-interface DnsZone { id: number; name: string; accountName: string; accountType: string; thirdId: string | null }
 interface AcmeIssuance {
   id: number; environment: 'staging' | 'production'; ca: string; status: string; domains: string[];
   certificateOrderId: number | null; lastError: string | null; canPoll: boolean; nonceReady: boolean;
   requestInFlight: boolean; needsDnsCleanup: boolean; createdAt: number; updatedAt: number;
 }
-interface DomainResult { code: 0; items: DnsZone[]; page: number; pageSize: number; total: number }
 interface Props { session: Session; onExpired: (message: string) => void; section?: 'all' | 'accounts' }
 
 const acmeCas = [
@@ -97,7 +95,6 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const accountsOnly = section === 'accounts';
   const [items, setItems] = useState<CertificateOrder[]>([]);
   const [accounts, setAccounts] = useState<AcmeAccount[]>([]);
-  const [dnsZones, setDnsZones] = useState<DnsZone[]>([]);
   const [issuances, setIssuances] = useState<AcmeIssuance[]>([]);
   const [fullchain, setFullchain] = useState('');
   const [privateKey, setPrivateKey] = useState('');
@@ -109,7 +106,6 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const [accountEnvironment, setAccountEnvironment] = useState<'staging' | 'production'>('staging');
   const [confirmProduction, setConfirmProduction] = useState(false);
   const [issuanceAccountId, setIssuanceAccountId] = useState('');
-  const [dnsDomainId, setDnsDomainId] = useState('');
   const [domainsText, setDomainsText] = useState('');
   const [termsAccepted, setTermsAccepted] = useState<Record<number, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -130,19 +126,16 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     setLoading(true);
     setError('');
     try {
-      const [orderResult, accountResult, domainResult, issuanceResult] = await Promise.all([
+      const [orderResult, accountResult, issuanceResult] = await Promise.all([
         request<{ code: 0; items: CertificateOrder[] }>('/api/v1/cert/orders?limit=100&offset=0', { signal }),
         request<{ code: 0; items: AcmeAccount[] }>('/api/v1/cert/acme/accounts', { signal }),
-        request<DomainResult>('/api/v1/dns/domains?page=1&pageSize=100', { signal }),
         request<{ code: 0; items: AcmeIssuance[] }>('/api/v1/cert/acme/orders', { signal }),
       ]);
       if (!signal.aborted) {
         setItems(orderResult.items);
         setAccounts(accountResult.items);
-        setDnsZones(domainResult.items.filter((zone) => Boolean(zone.thirdId)));
         setIssuances(issuanceResult.items);
         setIssuanceAccountId((current) => current || String(accountResult.items.find((account) => account.status === 'ready')?.id ?? ''));
-        setDnsDomainId((current) => current || String(domainResult.items.find((zone) => Boolean(zone.thirdId))?.id ?? ''));
       }
     } catch (failure) { if (!signal.aborted) handle(failure); }
     finally { if (!signal.aborted) setLoading(false); }
@@ -243,12 +236,12 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
 
   async function createAcmeOrder(event: React.FormEvent) {
     event.preventDefault();
-    if (busy || !issuanceAccountId || !dnsDomainId) return;
+    if (busy || !issuanceAccountId) return;
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
     try {
       const result = await send<{ code: 0; id: number }>('/api/v1/cert/acme/orders', 'POST', {
-        accountId: issuanceAccountId, dnsDomainId,
+        accountId: issuanceAccountId,
         domains: domainsText.split(/[\\s,;]+/).map((domain) => domain.trim()).filter(Boolean),
       }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setDomainsText('');
@@ -431,11 +424,9 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
         <label className="form-field"><span>已注册 ACME 账户</span><select value={issuanceAccountId} onChange={(event) => setIssuanceAccountId(event.target.value)} required>
           <option value="">选择 staging 或已确认的 production 账户</option>{accounts.filter((account) => account.status === 'ready').map((account) => <option key={account.id} value={account.id}>#{account.id} · {caName(account.ca)} · {account.environment} · {account.email}</option>)}
         </select></label>
-        <label className="form-field"><span>DNS Zone（已同步）</span><select value={dnsDomainId} onChange={(event) => setDnsDomainId(event.target.value)} required>
-          <option value="">选择已同步的 DNS 域名</option>{dnsZones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name} · {zone.accountName}</option>)}
-        </select></label>
         <label className="form-field certificate-domain-field"><span>证书域名（每行一个，可用通配符）</span><textarea value={domainsText} onChange={(event) => setDomainsText(event.target.value)} required maxLength={6000} spellCheck={false} placeholder={'example.com\nwww.example.com\n*.example.com'} /></label>
-        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !issuanceAccountId || !dnsDomainId || !domainsText.trim() || !selectedAccount?.nonceReady}>创建并准备签发任务</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setOrderOpen(false)}>取消</button></div>
+        <p className="form-hint">每个域名会自动匹配到已同步的 DNS Zone，可以跨多个 Zone、多个账号；匹配不到且没有 CNAME 代理时会拒绝创建。</p>
+        <div className="form-actions"><button className="button button-primary" type="submit" disabled={busy || !issuanceAccountId || !domainsText.trim() || !selectedAccount?.nonceReady}>创建并准备签发任务</button><button className="button button-quiet" type="button" disabled={busy} onClick={() => setOrderOpen(false)}>取消</button></div>
       </form>
     </Modal>}
     {importOpen && <Modal title="导入已签发证书" wide onClose={() => { if (!busy) setImportOpen(false); }}>

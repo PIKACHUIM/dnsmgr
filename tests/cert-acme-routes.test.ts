@@ -50,9 +50,11 @@ describe('ACME schema migration', () => {
 let issuedCertificate = '';
 let issuerPair: forge.pki.rsa.KeyPair;
 let requestedDomains: string[] = [];
-let challengeTriggered = false;
+let triggeredAuthz = new Set<number>();
 let dnsRecordPresent = false;
+let secondDnsRecordPresent = false;
 let dnsTxtContent = '';
+let dnsWrites: { zone: string; auth: string; name: string }[] = [];
 let failNextDnsDelete = false;
 let failNextNewOrder = false;
 let replayNonce = 0;
@@ -108,22 +110,28 @@ function fakeFetch(): typeof fetch {
         const jws = JSON.parse(String(init.body)) as { payload: string };
         const payload = JSON.parse(fromBase64Url(jws.payload)) as { identifiers: { type: string; value: string }[] };
         requestedDomains = payload.identifiers.map((item) => item.value);
-        challengeTriggered = false;
+        triggeredAuthz = new Set();
         if (failNextNewOrder) { failNextNewOrder = false; throw new Error('lost response after ACME newOrder dispatch'); }
         return acmeJson({
-          status: 'pending', authorizations: [`${stagingOrigin}/acme/authz/1`], finalize: `${stagingOrigin}/acme/finalize/1`,
+          status: 'pending',
+          authorizations: requestedDomains.map((_, index) => `${stagingOrigin}/acme/authz/${index + 1}`),
+          finalize: `${stagingOrigin}/acme/finalize/1`,
         }, 201, { Location: `${stagingOrigin}/acme/order/1` });
       }
-      if (url.pathname === '/acme/authz/1' && init?.method === 'POST') {
+      const authzMatch = url.pathname.match(/^\/acme\/authz\/(\d+)$/);
+      if (authzMatch && init?.method === 'POST') {
+        const index = Number(authzMatch[1]);
+        const domain = requestedDomains[index - 1] ?? requestedDomains[0]!;
         return acmeJson({
-          status: challengeTriggered ? 'valid' : 'pending',
-          identifier: { type: 'dns', value: requestedDomains[0]!.replace(/^\*\./, '') },
-          wildcard: requestedDomains[0]!.startsWith('*.'),
-          challenges: [{ type: 'dns-01', url: `${stagingOrigin}/acme/challenge/1`, token: 'dns01-test-token' }],
+          status: triggeredAuthz.has(index) ? 'valid' : 'pending',
+          identifier: { type: 'dns', value: domain.replace(/^\*\./, '') },
+          wildcard: domain.startsWith('*.'),
+          challenges: [{ type: 'dns-01', url: `${stagingOrigin}/acme/challenge/${index}`, token: `dns01-test-token-${index}` }],
         });
       }
-      if (url.pathname === '/acme/challenge/1' && init?.method === 'POST') {
-        challengeTriggered = true;
+      const challengeMatch = url.pathname.match(/^\/acme\/challenge\/(\d+)$/);
+      if (challengeMatch && init?.method === 'POST') {
+        triggeredAuthz.add(Number(challengeMatch[1]));
         return acmeJson({ status: 'processing' });
       }
       if (url.pathname === '/acme/finalize/1' && init?.method === 'POST') {
@@ -146,6 +154,10 @@ function fakeFetch(): typeof fetch {
         dnsRecordPresent = true;
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         dnsTxtContent = String(body.content ?? '');
+        dnsWrites.push({
+          zone: 'zone-acme', auth: String((init.headers as Record<string, string>).Authorization ?? ''),
+          name: String(body.name ?? ''),
+        });
         expect(body).toMatchObject({ type: 'TXT', name: '_acme-challenge.example.test', ttl: 120, proxied: false });
         return acmeJson({ success: true, result: { id: 'record-challenge-1' } });
       }
@@ -158,6 +170,23 @@ function fakeFetch(): typeof fetch {
         return acmeJson({ success: true, result: dnsRecordPresent ? [{
           id: 'record-challenge-1', name: '_acme-challenge.example.test', type: 'TXT', content: `"${dnsTxtContent}"`, ttl: 120,
         }] : [], result_info: { total_count: dnsRecordPresent ? 1 : 0 } });
+      }
+      if (url.pathname === '/client/v4/zones/zone-second/dns_records' && init?.method === 'POST') {
+        secondDnsRecordPresent = true;
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        dnsWrites.push({
+          zone: 'zone-second', auth: String((init.headers as Record<string, string>).Authorization ?? ''),
+          name: String(body.name ?? ''),
+        });
+        expect(body).toMatchObject({ type: 'TXT', name: '_acme-challenge.second.test', ttl: 120, proxied: false });
+        return acmeJson({ success: true, result: { id: 'record-challenge-2' } });
+      }
+      if (url.pathname === '/client/v4/zones/zone-second/dns_records/record-challenge-2' && init?.method === 'DELETE') {
+        secondDnsRecordPresent = false;
+        return acmeJson({ success: true, result: { id: 'record-challenge-2' } });
+      }
+      if (url.pathname === '/client/v4/zones/zone-second/dns_records' && init?.method === 'GET') {
+        return acmeJson({ success: true, result: [], result_info: { total_count: 0 } });
       }
     }
     throw new Error(`Unexpected test fetch: ${init?.method ?? 'GET'} ${url.origin}${url.pathname}`);
@@ -181,9 +210,11 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     transportCalls = [];
     simulatedCaError = '';
     requestedDomains = [];
-    challengeTriggered = false;
+    triggeredAuthz = new Set();
     dnsRecordPresent = false;
+    secondDnsRecordPresent = false;
     dnsTxtContent = '';
+    dnsWrites = [];
     failNextDnsDelete = false;
     failNextNewOrder = false;
     issuedCertificate = '';
@@ -229,7 +260,7 @@ describe('ACME staging DNS-01 issuance workflow', () => {
 
   async function createDraftOrder(accountId: number): Promise<number> {
     const created = await post('/api/v1/cert/acme/orders', {
-      accountId, dnsDomainId: 1, domains: ['example.test'],
+      accountId, domains: ['example.test'],
     });
     expect(created.status).toBe(200);
     return (await created.json() as { id: number }).id;
@@ -269,7 +300,7 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     expect((await bounded(`/api/v1/cert/acme/accounts/${account.id}/prepare-nonce`, {})).status).toBe(200);
     expect((await bounded(`/api/v1/cert/acme/accounts/${account.id}/register`, { agreeToTerms: true })).status).toBe(200);
     const createdOrder = await bounded('/api/v1/cert/acme/orders', {
-      accountId: account.id, dnsDomainId: 1, domains: ['example.test'],
+      accountId: account.id, domains: ['example.test'],
     });
     const order = await createdOrder.json() as { id: number };
     const accountClaim = await testDb.db.query<{ replay_nonce: string | null; claimed_nonce: string | null }>(
@@ -323,6 +354,61 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     expect(await reconciled.json()).toMatchObject({ status: 'ready_to_finalize', found: false, cleanupComplete: true });
   });
 
+  it('writes every ACME challenge TXT into its own synced zone without a zone selector', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const secondCipher = await encrypt(JSON.stringify({ apikey: 'second-zone-token' }), appKey, 'dns-account/5');
+    await testDb.db.execute(
+      `INSERT INTO dns_accounts (id,type,name,config_cipher,created_at,updated_at) VALUES (5,'cloudflare','second-account',?,?,?)`,
+      [secondCipher, now, now],
+    );
+    await testDb.db.execute(
+      `INSERT INTO dns_domains (id,account_id,name,third_id,record_count,created_at,updated_at)
+       VALUES (2,5,'second.test','zone-second',0,?,?)`, [now, now],
+    );
+    const accountId = await createReadyStagingAccount();
+    const created = await post('/api/v1/cert/acme/orders', { accountId, domains: ['example.test', 'second.test'] });
+    expect(created.status, JSON.stringify(await created.clone().json())).toBe(200);
+    const order = await created.json() as { id: number };
+    expect(await testDb.db.query<{ dns_zone_name: string; zone_map_json: string }>(
+      'SELECT dns_zone_name,zone_map_json FROM cert_acme_orders WHERE id=?', [order.id],
+    )).toEqual([{
+      dns_zone_name: 'example.test',
+      zone_map_json: JSON.stringify({
+        'example.test': { id: 1, name: 'example.test' },
+        'second.test': { id: 2, name: 'second.test' },
+      }),
+    }]);
+
+    const step = async (name: string) => {
+      const response = await post(`/api/v1/cert/acme/orders/${order.id}/${name}`, {});
+      expect(response.status, `${name}: ${JSON.stringify(await response.clone().json())}`).toBe(200);
+      return response;
+    };
+
+    await step('place');
+    await step('authorize');
+    await step('add-dns');
+    expect(dnsWrites).toEqual([
+      { zone: 'zone-acme', auth: 'Bearer fake-cloudflare-token', name: '_acme-challenge.example.test' },
+    ]);
+    await step('trigger');
+    await step('poll-authorization');
+    expect((await step('cleanup-dns')).status).toBe(200);
+    expect(dnsRecordPresent).toBe(false);
+
+    await step('authorize');
+    await step('add-dns');
+    expect(dnsWrites).toEqual([
+      { zone: 'zone-acme', auth: 'Bearer fake-cloudflare-token', name: '_acme-challenge.example.test' },
+      { zone: 'zone-second', auth: 'Bearer second-zone-token', name: '_acme-challenge.second.test' },
+    ]);
+    expect(secondDnsRecordPresent).toBe(true);
+    await step('trigger');
+    await step('poll-authorization');
+    expect(await (await step('cleanup-dns')).json()).toMatchObject({ status: 'ready_to_finalize', authorizationIndex: 2 });
+    expect(secondDnsRecordPresent).toBe(false);
+  });
+
   it('persists each ACME phase, cleans its exact TXT record, and stores an issued encrypted order', async () => {
     const createdAccount = await post('/api/v1/cert/acme/accounts', { email: 'admin@example.test', environment: 'staging' });
     expect(createdAccount.status).toBe(200);
@@ -338,7 +424,7 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     expect(await registered.json()).toMatchObject({ status: 'ready' });
 
     const orderCreated = await post('/api/v1/cert/acme/orders', {
-      accountId: account.id, dnsDomainId: 1, domains: ['example.test'],
+      accountId: account.id, domains: ['example.test'],
     });
     expect(orderCreated.status).toBe(200);
     const order = await orderCreated.json() as { id: number; status: string };
