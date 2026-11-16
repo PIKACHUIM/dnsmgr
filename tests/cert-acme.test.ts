@@ -12,7 +12,7 @@ function decodeBase64Url(value: string): string {
 
 describe('ACME cryptographic helpers', () => {
   it('creates an RSA account JWK and an RFC 7638 thumbprint', async () => {
-    const privateKey = createAcmeAccountKey();
+    const privateKey = await createAcmeAccountKey();
     const jwk = accountJwk(privateKey);
     expect(jwk).toMatchObject({ kty: 'RSA' });
     expect(jwk.n.length).toBeGreaterThan(300);
@@ -21,7 +21,7 @@ describe('ACME cryptographic helpers', () => {
   });
 
   it('signs ACME JWS with RS256 and represents POST-as-GET with an empty payload', async () => {
-    const privateKeyPem = createAcmeAccountKey();
+    const privateKeyPem = await createAcmeAccountKey();
     const key = forge.pki.privateKeyFromPem(privateKeyPem);
     const signed = await signAcmeJws({
       privateKeyPem, nonce: 'test-replay-nonce', url: 'https://acme-staging-v02.api.letsencrypt.org/acme/new-order',
@@ -39,10 +39,10 @@ describe('ACME cryptographic helpers', () => {
     expect(forge.pki.rsa.setPublicKey(key.n, key.e).verify(digest.digest().bytes(), signature)).toBe(true);
   });
 
-  it('creates an RSA CSR with the requested DNS identifiers', () => {
-    const generated = createCertificateKeyAndCsr(['example.test', '*.example.test']);
+  it('creates an RSA CSR with the requested DNS identifiers', async () => {
+    const generated = await createCertificateKeyAndCsr(['example.test', '*.example.test']);
     expect(generated.keySize).toBe(2048);
-    expect(generated.privateKey).toContain('BEGIN RSA PRIVATE KEY');
+    expect(generated.privateKey).toContain('-----BEGIN PRIVATE KEY-----');
     const base64 = generated.csrDer.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - generated.csrDer.length % 4) % 4);
     const csr = forge.pki.certificationRequestFromAsn1(forge.asn1.fromDer(forge.util.decode64(base64)));
     expect(csr.verify()).toBe(true);
@@ -52,7 +52,7 @@ describe('ACME cryptographic helpers', () => {
   });
 
   it('computes DNS-01 value from the ACME key authorization', async () => {
-    const privateKey = createAcmeAccountKey();
+    const privateKey = await createAcmeAccountKey();
     const token = 'Y0g2sFx_7u1Q';
     const thumbprint = await accountThumbprint(privateKey);
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${token}.${thumbprint}`));

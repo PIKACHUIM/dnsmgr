@@ -1,6 +1,31 @@
 import forge from 'node-forge';
 import { AppError } from '../core/errors';
 
+// 打包时 `require('crypto')` 被解析成空模块，而运行时（如 Cloudflare Workers）提供了
+// `process.versions.node`，node-forge 因此判定为 Node 环境，做 RSA 运算时调用不存在的
+// `randomBytes` 抛 TypeError。这里统一把它的熵源换成 Web Crypto。
+function installForgeEntropy(): void {
+  const source = globalThis.crypto;
+  if (!source || typeof source.getRandomValues !== 'function') return;
+  const binaryString = (size: number): string => {
+    const buffer = new Uint8Array(size);
+    for (let offset = 0; offset < size; offset += 1024) {
+      source.getRandomValues(buffer.subarray(offset, Math.min(offset + 1024, size)));
+    }
+    let output = '';
+    for (const byte of buffer) output += String.fromCharCode(byte);
+    return output;
+  };
+  const random = forge.random as unknown as {
+    seedFileSync: (size: number) => string;
+    seedFile: (size: number, callback: (error: Error | null, bytes?: string) => void) => void;
+  };
+  random.seedFileSync = binaryString;
+  random.seedFile = (size, callback) => { callback(null, binaryString(size)); };
+}
+
+installForgeEntropy();
+
 export type AcmeEnvironment = 'staging' | 'production';
 
 export interface AcmeDirectory {
@@ -162,9 +187,21 @@ export async function fetchAcmeNonce(fetcher: typeof fetch, originOrEnvironment:
   return nonce;
 }
 
-export function createAcmeAccountKey(): string {
-  const pair = forge.pki.rsa.generateKeyPair({ bits: 2048, workers: 0 });
-  return forge.pki.privateKeyToPem(pair.privateKey);
+// node-forge 的 RSA 密钥生成有两个问题：纯 JS 运算在 Workers 上会超出 CPU 限额（错误 1102），
+// 而且打包后 `require('crypto')` 是空模块，它的 PRNG 会调用不存在的 randomBytes。改用原生实现。
+async function generateRsaPrivateKeyPem(): Promise<string> {
+  const pair = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([0x01, 0x00, 0x01]), hash: 'SHA-256' },
+    true, ['sign', 'verify'],
+  );
+  const der = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+  let binary = '';
+  for (const byte of der) binary += String.fromCharCode(byte);
+  return `-----BEGIN PRIVATE KEY-----\n${forge.util.encode64(binary, 64)}\n-----END PRIVATE KEY-----\n`;
+}
+
+export async function createAcmeAccountKey(): Promise<string> {
+  return generateRsaPrivateKeyPem();
 }
 
 export function accountJwk(privateKeyPem: string): { kty: 'RSA'; n: string; e: string } {
@@ -187,18 +224,19 @@ export async function dns01Value(privateKeyPem: string, token: string): Promise<
   return toBase64Url(String.fromCharCode(...new Uint8Array(digest)));
 }
 
-export function createCertificateKeyAndCsr(domains: string[]): { privateKey: string; csrDer: string; keySize: number } {  if (domains.length < 1 || domains.length > 20) throw new AppError(400, '一次最多签发 20 个域名', 'INVALID_CERT_DOMAINS');
-  const pair = forge.pki.rsa.generateKeyPair({ bits: 2048, workers: 0 });
+export async function createCertificateKeyAndCsr(domains: string[]): Promise<{ privateKey: string; csrDer: string; keySize: number }> {  if (domains.length < 1 || domains.length > 20) throw new AppError(400, '一次最多签发 20 个域名', 'INVALID_CERT_DOMAINS');
+  const privateKey = await generateRsaPrivateKeyPem();
+  const key = forge.pki.privateKeyFromPem(privateKey);
   const csr = forge.pki.createCertificationRequest();
-  csr.publicKey = pair.publicKey;
+  csr.publicKey = forge.pki.rsa.setPublicKey(key.n, key.e);
   csr.setSubject([{ name: 'commonName', value: domains[0]!.replace(/^\*\./, '') }]);
   csr.setAttributes([{
     name: 'extensionRequest',
     extensions: [{ name: 'subjectAltName', altNames: domains.map((value) => ({ type: 2, value })) }],
   }]);
-  csr.sign(pair.privateKey, forge.md.sha256.create());
+  csr.sign(key, forge.md.sha256.create());
   const der = forge.asn1.toDer(forge.pki.certificationRequestToAsn1(csr)).getBytes();
-  return { privateKey: forge.pki.privateKeyToPem(pair.privateKey), csrDer: toBase64Url(der), keySize: pair.privateKey.n.bitLength() };
+  return { privateKey, csrDer: toBase64Url(der), keySize: key.n.bitLength() };
 }
 
 function fromBase64Url(value: string): string {

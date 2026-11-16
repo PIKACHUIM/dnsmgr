@@ -444,7 +444,7 @@ export function certificateAcmeRoutes() {
     }
     const idValue = randomId();
     const now = nowSeconds();
-    const keyCipher = await encrypt(createAcmeAccountKey(), c.env.APP_KEY, `cert-acme-account/${idValue}/key`);
+    const keyCipher = await encrypt(await createAcmeAccountKey(), c.env.APP_KEY, `cert-acme-account/${idValue}/key`);
     const eabCipher = eabHmac ? await encrypt(eabHmac, c.env.APP_KEY, `cert-acme-account/${idValue}/eab`) : null;
     await c.get('db').batch([
       {
@@ -661,11 +661,11 @@ export function certificateAcmeRoutes() {
     );
     const accountNonce = claimed.rows[0] as { replay_nonce: string | null; claimed_nonce: string } | undefined;
     if (!accountNonce) throw new AppError(409, 'ACME 账户正在处理另一项请求或需重新准备 nonce', 'ACME_NONCE_REQUIRED');
-    let generated: ReturnType<typeof createCertificateKeyAndCsr>;
+    let generated: Awaited<ReturnType<typeof createCertificateKeyAndCsr>>;
     let privateKeyCipher: string;
     let now: number;
     try {
-      generated = createCertificateKeyAndCsr(domains);
+      generated = await createCertificateKeyAndCsr(domains);
       privateKeyCipher = await encrypt(generated.privateKey, c.env.APP_KEY, `cert-acme-order/${idValue}/private-key`);
       now = nowSeconds();
     } catch (error) {

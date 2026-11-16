@@ -158,7 +158,7 @@ async function createRenewalOrder(
 
   const orderId = newId();
   const now = nowSeconds();
-  const generated = createCertificateKeyAndCsr(domains);
+  const generated = await createCertificateKeyAndCsr(domains);
   const privateKeyCipher = await encrypt(generated.privateKey, env.APP_KEY, `cert-acme-order/${orderId}/private-key`);
   await db.batch([
     {
