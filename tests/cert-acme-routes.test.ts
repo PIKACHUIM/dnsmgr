@@ -388,6 +388,9 @@ describe('ACME staging DNS-01 issuance workflow', () => {
       const result = await bounded(`/api/v1/cert/acme/orders/${order.id}/${step}`, body);
       expect(result.status, `${step}: ${JSON.stringify(await result.clone().json())}`).toBe(200);
     }
+    const blocked = await bounded(`/api/v1/cert/acme/orders/${order.id}/advance`, {});
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ reason: 'ACME_AUTO_NOT_SUPPORTED' });
   });
 
   it('retries a badNonce rejection once with the fresh nonce returned by the CA', async () => {
@@ -508,6 +511,100 @@ describe('ACME staging DNS-01 issuance workflow', () => {
     ]);
     expect(completed.events[0]!.detail).toContain('second.test');
     expect(JSON.stringify(completed.events)).not.toContain('dns01-test-token');
+  });
+
+  it('runs a whole issuance through the automated pass and waits only for DNS to settle', async () => {
+    const accountId = await createReadyStagingAccount();
+    const orderId = await createDraftOrder(accountId);
+
+    const first = await post(`/api/v1/cert/acme/orders/${orderId}/advance`, {});
+    expect(first.status).toBe(200);
+    const firstPass = await first.json() as { status: string; done: boolean; pending: boolean; retryAfter: number; steps: string[] };
+    expect(firstPass).toMatchObject({ status: 'dns_present', done: false, pending: true });
+    expect(firstPass.retryAfter).toBeGreaterThan(0);
+    expect(firstPass.steps).toEqual(['提交订单', '读取授权', '写入 challenge TXT']);
+    expect(dnsRecordPresent).toBe(true);
+
+    const early = await post(`/api/v1/cert/acme/orders/${orderId}/advance`, {});
+    expect(await early.json()).toMatchObject({ status: 'dns_present', pending: true });
+    expect(transportCalls.filter((call) => call[0]!.includes('/acme/challenge/'))).toHaveLength(0);
+
+    await testDb.db.execute('UPDATE cert_acme_orders SET updated_at=updated_at-60 WHERE id=?', [orderId]);
+    const second = await post(`/api/v1/cert/acme/orders/${orderId}/advance`, {});
+    expect(second.status).toBe(200);
+    const secondPass = await second.json() as { status: string; done: boolean; certificateOrderId: number; steps: string[] };
+    expect(secondPass.status).toBe('issued');
+    expect(secondPass.done).toBe(true);
+    expect(secondPass.steps).toEqual(['通知 CA 验证', '轮询授权', '清理 challenge TXT', '请求签发', '保存证书']);
+    expect(dnsRecordPresent).toBe(false);
+    expect(await testDb.db.query('SELECT status FROM cert_acme_orders WHERE id=?', [orderId])).toEqual([{ status: 'issued' }]);
+    expect(await testDb.db.query('SELECT domain FROM cert_order_domains WHERE order_id=? ORDER BY sort', [secondPass.certificateOrderId]))
+      .toEqual([{ domain: 'example.test' }]);
+  });
+
+  it('completes every authorization of a multi-domain order in one automated run', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const secondCipher = await encrypt(JSON.stringify({ apikey: 'second-zone-token' }), appKey, 'dns-account/5');
+    await testDb.db.execute(
+      `INSERT INTO dns_accounts (id,type,name,config_cipher,created_at,updated_at) VALUES (5,'cloudflare','second-account',?,?,?)`,
+      [secondCipher, now, now],
+    );
+    await testDb.db.execute(
+      `INSERT INTO dns_domains (id,account_id,name,third_id,record_count,created_at,updated_at)
+       VALUES (2,5,'second.test','zone-second',0,?,?)`, [now, now],
+    );
+    const accountId = await createReadyStagingAccount();
+    const created = await post('/api/v1/cert/acme/orders', { accountId, domains: ['example.test', 'second.test'] });
+    expect(created.status).toBe(200);
+    const order = await created.json() as { id: number };
+
+    let passes = 0;
+    let result: { done: boolean; manual: boolean; status: string } | null = null;
+    for (let round = 0; round < 8; round += 1) {
+      passes += 1;
+      const response = await post(`/api/v1/cert/acme/orders/${order.id}/advance`, {});
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+      result = await response.json() as { done: boolean; manual: boolean; status: string };
+      if (result.done || result.manual) break;
+      await testDb.db.execute('UPDATE cert_acme_orders SET updated_at=updated_at-60 WHERE id=?', [order.id]);
+    }
+    expect(passes).toBeLessThanOrEqual(4);
+    expect(result).toMatchObject({ done: true, status: 'issued' });
+    const issuedOrders = await testDb.db.query<{ id: number }>("SELECT id FROM cert_orders WHERE source='acme'");
+    expect(issuedOrders).toHaveLength(1);
+    expect(await testDb.db.query('SELECT domain FROM cert_order_domains WHERE order_id=? ORDER BY sort', [issuedOrders[0]!.id]))
+      .toEqual([{ domain: 'example.test' }, { domain: 'second.test' }]);
+    expect(dnsRecordPresent).toBe(false);
+    expect(secondDnsRecordPresent).toBe(false);
+  });
+
+  it('stops the automated run on a state that needs manual DNS reconciliation', async () => {
+    const accountId = await createReadyStagingAccount();
+    const orderId = await createDraftOrder(accountId);
+    await testDb.db.execute(
+      "UPDATE cert_acme_orders SET status='dns_outcome_unknown',last_error='DNS_CHALLENGE_CREATE_OUTCOME_UNKNOWN' WHERE id=?", [orderId],
+    );
+    const before = transportCalls.length;
+    const response = await post(`/api/v1/cert/acme/orders/${orderId}/advance`, {});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: 'dns_outcome_unknown', manual: true, done: false, pending: false, steps: [],
+    });
+    expect(transportCalls.length).toBe(before);
+  });
+
+  it('cleans the leftover challenge TXT of a failed order before stopping', async () => {
+    const accountId = await createReadyStagingAccount();
+    const orderId = await createDraftOrder(accountId);
+    for (const step of ['place','authorize','add-dns']) {
+      expect((await post(`/api/v1/cert/acme/orders/${orderId}/${step}`, {})).status, step).toBe(200);
+    }
+    expect(dnsRecordPresent).toBe(true);
+    await testDb.db.execute("UPDATE cert_acme_orders SET status='failed',last_error='ACME_AUTHORIZATION_FAILED' WHERE id=?", [orderId]);
+    const response = await post(`/api/v1/cert/acme/orders/${orderId}/advance`, {});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: 'failed', manual: true, steps: ['清理遗留 TXT'] });
+    expect(dnsRecordPresent).toBe(false);
   });
 
   it('persists each ACME phase, cleans its exact TXT record, and stores an issued encrypted order', async () => {

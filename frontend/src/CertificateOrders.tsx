@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, errorMessage, request, send, type Session } from './api';
 import { Icon } from './icons';
 import { InfoTip } from './InfoTip';
@@ -35,6 +35,25 @@ interface AcmeIssuance {
   certificateOrderId: number | null; lastError: string | null; canPoll: boolean; nonceReady: boolean;
   requestInFlight: boolean; needsDnsCleanup: boolean; events: AcmeEvent[]; createdAt: number; updatedAt: number;
 }
+interface AdvanceResult {
+  code: 0; id: number; status: string; done: boolean; manual: boolean; pending: boolean; retryAfter: number;
+  steps: string[]; authorizationIndex: number; authorizationTotal: number; currentDomain: string | null;
+  certificateOrderId: number | null;
+}
+
+const autoStatuses = [
+  'draft','authorizing','challenge_ready','dns_present','submitted','triggering','trigger_unknown',
+  'authorization_valid','ready_to_finalize','finalizing','processing','certificate_ready',
+];
+
+function canAutoAdvance(order: AcmeIssuance): boolean {
+  return autoStatuses.includes(order.status) || (order.status === 'failed' && order.needsDnsCleanup);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => { window.setTimeout(resolve, ms); });
+}
+
 interface Props { session: Session; onExpired: (message: string) => void; section?: 'all' | 'accounts' }
 
 const acmeCas = [
@@ -139,6 +158,10 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState<{ id: number; message: string } | null>(null);
+  const [autoNotice, setAutoNotice] = useState<{ id: number; message: string } | null>(null);
+  const [autoRunning, setAutoRunning] = useState<number | null>(null);
+  const [autoAdvance, setAutoAdvance] = useState(true);
+  const autoAbort = useRef<AbortController | null>(null);
   const [notice, setNotice] = useState('');
   const [accountOpen, setAccountOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<AcmeAccount | null>(null);
@@ -164,12 +187,13 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
       const [orderResult, accountResult, issuanceResult] = await Promise.all([
         request<{ code: 0; items: CertificateOrder[] }>('/api/v1/cert/orders?limit=100&offset=0', { signal }),
         request<{ code: 0; items: AcmeAccount[] }>('/api/v1/cert/acme/accounts', { signal }),
-        request<{ code: 0; items: AcmeIssuance[] }>('/api/v1/cert/acme/orders', { signal }),
+        request<{ code: 0; autoAdvance?: boolean; items: AcmeIssuance[] }>('/api/v1/cert/acme/orders', { signal }),
       ]);
       if (!signal.aborted) {
         setItems(orderResult.items);
         setAccounts(accountResult.items);
         setIssuances(issuanceResult.items);
+        setAutoAdvance(issuanceResult.autoAdvance !== false);
         setIssuanceAccountId((current) => current || String(accountResult.items.find((account) => account.status === 'ready')?.id ?? ''));
       }
     } catch (failure) { if (!signal.aborted) handle(failure); }
@@ -181,6 +205,8 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  useEffect(() => () => autoAbort.current?.abort(), []);
 
   async function importCertificate(event: React.FormEvent) {
     event.preventDefault();
@@ -334,6 +360,47 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     finally { setBusy(false); }
   }
 
+  async function runIssuance(order: AcmeIssuance) {
+    if (busy) return;
+    setBusy(true); setAutoRunning(order.id); setError(''); setNotice('');
+    setActionError(null); setAutoNotice(null);
+    const controller = new AbortController();
+    autoAbort.current = controller;
+    const startedAt = Date.now();
+    try {
+      for (let round = 0; round < 120; round += 1) {
+        const result = await send<AdvanceResult>(
+          `/api/v1/cert/acme/orders/${order.id}/advance`, 'POST', {},
+          controller.signal, { 'X-CSRF-Token': session.csrfToken },
+        );
+        await load(controller.signal);
+        const progress = result.authorizationTotal > 0 ? ` · 授权 ${result.authorizationIndex}/${result.authorizationTotal}` : '';
+        const recent = result.steps.length > 0 ? ` · 本轮：${result.steps.join('、')}` : '';
+        if (result.done) {
+          setAutoNotice({ id: order.id, message: `全部步骤已完成，证书订单 #${result.certificateOrderId ?? '—'} 已保存。` });
+          setNotice(`签发任务 ${order.id} 已完成。`);
+          return;
+        }
+        if (result.manual) {
+          setAutoNotice({ id: order.id, message: `自动推进停在「${issuanceStatus(result.status)}」，需要人工核对后再继续。` });
+          return;
+        }
+        setAutoNotice({ id: order.id, message: `自动推进中：${issuanceStatus(result.status)}${progress}${recent}` });
+        if (Date.now() - startedAt > 15 * 60_000) {
+          setAutoNotice({ id: order.id, message: '自动推进已持续 15 分钟，已暂停；可稍后再次点击继续。' });
+          return;
+        }
+        await sleep(Math.min(60, Math.max(2, result.retryAfter || 3)) * 1000);
+      }
+      setAutoNotice({ id: order.id, message: '自动推进轮次较多，已暂停；可再次点击继续。' });
+    } catch (failure) {
+      if (controller.signal.aborted) return;
+      if (failure instanceof ApiError && failure.status === 401) onExpired('会话已失效，请重新登录。');
+      else setActionError({ id: order.id, message: errorMessage(failure) });
+      await load(controller.signal);
+    } finally { setBusy(false); setAutoRunning(null); autoAbort.current = null; }
+  }
+
   async function issuanceAction(order: AcmeIssuance, action: string, success: string) {
     if (busy) return;
     setBusy(true); setError(''); setNotice(''); setActionError(null);
@@ -480,10 +547,11 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
     {accountsOnly && <CertificateCname session={session} onExpired={onExpired} />}
     {!accountsOnly && <>
     <section className="panel" aria-labelledby="acme-issuance-title">
-      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2><InfoTip label="签发说明" text="每个订单分步推进；多域名订单会逐个域名重复「读取授权 → 写 TXT → 通知验证 → 清理 TXT」。CA 请求结果未知时必须先核对状态，不会自动重试。" /></div><button className="button button-primary" type="button" disabled={busy || accounts.every((account) => account.status !== 'ready')} onClick={() => { setError(''); setNotice(''); setOrderOpen(true); }}><Icon name="plus" />申请证书</button></div>
+      <div className="panel-heading"><div><h2 id="acme-issuance-title">申请新证书</h2><InfoTip label="签发说明" text="「自动完成签发」会逐个域名重复「读取授权 → 写 TXT → 通知验证 → 清理 TXT」，写入 TXT 后等待权威 DNS 生效再验证；遇到结果未知或需要核对的 DNS 状态会停下并要求人工处理。" /></div><button className="button button-primary" type="button" disabled={busy || accounts.every((account) => account.status !== 'ready')} onClick={() => { setError(''); setNotice(''); setOrderOpen(true); }}><Icon name="plus" />申请证书</button></div>
       <div className="certificate-issuance-list">
         {issuances.length === 0 ? <div className="panel-empty">尚无 ACME 签发任务。</div> : issuances.map((order) => {
           const step = issuanceStep(order);
+          const auto = canAutoAdvance(order);
           const canCancel = ['draft','outcome_unknown','failed'].includes(order.status) && !order.needsDnsCleanup;
           return <article className="certificate-issuance-card" key={order.id}>
             <div className="certificate-issuance-heading"><div><strong className="mono">任务 #{order.id}</strong><span className="value-detail">{caName(order.ca)} · {order.environment === 'staging' ? '测试 CA' : '生产 CA'} · {issuanceStatus(order.status)}{authorizationProgress(order) ? ` · ${authorizationProgress(order)}` : ''}</span></div>
@@ -491,8 +559,10 @@ export function CertificateOrders({ session, onExpired, section = 'all' }: Props
             </div>
             {order.lastError && <p className="form-hint certificate-order-error">{order.lastError}</p>}
             {actionError?.id === order.id && <p className="form-hint certificate-order-error" role="alert">{actionError.message}</p>}
+            {autoNotice?.id === order.id && <p className="form-hint certificate-auto-progress" role="status">{autoNotice.message}</p>}
             <div className="certificate-account-actions">
-              {step && <button className="button button-primary" type="button" disabled={busy} onClick={() => void issuanceAction(order, step.action, `任务 ${order.id}：${step.label} 已提交。`)}>{step.label}</button>}
+              {step && autoAdvance && auto && <button className="button button-primary" type="button" disabled={busy} onClick={() => void runIssuance(order)}>{autoRunning === order.id ? '自动推进中…' : '自动完成签发'}</button>}
+              {step && <button className={autoAdvance && auto ? 'button button-secondary' : 'button button-primary'} type="button" disabled={busy} onClick={() => void issuanceAction(order, step.action, `任务 ${order.id}：${step.label} 已提交。`)}>{step.label}</button>}
               {canCancel && <button className="button button-quiet" type="button" disabled={busy} onClick={() => void issuanceAction(order, 'cancel', `任务 ${order.id} 已在本地取消。`)}>取消本地任务</button>}
               {order.certificateOrderId && <span className="data-badge">证书订单 #{order.certificateOrderId}</span>}
             </div>
