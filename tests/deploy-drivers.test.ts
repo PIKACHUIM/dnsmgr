@@ -27,13 +27,17 @@ describe('native deploy drivers', () => {
   let calls: RecordedCall[] = [];
   let panelStatus = 1;
   let tencentError = '';
+  let tencentDeployFailure = false;
   const certId = 777;
+  const tencentAction = (call: RecordedCall) =>
+    String((call.init.headers as Record<string, string> | undefined)?.['X-TC-Action'] ?? '');
 
   beforeEach(async () => {
     testDb = createTestDatabase();
     calls = [];
     panelStatus = 1;
     tencentError = '';
+    tencentDeployFailure = false;
     const fetchMock = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = String(input);
       calls.push({ url, init });
@@ -55,7 +59,36 @@ describe('native deploy drivers', () => {
           return new Response(JSON.stringify({ Response: { CertificateId: 'tencent-cert-1' } }));
         }
         if (action === 'DeployCertificateInstance') {
+          if (tencentDeployFailure) {
+            return new Response(JSON.stringify({ Response: { Error: { Code: 'FailedOperation', Message: '部署失败' } } }));
+          }
           return new Response(JSON.stringify({ Response: { DeployRecordId: 1234 } }));
+        }
+        if (action === 'DescribeHostDeployRecordDetail') {
+          return new Response(JSON.stringify({ Response: { SuccessTotalCount: 1 } }));
+        }
+        if (action === 'CreateCertificateBindResourceSyncTask') {
+          return new Response(JSON.stringify({ Response: { CertTaskIds: [{ TaskId: 'sync-task-1' }] } }));
+        }
+        if (action === 'DescribeCertificateBindResourceTaskResult') {
+          return new Response(JSON.stringify({ Response: { SyncTaskBindResourceResult: [{
+            Status: 1,
+            BindResourceResult: [{ ResourceType: 'clb', BindResourceRegionResult: [
+              { Region: 'ap-guangzhou', TotalCount: 2 },
+              { Region: 'ap-shanghai', TotalCount: 0 },
+            ] }],
+          }] } }));
+        }
+        if (action === 'UploadUpdateCertificateInstance') {
+          return new Response(JSON.stringify({ Response: { DeployStatus: 1 } }));
+        }
+        if (action === 'UpdateCertificateInstance') {
+          return new Response(JSON.stringify({ Response: { DeployRecordId: 7788 } }));
+        }
+        if (action === 'DescribeCertificates') {
+          return new Response(JSON.stringify({ Response: { Certificates: [{
+            CertificateId: 'tencent-cert-new', Domain: 'web.example.test', Status: 1, CertEndTime: '2030-01-01T00:00:00Z',
+          }] } }));
         }
         return new Response(JSON.stringify({ Response: {} }));
       }
@@ -112,7 +145,7 @@ describe('native deploy drivers', () => {
   it('exposes the driver catalog with account and task fields', async () => {
     const response = await request('/api/v1/cert/deploy/providers', { headers: { cookie } });
     expect(response.status).toBe(200);
-    const { providers } = await response.json() as { providers: { type: string; fields: { key: string }[]; taskFields: { key: string }[] }[] };
+    const { providers } = await response.json() as { providers: { type: string; fields: { key: string }[]; taskFields: { key: string; options?: { value: string; label: string }[] }[] }[] };
     const types = providers.map((provider) => provider.type);
     expect(types.slice(0, 2)).toEqual(['webhook', 'executor']);
     expect(types).toContain('btpanel');
@@ -122,6 +155,16 @@ describe('native deploy drivers', () => {
     expect(btpanel.taskFields.map((field) => field.key)).toEqual(['type', 'sites']);
     const tencent = providers.find((provider) => provider.type === 'tencent')!;
     expect(tencent.taskFields.map((field) => field.key)).toContain('product');
+    const products = tencent.taskFields.find((field) => field.key === 'product')!.options!;
+    expect(products.map((option) => option.value)).toEqual([
+      'cdn', 'teo', 'waf', 'cos', 'clb', 'tke', 'scf', 'ddos', 'live', 'vod',
+      'tse', 'tcb', 'lighthouse', 'upload', 'update', 'update_new',
+    ]);
+    expect(products.every((option) => Boolean(option.label) && option.label !== '[object Object]')).toBe(true);
+    expect(tencent.taskFields.find((field) => field.key === 'site_type')!.options)
+      .toEqual([{ value: 'cn', label: '国内站' }, { value: 'intl', label: '国际站' }]);
+    expect(tencent.taskFields.find((field) => field.key === 'region')!.options)
+      .toEqual([{ value: 'ap-guangzhou', label: '中国大陆' }, { value: 'ap-seoul', label: '非中国大陆' }]);
   });
 
   it('validates panel credentials before saving and deploys to every listed site', async () => {
@@ -191,7 +234,7 @@ describe('native deploy drivers', () => {
       InstanceIdList: ['web.example.test|on', 'api.example.test|on'],
     });
     const state = await testDb.db.query<{ info_json: string }>('SELECT info_json FROM cert_deploy_tasks WHERE id=?', [taskId]);
-    expect(JSON.parse(state[0]!.info_json)).toEqual({ cert_id: 'tencent-cert-1' });
+    expect(JSON.parse(state[0]!.info_json)).toEqual({ cert_id: 'tencent-cert-1', record_id: '1234' });
 
     tencentError = '鉴权失败';
     calls = [];
@@ -199,6 +242,82 @@ describe('native deploy drivers', () => {
     expect((await failed.json()).ok).toBe(false);
     const runs = await testDb.db.query<{ status: string; detail: string }>('SELECT status,detail FROM cert_deploy_runs ORDER BY id DESC LIMIT 1');
     expect(runs[0]).toMatchObject({ status: 'failed', detail: '鉴权失败' });
+  });
+
+  it('updates a Tencent certificate in place for product=update', async () => {
+    const accountId = await createAccount({
+      name: 'tencent-update', type: 'tencent', SecretId: 'AKIDtest', SecretKey: 'secret-value',
+    });
+    const taskId = await createTask({
+      name: 'update', accountId, certificateOrderId: certId,
+      config: { product: 'update', cert_id: 'tencent-cert-old' },
+    });
+
+    calls = [];
+    const result = await (await send(`/api/v1/cert/deploy/tasks/${taskId}/run`, 'POST', {})).json() as { ok: boolean; detail: string };
+    expect(result.ok, result.detail).toBe(true);
+    const actions = calls.map(tencentAction);
+    expect(actions).not.toContain('UploadCertificate');
+    expect(actions).toContain('CreateCertificateBindResourceSyncTask');
+    expect(actions).toContain('DescribeCertificateBindResourceTaskResult');
+
+    const update = calls.find((call) => tencentAction(call) === 'UploadUpdateCertificateInstance')!;
+    const payload = JSON.parse(String(update.init.body)) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      OldCertificateId: 'tencent-cert-old',
+      ResourceTypes: ['clb'],
+      ResourceTypesRegions: [{ ResourceType: 'clb', Regions: ['ap-guangzhou'] }],
+    });
+    expect(String(payload.CertificatePublicKey)).toBe(fullchain);
+    expect(String(payload.CertificatePrivateKey)).toContain('BEGIN PRIVATE KEY');
+    const state = await testDb.db.query<{ info_json: string }>('SELECT info_json FROM cert_deploy_tasks WHERE id=?', [taskId]);
+    expect(JSON.parse(state[0]!.info_json)).toEqual({});
+  });
+
+  it('rotates the Tencent certificate id for product=update_new and honours delete_old_cert', async () => {
+    const accountId = await createAccount({
+      name: 'tencent-rotate', type: 'tencent', SecretId: 'AKIDtest', SecretKey: 'secret-value',
+    });
+    const taskId = await createTask({
+      name: 'rotate', accountId, certificateOrderId: certId,
+      config: { product: 'update_new', cert_id: 'tencent-cert-old', delete_old_cert: true },
+    });
+
+    calls = [];
+    const result = await (await send(`/api/v1/cert/deploy/tasks/${taskId}/run`, 'POST', {})).json() as { ok: boolean; detail: string };
+    expect(result.ok, result.detail).toBe(true);
+    const update = calls.find((call) => tencentAction(call) === 'UpdateCertificateInstance')!;
+    expect(JSON.parse(String(update.init.body))).toMatchObject({
+      OldCertificateId: 'tencent-cert-old',
+      ResourceTypes: ['clb'],
+      ResourceTypesRegions: [{ ResourceType: 'clb', Regions: ['ap-guangzhou'] }],
+    });
+    const deletion = calls.find((call) => tencentAction(call) === 'DeleteCertificate')!;
+    expect(JSON.parse(String(deletion.init.body))).toEqual({ CertificateId: 'tencent-cert-old' });
+
+    const rows = await testDb.db.query<{ config_json: string }>('SELECT config_json FROM cert_deploy_tasks WHERE id=?', [taskId]);
+    expect(JSON.parse(rows[0]!.config_json)).toEqual({
+      product: 'update_new', cert_id: 'tencent-cert-new', delete_old_cert: '1',
+    });
+  });
+
+  it('treats a repeated Tencent deployment as done when the previous record succeeded', async () => {
+    const accountId = await createAccount({
+      name: 'tencent-retry', type: 'tencent', SecretId: 'AKIDtest', SecretKey: 'secret-value',
+    });
+    const taskId = await createTask({
+      name: 'cdn-retry', accountId, certificateOrderId: certId, config: { product: 'cdn', domain: 'web.example.test' },
+    });
+    await testDb.db.execute('UPDATE cert_deploy_tasks SET info_json=? WHERE id=?', [JSON.stringify({ record_id: '1234' }), taskId]);
+
+    tencentDeployFailure = true;
+    calls = [];
+    const result = await (await send(`/api/v1/cert/deploy/tasks/${taskId}/run`, 'POST', {})).json() as { ok: boolean; detail: string };
+    expect(result.ok, result.detail).toBe(true);
+    expect(result.detail).toContain('无需重复部署');
+    expect(calls.some((call) => tencentAction(call) === 'DescribeHostDeployRecordDetail')).toBe(true);
+    const state = await testDb.db.query<{ info_json: string }>('SELECT info_json FROM cert_deploy_tasks WHERE id=?', [taskId]);
+    expect(JSON.parse(state[0]!.info_json)).toEqual({ cert_id: 'tencent-cert-1', record_id: '1234' });
   });
 
   it('provides a native driver for every catalog entry', () => {

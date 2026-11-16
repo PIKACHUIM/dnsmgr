@@ -167,6 +167,9 @@ export function DeployAccounts({ session, onExpired }: Props) {
   }, [load]);
 
   const selected = providers.find((provider) => provider.type === type);
+  const providerHints = selected
+    ? [...new Set([selected.description, selected.note].filter((value): value is string => Boolean(value)))]
+    : [];
 
   function openForm(account: DeployAccount | null = null) {
     const nextType = account?.type ?? providers[0]?.type ?? '';
@@ -250,7 +253,8 @@ export function DeployAccounts({ session, onExpired }: Props) {
         <label className="form-field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={64} /></label>
         <label className="form-field"><span>类型</span><select value={type} onChange={(event) => changeType(event.target.value)} disabled={Boolean(editing)} required>
           {providers.map((provider) => <option key={provider.type} value={provider.type}>{provider.name}</option>)}
-        </select>{selected?.description && <span className="form-hint">{selected.description}</span>}{selected?.note && <span className="form-hint">{selected.note}</span>}</label>
+        </select></label>
+        {providerHints.map((hint) => <p className="form-hint deploy-provider-hint" key={hint}>{hint}</p>)}
         {selected?.fields.filter((field) => visible(field, values)).map((field) => <DeployFieldInput key={`${selected.type}-${field.key}`} field={field}
           value={values[field.key] ?? field.defaultValue ?? ''}
           secretConfigured={editing ? editing.secrets.includes(field.key) : false}
@@ -490,7 +494,7 @@ export function DeployTasks({ session, onExpired }: Props) {
           <option value="">选择未吊销的证书</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}
         </select></label>
         <label className="form-field"><span>目标标记（选填）</span><input value={target} onChange={(event) => setTarget(event.target.value)} maxLength={500} placeholder="web-1 / 站点名称" /></label>
-        {provider?.taskNote && <span className="form-hint">{provider.taskNote}</span>}
+        {provider?.taskNote && <p className="form-hint deploy-provider-hint">{provider.taskNote}</p>}
         {taskFields.filter((field) => visible(field, config)).map((field) => <DeployFieldInput key={`${account?.type}-${field.key}`} field={field}
           value={config[field.key] ?? field.defaultValue ?? ''}
           onChange={(value) => setConfig((current) => ({ ...current, [field.key]: value }))} />)}

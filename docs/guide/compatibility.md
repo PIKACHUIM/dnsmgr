@@ -72,7 +72,7 @@
 | 邮件发送通道 | `mail_type`、SMTP / Sendcloud / 阿里云邮件推送 | 平台差异：Worker 没有原始 TCP，改用 Cloudflare Email `send_email` 绑定；收件人与已验证发件地址在 `GET|PUT /api/v1/system/notify` 配置，未绑定发信服务时拒绝启用 |
 | 证书部署时间窗 | `deploy_hour_start`、`deploy_hour_end` | 已迁移：`GET|PUT /api/v1/system/certificate-renew` 读写 0–23 时，cron 按 `schedule_tz_offset` 换算本地小时，仅窗口内执行自动部署，跨天按环绕处理（如 22–6），起止相同表示只允许该小时；管理员手动「立即检查一次」与单任务运行不受窗口限制。非法小时返回 400 `INVALID_CERT_RENEW_SETTINGS` |
 | 云厂商免费证书 | CertHelper 的 `tencent`、`aliyun`、`ucloud` | 未迁移：这些渠道依赖云厂商证书 API、账号授权与免费额度。当前统一走 ACME（Let's Encrypt、ZeroSSL、Google、LiteSSL、自定义 ACME），减少多套账号与签名模型；已有证书仍可手动导入并部署 |
-| 证书部署目标 | DeployHelper 内置 50+ 服务商（宝塔、Kangle、S3、SSH、FTP、云厂商 CDN 等） | 平台差异：Worker 没有 SSH/FTP/系统命令，改为 Webhook 推送与自托管执行器领取任务；执行器运行在目标服务器上，可调用本地工具完成实际部署。部署账户、任务、运行记录与时间窗已迁移，旧版逐个服务商驱动不移植 |
+| 证书部署目标 | DeployHelper 内置 50+ 服务商（宝塔、Kangle、S3、SSH、FTP、云厂商 CDN 等） | 部分等价：需要 SSH、FTP 或本地落盘的服务商改为自托管执行器领取任务；面板、对象存储与云厂商等可经 HTTP API 完成的服务商提供原生驱动。腾讯云按 PHP 的 16 种产品对齐：CDN、EO、WAF、COS、CLB、TKE、SCF、DDoS、LIVE、VOD、TSE、TCB、轻量应用服务器、上传到证书管理，以及证书 ID 不变的原地更新和生成新 ID 的一键更新（后者会把新证书 ID 回写到任务配置，并可按需删除旧证书）。部署账户、任务、运行记录与时间窗已迁移 |
 | 优选数据源积分查询 | `POST /optimizeip/queryapi` | 已迁移为 `POST /api/v1/optimize/credit`（管理员 + CSRF，审计 `optimize.credit`）：wetest.vip 与 hostmonit 返回剩余次数；xingpingcn.top 无密钥免费源返回 400 `OPTIMIZE_CREDIT_NOT_APPLICABLE`。优选设置弹窗提供「查询积分」按钮 |
 | 容灾日志按天清理 | `POST /dmonitor/clean` | 已迁移为 `POST /api/v1/failover/logs/clean`（`days` 0–3650，审计 `failover.clean`），容灾概览页「清理日志」弹窗；写入时仍保留每任务最近 500 条 |
 | 外部状态探针 | `/dmtask/status`、`/optimizeip/status` | 已迁移，返回纯文本 `ok`/`error`：容灾按启用任务的 `last_check_at` 与 `2×间隔+60s` 判定，优选按启用任务的 `last_run_at` 与 3600 秒判定 |

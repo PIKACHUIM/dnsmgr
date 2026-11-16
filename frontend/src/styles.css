@@ -616,6 +616,7 @@ a.button:hover { text-decoration: none; }
 .dns-form select:focus,
 .dns-form textarea:focus { border-color: var(--color-accent); }
 .certificate-security-note { margin: 0; padding: 16px 0 0; }
+.deploy-provider-hint { grid-column: 1 / -1; margin: 0; color: var(--color-muted); font-size: var(--font-xs); line-height: 1.7; }
 .certificate-import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .certificate-import-form textarea { min-height: 220px; }
 .certificate-material { grid-template-columns: repeat(2, minmax(0, 1fr)); }
