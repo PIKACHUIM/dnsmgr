@@ -523,7 +523,7 @@ export function authRoutes() {
     if (user.totp_cipher) throw new AppError(409, '动态口令已启用', 'TOTP_ALREADY_ENABLED');
     const secret = newTotpSecret();
     const challenge = await createChallenge(c, user, 'totp-bind', await encrypt(secret, c.env.APP_KEY, 'totp'));
-    const uri = `otpauth://totp/${encodeURIComponent(`DnsMgr:${user.username}`)}?secret=${secret}&issuer=DnsMgr&algorithm=SHA1&digits=6&period=30`;
+    const uri = `otpauth://totp/${encodeURIComponent(`DNSPanel:${user.username}`)}?secret=${secret}&issuer=DNSPanel&algorithm=SHA1&digits=6&period=30`;
     return c.json({ code: 0, secret, challenge, uri });
   });
 

@@ -30,7 +30,7 @@ import { preferenceRoutes } from './routes/preferences';
 import { storageRoutes } from './routes/storage';
 
 declare const __APP_SHELL__: string;
-const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DnsMgr</title><p>请先运行前端构建。</p></html>';
+const defaultShell = typeof __APP_SHELL__ === 'string' ? __APP_SHELL__ : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DNSPanel</title><p>请先运行前端构建。</p></html>';
 
 const pagePatterns = [
   /^\/$/, /^\/(install|login|setpwd)$/, /^\/user$/, /^\/log$/, /^\/record$/,
@@ -96,7 +96,7 @@ export function createApp(options: { database?: SqlDatabase; shell?: string; sto
     await next();
   });
 
-  app.get('/health', (c) => c.json({ code: 0, service: 'dnsmgr-serverless', stage: 'foundation' }));
+  app.get('/health', (c) => c.json({ code: 0, service: 'dnspanel', stage: 'foundation' }));
   app.route('/', authRoutes());
   app.route('/', dnsRoutes());
   app.route('/', cloudflareRoutes());

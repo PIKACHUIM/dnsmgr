@@ -419,7 +419,7 @@ test('initialization, login, session restore, responsive navigation and logout',
     expect(route.request().headers()['x-csrf-token']).toBeTruthy();
     await route.fulfill({ json: {
       code: 0, secret: 'JBSWY3DPEHPK3PXP', challenge: 'e2e-totp-challenge',
-      uri: 'otpauth://totp/DnsMgr%3Abrowser-admin?secret=JBSWY3DPEHPK3PXP&issuer=DnsMgr&algorithm=SHA1&digits=6&period=30',
+      uri: 'otpauth://totp/DNSPanel%3Abrowser-admin?secret=JBSWY3DPEHPK3PXP&issuer=DNSPanel&algorithm=SHA1&digits=6&period=30',
     } });
   });
   await page.route('**/totp/bind', async (route) => {

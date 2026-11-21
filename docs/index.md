@@ -1,7 +1,7 @@
 ---
 layout: home
 hero:
-  name: DNSMGR
+  name: DNSPanel
   text: DNS 管理，运行在边缘
   tagline: >-
     面向 Cloudflare Workers、EdgeOne Makers 与阿里云 ESA 的

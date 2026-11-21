@@ -188,8 +188,8 @@ export function notifyRoutes() {
       throw new AppError(400, '请先配置至少一个通知渠道', 'NOTIFICATION_NOT_CONFIGURED');
     }
     const rawTitle = typeof body.title === 'string' ? body.title.trim().slice(0, 100) : '';
-    const title = rawTitle || 'DNSMGR 测试通知';
-    const content = typeof body.content === 'string' ? body.content.slice(0, 2000) : '这是一条来自 DNSMGR 的测试通知。';
+    const title = rawTitle || 'DNSPanel 测试通知';
+    const content = typeof body.content === 'string' ? body.content.slice(0, 2000) : '这是一条来自 DNSPanel 的测试通知。';
     const allowed = requested ? new Set<NotificationChannel>([requested as NotificationChannel]) : undefined;
     const deliveries = await sendConfiguredNotifications(c, title, content, allowed);
     if (deliveries.length === 0) {
@@ -301,7 +301,7 @@ export function notifyRoutes() {
         [0, 'qqbot.bind', 'system', openid, nowSeconds()],
       );
       try {
-        await sendQqBotMessage(c, qqbotAppId, qqbotAppSecret, openid, '绑定成功', '您已绑定 QQ 机器人通知，聚合 DNS 管理系统的通知将通过本机器人发送。');
+        await sendQqBotMessage(c, qqbotAppId, qqbotAppSecret, openid, '绑定成功', '您已绑定 QQ 机器人通知，DNSPanel 的通知将通过本机器人发送。');
       } catch { /* 绑定回执失败不影响绑定结果 */ }
     }
     return c.text('', 200);

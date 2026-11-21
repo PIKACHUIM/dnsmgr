@@ -142,7 +142,7 @@ export const en: Record<string, string> = {
   '正在读取…': 'Loading…',
   '读取失败，状态未知': 'Load failed, status unknown',
   '后端能力状态': 'Backend capability status',
-  '聚合 DNS 管理系统': 'Unified DNS manager',
+  '聚合 DNS 管理系统': 'DNSPanel',
   '安装 · 认证 · 会话基础': 'Install · auth · session foundation',
   'DNS 管理与证书订单已接入': 'DNS management and certificate orders are connected',
   'DNS 解析、容灾切换、定时任务与证书安全存储/手动导入已接入；CA 自动申请、续签和部署仍在迁移。': 'DNS records, failover, cron jobs, certificate storage and manual import are connected. Automatic CA issuance, renewal and deployment are still migrating.',

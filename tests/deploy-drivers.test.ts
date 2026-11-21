@@ -416,3 +416,53 @@ describe('native deploy drivers', () => {
       .toEqual([{ type: 'webhook' }]);
   });
 });
+
+describe('deploy metadata parity', () => {
+  const providers = deployCatalog().filter((meta) => !['webhook', 'executor'].includes(meta.type));
+
+  it('renders every select option with a real label', () => {
+    const broken: string[] = [];
+    for (const provider of providers) {
+      for (const field of [...provider.fields, ...provider.taskFields]) {
+        for (const option of field.options ?? []) {
+          if (!option.label.trim() || option.label.includes('[object Object]') || !option.value.trim()) {
+            broken.push(`${provider.type}.${field.key}=${option.value}:${option.label}`);
+          }
+        }
+      }
+      for (const field of [...provider.fields, ...provider.taskFields]) {
+        const keys = (field.options ?? []).map((option) => option.value);
+        if (new Set(keys).size !== keys.length) broken.push(`${provider.type}.${field.key}: 选项值重复`);
+      }
+    }
+    expect(broken).toEqual([]);
+  });
+
+  it('keeps cloud certificate products aligned with the PHP panel', () => {
+    const products = (type: string) => (DEPLOY_META[type]!.taskFields.find((field) => field.key === 'product')?.options ?? [])
+      .map((option) => option.value);
+    expect(products('tencent')).toEqual([
+      'cdn', 'teo', 'waf', 'cos', 'clb', 'tke', 'scf', 'ddos', 'live', 'vod',
+      'tse', 'tcb', 'lighthouse', 'upload', 'update', 'update_new',
+    ]);
+    expect(products('aliyun')).toEqual([
+      'cdn', 'dcdn', 'esa', 'esa_saas', 'oss', 'waf', 'wafres', 'waf2', 'clb', 'alb',
+      'nlb', 'api', 'ddoscoo', 'live', 'vod', 'fc', 'fc2', 'ga', 'upload',
+    ]);
+    expect(products('huawei')).toEqual(['cdn', 'elb', 'waf', 'obs', 'upload']);
+    expect(products('huoshan')).toEqual(['cdn', 'dcdn', 'clb', 'alb', 'tos', 'live', 'vod', 'imagex', 'upload']);
+    expect(products('baidu')).toEqual(['cdn', 'blb', 'appblb', 'upload']);
+  });
+
+  it('keeps the Tencent update modes distinguishable', () => {
+    const tencent = DEPLOY_META.tencent!;
+    const field = tencent.taskFields.find((item) => item.key === 'product');
+    expect(field?.note).toContain('上传到证书管理');
+    expect(field?.note).toContain('证书ID不变');
+    expect(field?.note).toContain('生成新的ID');
+    expect(tencent.taskFields.find((item) => item.key === 'cert_id')?.showWhen)
+      .toEqual({ key: 'product', in: ['update', 'update_new'] });
+    expect(tencent.taskFields.find((item) => item.key === 'delete_old_cert')?.showWhen)
+      .toEqual({ key: 'product', in: ['update_new'] });
+  });
+});

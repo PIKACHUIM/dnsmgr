@@ -60,7 +60,7 @@ const builtinMeta: DeployProviderMeta[] = [
     fields: [
       { key: 'url', label: 'Webhook 地址', required: true, placeholder: 'https://deploy.example/hook', maxLength: 2000 },
       { key: 'token', label: 'Bearer Token（选填）', type: 'password', secret: true, maxLength: 500 },
-      { key: 'headers', label: '附加请求头 JSON（选填）', maxLength: 2000, placeholder: '{"X-Source":"dnsmgr"}' },
+      { key: 'headers', label: '附加请求头 JSON（选填）', maxLength: 2000, placeholder: '{"X-Source":"dnspanel"}' },
     ],
     taskFields: [],
   },

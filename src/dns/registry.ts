@@ -185,7 +185,7 @@ const catalog: ProviderMeta[] = [
       { key: 'uid', label: 'UID', required: true },
       { key: 'key', label: '通信密钥', required: true, secret: true },
     ],
-    capabilities: { status: true, remark: true, weight: true, lines: true, addDomain: false },
+    capabilities: { status: true, remark: true, weight: true, lines: true, addDomain: false, redirect: true },
   },
   {
     type: 'dynv6', name: 'dynv6', supported: true,

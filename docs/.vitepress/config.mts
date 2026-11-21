@@ -4,8 +4,8 @@ export default defineConfig({
   base: '/',
   vite: { resolve: { preserveSymlinks: true } },
   lang: 'zh-CN',
-  title: 'DnsMgr 文档',
-  description: '彩虹聚合 DNS 管理系统：Serverless 改造、开发与部署文档。',
+  title: 'DNSPanel 文档',
+  description: 'DNSPanel：多平台 DNS 管理、证书签发与部署的 Serverless 控制台文档。',
   cleanUrls: true,
   lastUpdated: true,
   appearance: false,
@@ -15,7 +15,7 @@ export default defineConfig({
     ['meta', { name: 'color-scheme', content: 'light' }],
   ],
   themeConfig: {
-    siteTitle: 'DNSMGR / 手册',
+    siteTitle: 'DNSPanel / 手册',
     nav: [
       { text: '项目概览', link: '/guide/overview' },
       { text: '开发指南', link: '/guide/local-development' },

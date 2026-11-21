@@ -45,7 +45,7 @@ describe('platform routing and isolation', () => {
     const request = new Request('https://panel.example/health');
     const response = platform === 'cloudflare' ? await cf.fetch(request, {}) : platform === 'esa' ? await esa.fetch(request, {}, {}) : await onRequest({ request, env: {} });
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ service: 'dnsmgr-serverless', stage: 'foundation' });
+    expect(await response.json()).toMatchObject({ service: 'dnspanel', stage: 'foundation' });
   });
   it('uses the trusted EdgeOne Node Function context IP, not request forwarding headers', () => {
     const request = new Request('https://panel.example/verifycode', { headers: { 'X-Forwarded-For': '198.51.100.99' } });

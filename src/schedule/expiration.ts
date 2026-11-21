@@ -230,7 +230,7 @@ export async function executeExpirationNotice(c: Context<AppEnv>, offsetMinutes:
   const claimed = group.filter((_, index) => claimedResults[index]?.changes === 1);
   if (claimed.length === 0) return;
 
-  const title = `DNSMGR 域名到期提醒：${day} 天后到期`;
+  const title = `DNSPanel 域名到期提醒：${day} 天后到期`;
   const content = `以下 ${claimed.length} 个域名将在 ${day} 天后到期：\n${claimed.map((domain) =>
     `- ${domain.name}（${new Date(domain.expires_at * 1000).toISOString()}）`,
   ).join('\n')}`;

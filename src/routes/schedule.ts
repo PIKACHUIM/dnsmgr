@@ -192,7 +192,7 @@ async function readDeployWindowSettings(db: SqlDatabase): Promise<{ deployStart:
 
 async function notifyFailure(c: Context<AppEnv>, domain: string, message: string): Promise<void> {
   try {
-    await sendConfiguredNotifications(c, 'DNSMGR 定时任务失败', `域名 ${domain}：${message}`);
+    await sendConfiguredNotifications(c, 'DNSPanel 定时任务失败', `域名 ${domain}：${message}`);
   } catch { /* 通知失败不影响任务结果 */ }
 }
 

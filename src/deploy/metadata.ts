@@ -42,16 +42,16 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
             label: '网站的证书',
           },
           {
-            value: '1',
-            label: '面板本身的证书',
+            value: '3',
+            label: 'Docker网站的证书',
           },
           {
             value: '2',
             label: '邮局域名的证书',
           },
           {
-            value: '3',
-            label: 'Docker网站的证书',
+            value: '1',
+            label: '面板本身的证书',
           },
           {
             value: '4',
@@ -1486,80 +1486,80 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: '内容分发CDN',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'dcdn',
+            label: '全站加速DCDN',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'esa',
+            label: '边缘安全加速ESA',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'esa_saas',
+            label: '边缘安全加速ESA SaaS',
           },
           {
-            value: '4',
-            label: '[object Object]',
+            value: 'oss',
+            label: '对象存储OSS',
           },
           {
-            value: '5',
-            label: '[object Object]',
+            value: 'waf',
+            label: 'Web应用防火墙3.0',
           },
           {
-            value: '6',
-            label: '[object Object]',
+            value: 'wafres',
+            label: 'Web应用防火墙3.0(云产品接入)',
           },
           {
-            value: '7',
-            label: '[object Object]',
+            value: 'waf2',
+            label: 'Web应用防火墙2.0',
           },
           {
-            value: '8',
-            label: '[object Object]',
+            value: 'clb',
+            label: '传统型负载均衡CLB',
           },
           {
-            value: '9',
-            label: '[object Object]',
+            value: 'alb',
+            label: '应用型负载均衡ALB',
           },
           {
-            value: '10',
-            label: '[object Object]',
+            value: 'nlb',
+            label: '网络型负载均衡NLB',
           },
           {
-            value: '11',
-            label: '[object Object]',
+            value: 'api',
+            label: 'API网关',
           },
           {
-            value: '12',
-            label: '[object Object]',
+            value: 'ddoscoo',
+            label: 'DDoS高防',
           },
           {
-            value: '13',
-            label: '[object Object]',
+            value: 'live',
+            label: '视频直播',
           },
           {
-            value: '14',
-            label: '[object Object]',
+            value: 'vod',
+            label: '视频点播',
           },
           {
-            value: '15',
-            label: '[object Object]',
+            value: 'fc',
+            label: '函数计算3.0',
           },
           {
-            value: '16',
-            label: '[object Object]',
+            value: 'fc2',
+            label: '函数计算2.0',
           },
           {
-            value: '17',
-            label: '[object Object]',
+            value: 'ga',
+            label: '全球加速',
           },
           {
-            value: '18',
-            label: '[object Object]',
+            value: 'upload',
+            label: '上传到证书管理',
           },
         ],
         defaultValue: 'cdn',
@@ -1624,12 +1624,12 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cn-hangzhou',
+            label: '中国内地',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'ap-southeast-1',
+            label: '非中国内地',
           },
         ],
         defaultValue: 'cn-hangzhou',
@@ -1786,11 +1786,11 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         options: [
           {
             value: '0',
-            label: '[object Object]',
+            label: '默认证书',
           },
           {
             value: '1',
-            label: '[object Object]',
+            label: '扩展证书',
           },
         ],
         defaultValue: '0',
@@ -1965,6 +1965,7 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
           },
         ],
         defaultValue: 'cdn',
+        note: '「上传到证书管理」只新建一张证书；「更新证书内容（证书ID不变）」原地替换内容，需腾讯云加白；「更新证书内容（生成新的ID）」上传新证书并替换关联资源，部署成功后可自动删除旧证书。',
       },
       {
         key: 'regionid',
@@ -2217,24 +2218,24 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: '内容分发网络CDN',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'elb',
+            label: '弹性负载均衡ELB',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'waf',
+            label: 'Web应用防火墙WAF',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'obs',
+            label: '对象存储服务OBS',
           },
           {
-            value: '4',
-            label: '[object Object]',
+            value: 'upload',
+            label: '上传到证书管理',
           },
         ],
         defaultValue: 'cdn',
@@ -2384,20 +2385,20 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: 'CDN',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'oss',
+            label: 'OSS',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'pili',
+            label: '视频直播',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'upload',
+            label: '上传到证书管理',
           },
         ],
         defaultValue: 'cdn',
@@ -2540,20 +2541,20 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: 'CDN',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'blb',
+            label: '普通型BLB',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'appblb',
+            label: '应用型BLB',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'upload',
+            label: '上传到证书管理',
           },
         ],
         defaultValue: 'cdn',
@@ -2578,36 +2579,36 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'bj',
+            label: '北京',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'gz',
+            label: '广州',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'su',
+            label: '苏州',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'hkg',
+            label: '香港',
           },
           {
-            value: '4',
-            label: '[object Object]',
+            value: 'fwh',
+            label: '武汉',
           },
           {
-            value: '5',
-            label: '[object Object]',
+            value: 'bd',
+            label: '保定',
           },
           {
-            value: '6',
-            label: '[object Object]',
+            value: 'fsh',
+            label: '上海',
           },
           {
-            value: '7',
-            label: '[object Object]',
+            value: 'sin',
+            label: '新加坡',
           },
         ],
         defaultValue: 'bj',
@@ -2678,8 +2679,8 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: 'CDN',
           },
         ],
         defaultValue: 'cdn',
@@ -2729,40 +2730,40 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: '内容分发网络CDN',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'dcdn',
+            label: '全站加速DCDN',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'clb',
+            label: '负载均衡CLB',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'alb',
+            label: '应用型负载均衡ALB',
           },
           {
-            value: '4',
-            label: '[object Object]',
+            value: 'tos',
+            label: '对象存储TOS',
           },
           {
-            value: '5',
-            label: '[object Object]',
+            value: 'live',
+            label: '视频直播',
           },
           {
-            value: '6',
-            label: '[object Object]',
+            value: 'vod',
+            label: '视频点播',
           },
           {
-            value: '7',
-            label: '[object Object]',
+            value: 'imagex',
+            label: 'veImageX',
           },
           {
-            value: '8',
-            label: '[object Object]',
+            value: 'upload',
+            label: '上传到证书管理',
           },
         ],
         defaultValue: 'cdn',
@@ -2798,12 +2799,12 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'play',
+            label: '点播加速域名和自定义源站加速域名',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'image',
+            label: '封面加速域名',
           },
         ],
         showWhen: {
@@ -2917,20 +2918,20 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: 'CDN',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'cdnpro',
+            label: 'CDN Pro',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'cdnpro_certificate',
+            label: 'CDN Pro证书管理',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'certificate',
+            label: '证书管理',
           },
         ],
         defaultValue: 'cdn',
@@ -3039,20 +3040,20 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cdn',
+            label: 'CDN加速',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'icdn',
+            label: '全站加速',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'accessone',
+            label: '边缘安全加速平台',
           },
           {
-            value: '3',
-            label: '[object Object]',
+            value: 'cf',
+            label: '函数计算',
           },
         ],
         defaultValue: 'cdn',
@@ -3064,12 +3065,12 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'bb9fdb42056f11eda1610242ac110002',
+            label: '华东1',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: '200000002368',
+            label: '西南1',
           },
         ],
         defaultValue: 'bb9fdb42056f11eda1610242ac110002',
@@ -3235,16 +3236,16 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'aliyun',
+            label: '阿里云',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'tencent',
+            label: '腾讯云',
           },
           {
-            value: '2',
-            label: '[object Object]',
+            value: 'alipay',
+            label: '支付宝云',
           },
         ],
         defaultValue: 'aliyun',
@@ -3288,12 +3289,12 @@ export const DEPLOY_META: Record<string, DeployProviderMeta> = {
         required: true,
         options: [
           {
-            value: '0',
-            label: '[object Object]',
+            value: 'cloudfront',
+            label: 'CloudFront',
           },
           {
-            value: '1',
-            label: '[object Object]',
+            value: 'acm',
+            label: 'AWS Certificate Manager',
           },
         ],
         defaultValue: 'acm',

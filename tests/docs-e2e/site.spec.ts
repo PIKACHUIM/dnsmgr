@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 const docsRoutes = [
-  ['/', 'DNSMGR DNS 管理，运行在边缘'],
+  ['/', 'DNSPanel DNS 管理，运行在边缘'],
   ['/guide/overview', '项目概览'],
   ['/guide/local-development', '本地开发与验证'],
   ['/guide/storage', '存储模型与一致性'],
@@ -18,7 +18,7 @@ test('serves every page and asset from the domain root without repository prefix
   for (const [path, heading] of docsRoutes) {
     const response = await page.goto(path);
     expect(response?.status()).toBe(200);
-    if (path === '/') await expect(page.locator('.VPHero .text')).toHaveText(heading.replace('DNSMGR ', ''));
+    if (path === '/') await expect(page.locator('.VPHero .text')).toHaveText(heading.replace('DNSPanel ', ''));
     else await expect(page.locator('main h1')).toContainText(heading);
     const assetPaths = await page.locator('script[src],link[rel="stylesheet"][href],link[rel="modulepreload"][href]').evaluateAll((elements) =>
       elements.map((element) => element.getAttribute('src') ?? element.getAttribute('href')).filter((value): value is string => Boolean(value)));
@@ -40,7 +40,7 @@ test('keeps guide navigation usable on mobile and honors reduced motion', async 
   for (const width of [768, 375]) {
     await page.setViewportSize({ width, height: 812 });
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'DNSMGR DNS 管理，运行在边缘' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'DNSPanel DNS 管理，运行在边缘' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     if (width === 375) await page.screenshot({ path: testInfo.outputPath('docs-home-375.png'), fullPage: true });
   }

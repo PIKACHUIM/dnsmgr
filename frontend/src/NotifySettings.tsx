@@ -112,7 +112,7 @@ export function NotifySettings({ session, onExpired }: Props) {
     setBusy(true); setError(''); setNotice('');
     const controller = new AbortController();
     try {
-      await send('/api/v1/system/notify/test', 'POST', { title: 'DNSMGR 测试通知', content: '如果你收到这条消息，说明通知渠道配置有效。', channel: testChannel || undefined }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
+      await send('/api/v1/system/notify/test', 'POST', { title: 'DNSPanel 测试通知', content: '如果你收到这条消息，说明通知渠道配置有效。', channel: testChannel || undefined }, controller.signal, { 'X-CSRF-Token': session.csrfToken });
       setNotice(testChannel ? '测试通知已发送到所选渠道' : '测试通知已发送');
     } catch (failure) { handle(failure); }
     finally { setBusy(false); }

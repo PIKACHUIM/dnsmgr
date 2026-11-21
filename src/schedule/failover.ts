@@ -156,7 +156,7 @@ export async function probeHttp(
     const response = await fetchImpl(url, {
       method: 'GET',
       redirect: 'manual',
-      headers: { accept: '*/*', 'user-agent': 'DnsMgr-HealthCheck/1.0' },
+      headers: { accept: '*/*', 'user-agent': 'DNSPanel-HealthCheck/1.0' },
       signal: AbortSignal.timeout(timeoutSeconds * 1000),
     });
     const httpStatus = response.status;
@@ -254,7 +254,7 @@ async function sendTransitionNotice(c: Context<AppEnv>, task: FailoverTask, even
   try {
     const channels = switchChannels(await loadChannelSwitches(c.get('db')));
     if (channels.size === 0) return;
-    const title = event === 'switch_backup' ? 'DNSMGR 容灾切换至备用' : 'DNSMGR 容灾已恢复主线路';
+    const title = event === 'switch_backup' ? 'DNSPanel 容灾切换至备用' : 'DNSPanel 容灾已恢复主线路';
     const content = `${task.domain_name} ${task.record_name} ${task.record_type} → ${value}`;
     await sendConfiguredNotifications(c, title, content, channels);
   } catch { /* notification failure does not change DNS task state */ }

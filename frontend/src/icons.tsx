@@ -32,6 +32,6 @@ export function Icon({ name, className = '' }: { name: IconName; className?: str
 export function Brand({ compact = false }: { compact?: boolean }) {
   return <div className={`brand ${compact ? 'brand-compact' : ''}`}>
     <span className="brand-mark"><Icon name="dns" /></span>
-    <span><strong>聚合 DNS</strong><small>管理系统 / CONTROL</small></span>
+    <span><strong>DNSPanel</strong><small>DNS 控制台 / CONTROL</small></span>
   </div>;
 }

@@ -232,7 +232,7 @@ export function Auth({ mode, notice, onInstalled, onSignedIn }: AuthProps) {
           </fieldset>
         </form>
       </div>
-      <footer className="auth-footer"><span>{t('聚合 DNS 管理系统')}</span><span className="mono">FOUNDATION</span></footer>
+      <footer className="auth-footer"><span>DNSPanel</span><span className="mono">CONTROL</span></footer>
     </section>
   </main>;
 }

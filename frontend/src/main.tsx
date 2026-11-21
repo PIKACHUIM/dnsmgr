@@ -82,8 +82,8 @@ function App() {
   }, [navigate]);
 
   useEffect(() => {
-    if (state.kind === 'session') document.title = `${path === '/' ? '后台首页' : '功能模块'} · 聚合 DNS 管理系统`;
-    else document.title = `${state.kind === 'install' ? '初始化系统' : state.kind === 'login' ? '登录' : '连接服务'} · 聚合 DNS 管理系统`;
+    if (state.kind === 'session') document.title = `${path === '/' ? '后台首页' : '功能模块'} · DNSPanel`;
+    else document.title = `${state.kind === 'install' ? '初始化系统' : state.kind === 'login' ? '登录' : '连接服务'} · DNSPanel`;
   }, [state.kind, path]);
 
   if (state.kind === 'loading' || state.kind === 'error') return <main className="connection-page"><div className="connection-panel"><Brand /><div className="section-kicker">服务连接 / CONNECTION</div><h1>{state.kind === 'loading' ? '正在连接管理系统' : '无法加载管理系统'}</h1>{state.kind === 'loading' ? <p role="status"><span className="spinner" />正在检查安装状态与当前会话…</p> : <><div className="notice notice-error" role="alert">{state.message}</div><button className="button button-primary" onClick={() => setRetry((value) => value + 1)}>重新连接</button><p className="connection-hint">开发环境请确认后端监听 127.0.0.1:8787。</p></>}</div></main>;

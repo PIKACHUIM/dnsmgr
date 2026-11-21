@@ -281,7 +281,7 @@ export function Console({ session, path, navigate, onExpired, onLoggedOut }: Con
                     : recordToolMatch ? <RecordTools session={session} mode={recordToolMatch[1] as 'batchadd' | 'batchedit'} navigate={navigate} onExpired={onExpired} />
                     : recordMatch ? <DnsRecords session={session} domainId={Number(recordMatch[1])} navigate={navigate} onExpired={onExpired} />
               : <section className="panel migration-panel" aria-labelledby="module-state-title"><div className="module-state-icon"><Icon name="dns" /></div><span className="section-kicker">{t('模块状态 / NOT MIGRATED')}</span><h2 id="module-state-title">{t('此模块尚未移植')}</h2><dl className="module-details"><div><dt>{t('当前路径')}</dt><dd><code>{path}</code></dd></div></dl><div className="module-actions"><a className="button button-primary" href="/" onClick={(event) => followLink(event, '/')}>{t('返回后台首页')}<Icon name="arrow" /></a></div></section>}
-        <footer className="workspace-footer"><span>{t('聚合 DNS 管理系统')}</span><span>{t('安装 · 认证 · 会话基础')} <span className="mono">/ FOUNDATION</span></span></footer>
+        <footer className="workspace-footer"><span>DNSPanel</span><span>{t('安装 · 认证 · 会话基础')} <span className="mono">/ CONTROL</span></span></footer>
       </main>
     </div>
   </div>;

@@ -143,7 +143,7 @@ export const fr: Record<string, string> = {
   '正在读取…': 'Chargement…',
   '读取失败，状态未知': 'Échec du chargement, état inconnu',
   '后端能力状态': 'État des capacités backend',
-  '聚合 DNS 管理系统': 'Gestionnaire DNS unifié',
+  '聚合 DNS 管理系统': 'DNSPanel',
   '安装 · 认证 · 会话基础': 'Installation · authentification · session',
   'DNS 管理与证书订单已接入': 'Gestion DNS et commandes de certificats connectées',
   'DNS 解析、容灾切换、定时任务与证书安全存储/手动导入已接入；CA 自动申请、续签和部署仍在迁移。': 'Records DNS, basculement, tâches planifiées, stockage sécurisé et import manuel des certificats sont connectés. L\'émission, le renouvellement et le déploiement automatiques par CA sont en cours de migration.',
